@@ -1,0 +1,22 @@
+schema_version = 1
+
+[attest]
+version = "v0.1.0"
+
+[executor]
+build = "noop"
+
+[spec]
+[spec.boundary]
+paths = ["src/**"]
+
+[gates]
+
+[paths]
+specs = "specs"
+records = "attest/records"
+rulings = "rulings.md"
+rejections = "rejections"
+
+[operators]
+approvers = ["alice"]

@@ -3,9 +3,10 @@
 # own repository -- this is the tenant's workflow, not the product's.
 #
 # An operator comments "/approve" on the work item's PR. This workflow
-# checks out the PR's branch, runs `attest approve N --by <actor>`, and
-# commits and pushes the resulting approval-NN.json -- the push is what
-# binds the approval to a commit.
+# checks out the PR's branch, runs `attest approve --by <actor>` (the item
+# id is the issue number, not the PR number -- attest derives it from the
+# attest/N-* branch), and commits and pushes the resulting approval-NN.json
+# -- the push is what binds the approval to a commit.
 name: Attest approval
 
 on:
@@ -41,13 +42,13 @@ jobs:
       - uses: <owner>/attest@<tag>
 
       - name: attest approve
-        run: attest approve "${{ github.event.issue.number }}" --by "${{ github.event.comment.user.login }}"
+        run: attest approve --by "${{ github.event.comment.user.login }}"
 
       - name: Commit and push the approval record
-        # "records" is attest.toml's paths.records; change this line if yours differs.
         run: |
           git config user.name "attest-bot"
           git config user.email "attest-bot@users.noreply.github.com"
-          git add records
+          records_rel="$(python3 -c "import tomllib; print(tomllib.load(open('attest.toml','rb'))['paths']['records'])")"
+          git add "$records_rel"
           git commit -m "attest: approval record for #${{ github.event.issue.number }}"
           git push origin "HEAD:${{ steps.pr.outputs.ref }}"
