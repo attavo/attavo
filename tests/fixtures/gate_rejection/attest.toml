@@ -1,0 +1,24 @@
+schema_version = 1
+
+[attest]
+version = "v0.1.0"
+
+[executor]
+build = "noop"
+
+[spec]
+[spec.boundary]
+paths = ["src/**"]
+
+[gates.spec]
+command = "ATTEST_CMD spec-gate 1"
+retires = ["design stage", "second approval"]
+
+[paths]
+specs = "specs"
+records = "records"
+rulings = "rulings.md"
+rejections = "rejections"
+
+[operators]
+approvers = ["alice"]

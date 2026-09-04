@@ -8,9 +8,12 @@ when the capability it names has landed and been used for real.
 Run: python3 -m pytest tests -q
 """
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+from helpers import FIXTURES, commit_all, init_repo
 
 ROOT = Path(__file__).resolve().parent.parent
 ATTEST = ROOT / "bin" / "attest"
@@ -45,4 +48,48 @@ def test_no_commit_lacks_a_record():
     """Proof 3. Every commit on the default branch after the manifest was
     introduced is named by a record's sha or commits list."""
     p = run_doctor(ROOT)["no-commit-lacks-record"]
+    assert p["holds"], p["reason"]
+
+
+def test_record_loader_uses_highest_attempt_number(tmp_path):
+    """Acceptance 2a. <stage>-NN.json files are one stage's attempts; the
+    doctor treats the highest NN as latest, and STAGES is unchanged.
+
+    spec-01.json names a commit that isn't on the branch at all; spec-02.json
+    names the real code commit. Proof 3 holds only if the loader reads
+    spec-02, not spec-01 -- i.e. only if it picks the highest attempt.
+    """
+    root = tmp_path / "attempts"
+    root.mkdir()
+    (root / "attest.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    (root / "src.txt").write_text("code\n")
+    commit_all(root, "code change")
+    code_sha = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "spec-01.json").write_text(json.dumps({"sha": "0" * 40}))
+    (records / "spec-02.json").write_text(json.dumps({"sha": code_sha}))
+    commit_all(root, "spec records")
+
+    p = run_doctor(root)["no-commit-lacks-record"]
+    assert p["holds"], p["reason"]
+
+
+def test_doctor_proof_one_holds_for_spec_gate(tmp_path):
+    """Acceptance 5 / test 9. A fixture tenant declares [gates.spec] with
+    retires, and its rejections/spec/ fixture is itself a tenant root on
+    which `attest spec-gate 1` refuses (a prose criterion). Doctor proof 1
+    must hold against it."""
+    outer = tmp_path / "gate_rejection"
+    shutil.copytree(FIXTURES / "gate_rejection", outer)
+    cmd = f"{sys.executable} {ATTEST}"
+    toml = outer / "attest.toml"
+    toml.write_text(toml.read_text().replace("ATTEST_CMD", cmd))
+    init_repo(outer / "rejections" / "spec")
+
+    p = run_doctor(outer)["every-gate-rejects"]
     assert p["holds"], p["reason"]

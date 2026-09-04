@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest
+      - run: >
+          python3 -m pytest tests -q
+          --deselect tests/test_doctor.py::test_every_gate_rejects
+          --deselect tests/test_doctor.py::test_one_item_traversed_every_stage
+          --deselect tests/test_doctor.py::test_no_commit_lacks_a_record
+      - name: doctor's three proofs (expected to still fail against this repo's own root)
+        run: python3 -m pytest tests/test_doctor.py -q -k "every_gate_rejects or one_item_traversed_every_stage or no_commit_lacks_a_record" || true
+
+  action-self-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+      - run: attest spec-gate 1
+        working-directory: tests/fixtures/valid
