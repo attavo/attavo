@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://attest.ai/schema/manifest/1",
+  "title": "Attest tenant manifest (attest.toml)",
+  "description": "What a tenant declares to install Attest: the release it pins, the executor it chose, where the governed path begins and ends, the gates it runs, and where its specs, records, and rulings live. Every key is read by a script; a key no script reads does not belong here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "attest", "executor", "spec", "gates", "paths"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "attest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "The Attest release tag the tenant pins. The tenant holds no Attest binary; the pinned action supplies it.",
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "executor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["build"],
+      "properties": {
+        "build": {
+          "type": "string",
+          "description": "Adapter name for the build invocation. The contract is thin: spec, corpus, and branch in; commits and a report record out.",
+          "minLength": 1
+        },
+        "verify": {
+          "type": "string",
+          "description": "Adapter name for the verify invocation. Defaults to build's adapter; may differ.",
+          "minLength": 1
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["boundary"],
+      "properties": {
+        "boundary": {
+          "type": "object",
+          "description": "Which changes take the governed path. A change outside the boundary takes the tenant's ordinary pull-request flow, and the path ratio measures both.",
+          "additionalProperties": false,
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": {"type": "string", "minLength": 1},
+              "description": "Glob patterns; a change touching any of them is governed."
+            },
+            "labels": {
+              "type": "array",
+              "items": {"type": "string", "minLength": 1},
+              "description": "Issue labels; an issue carrying any of them is governed."
+            },
+            "max_ordinary_lines": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "A change above this many net lines is governed regardless of path or label."
+            }
+          }
+        }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "description": "Every gate the tenant runs, by name. The doctor's first proof is that each one rejects its fixture; a gate absent from this table does not exist.",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9-]*$"},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "retires"],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The script the gate runs, invoked with the tenant root as its working directory. Exit status is the verdict: non-zero rejects.",
+            "minLength": 1
+          },
+          "retires": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1},
+            "description": "What this gate replaced. A gate that retires nothing is not admitted to the table."
+          }
+        }
+      }
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["specs", "records", "rulings", "rejections"],
+      "properties": {
+        "specs": {"type": "string", "minLength": 1, "description": "Directory of specs, one per work item, named by issue number."},
+        "rejections": {"type": "string", "minLength": 1, "description": "Directory of rejection fixtures, one subdirectory per gate name. The doctor's first proof runs each gate against its fixture and requires a rejection."},
+        "records": {"type": "string", "minLength": 1, "description": "Directory of records, append-only, one subdirectory per work item named by issue number. Scripts write every file here."},
+        "rulings": {"type": "string", "minLength": 1, "description": "The tenant's rulings file, rendered read-only; the merge of a proposed amendment is the ruling."}
+      }
+    }
+  }
+}

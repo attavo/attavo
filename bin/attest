@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+"""attest: the command. At this commit its only subcommand is doctor.
+
+    attest doctor [TENANT_ROOT] [--json]
+
+The doctor is the definition of done. It asserts three proofs against a
+tenant root and exits 1 until every proof holds:
+
+  1. every-gate-rejects      every gate in the manifest's [gates] table,
+                             run against its rejection fixture, exits non-zero
+  2. one-item-every-stage    one work item under paths.records carries a
+                             record for every stage: spec, approval, build,
+                             verify, attestation
+  3. no-commit-lacks-record  every commit on the default branch after the
+                             manifest was introduced is named by a record's
+                             sha or commits list, or itself writes under
+                             paths.records (a record is committed with the
+                             code it describes)
+
+Nothing here is a gate. The doctor reads; it never writes and it never
+blocks a merge by itself. It is what CI runs to say whether the product
+is done.
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+MANIFEST = "attest.toml"
+STAGES = ("spec", "approval", "build", "verify", "attestation")
+
+
+class Proof:
+    def __init__(self, key: str, title: str) -> None:
+        self.key = key
+        self.title = title
+        self.holds = False
+        self.reason = ""
+
+    def fail(self, reason: str) -> "Proof":
+        self.holds, self.reason = False, reason
+        return self
+
+    def hold(self, reason: str) -> "Proof":
+        self.holds, self.reason = True, reason
+        return self
+
+    def as_dict(self) -> dict:
+        return {"proof": self.key, "title": self.title,
+                "holds": self.holds, "reason": self.reason}
+
+
+def read_manifest(root: Path) -> dict | None:
+    path = root / MANIFEST
+    if not path.is_file():
+        return None
+    with path.open("rb") as fh:
+        return tomllib.load(fh)
+
+
+def git(root: Path, *args: str) -> str:
+    out = subprocess.run(["git", "-C", str(root), *args],
+                         capture_output=True, text=True, check=False)
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr.strip() or "git failed")
+    return out.stdout
+
+
+def load_records(records_dir: Path) -> dict[str, dict[str, dict]]:
+    """{item_id: {stage: record}} for every <records>/<item>/<stage>.json."""
+    items: dict[str, dict[str, dict]] = {}
+    if not records_dir.is_dir():
+        return items
+    for item_dir in sorted(p for p in records_dir.iterdir() if p.is_dir()):
+        stages: dict[str, dict] = {}
+        for rec in sorted(item_dir.glob("*.json")):
+            try:
+                stages[rec.stem] = json.loads(rec.read_text())
+            except json.JSONDecodeError:
+                continue
+        items[item_dir.name] = stages
+    return items
+
+
+def proof_every_gate_rejects(root: Path, m: dict | None) -> Proof:
+    p = Proof("every-gate-rejects", "every gate rejects its fixture")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; no gate is registered")
+    gates = m.get("gates") or {}
+    if not gates:
+        return p.fail("[gates] is empty; a gate that has rejected nothing does not exist")
+    fixtures = root / m.get("paths", {}).get("rejections", "")
+    missing, accepted = [], []
+    for name, gate in sorted(gates.items()):
+        fixture = fixtures / name
+        if not fixture.is_dir():
+            missing.append(name)
+            continue
+        run = subprocess.run(gate["command"], shell=True, cwd=str(fixture),
+                             capture_output=True, text=True, check=False)
+        if run.returncode == 0:
+            accepted.append(name)
+    if missing:
+        return p.fail(f"gate(s) with no rejection fixture: {', '.join(missing)}")
+    if accepted:
+        return p.fail(f"gate(s) that accepted their rejection fixture: {', '.join(accepted)}")
+    return p.hold(f"{len(gates)} gate(s) rejected their fixture")
+
+
+def proof_one_item_every_stage(root: Path, m: dict | None) -> Proof:
+    p = Proof("one-item-every-stage", "one item has traversed every stage")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
+    records_dir = root / m.get("paths", {}).get("records", "")
+    items = load_records(records_dir)
+    if not items:
+        return p.fail(f"no work item under {records_dir.relative_to(root)}")
+    for item, stages in items.items():
+        if all(s in stages for s in STAGES):
+            return p.hold(f"item {item} carries {', '.join(STAGES)}")
+    best = max(items.items(), key=lambda kv: len(kv[1]))
+    lacking = [s for s in STAGES if s not in best[1]]
+    return p.fail(f"no item carries every stage; item {best[0]} lacks {', '.join(lacking)}")
+
+
+def proof_no_commit_lacks_record(root: Path, m: dict | None) -> Proof:
+    p = Proof("no-commit-lacks-record", "no commit lacks a record")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; the tenant has no record boundary")
+    try:
+        install = git(root, "log", "--diff-filter=A", "--format=%H",
+                      "--reverse", "--", MANIFEST).split()
+    except RuntimeError as exc:
+        return p.fail(f"git: {exc}")
+    if not install:
+        return p.fail(f"{MANIFEST} is not committed; the tenant has no record boundary")
+    commits = git(root, "rev-list", f"{install[0]}..HEAD", "--first-parent").split()
+    records_dir = root / m.get("paths", {}).get("records", "")
+    named: set[str] = set()
+    for stages in load_records(records_dir).values():
+        for rec in stages.values():
+            sha = rec.get("sha")
+            if isinstance(sha, str):
+                named.add(sha)
+            for c in rec.get("commits", []) or []:
+                if isinstance(c, str):
+                    named.add(c)
+    records_rel = m.get("paths", {}).get("records", "")
+    record_commits = set(git(root, "rev-list", f"{install[0]}..HEAD", "--first-parent",
+                             "--", records_rel).split()) if records_rel else set()
+    unrecorded = [c for c in commits if c not in named and c not in record_commits]
+    if not commits:
+        return p.fail(f"no commit after the install commit {install[0][:12]}; nothing has been recorded")
+    if unrecorded:
+        return p.fail(f"{len(unrecorded)} of {len(commits)} commit(s) since install lack a record; "
+                      f"first: {unrecorded[-1][:12]}")
+    return p.hold(f"{len(commits)} commit(s) since install, every one named by a record")
+
+
+def doctor(root: Path) -> list[Proof]:
+    m = read_manifest(root)
+    return [proof_every_gate_rejects(root, m),
+            proof_one_item_every_stage(root, m),
+            proof_no_commit_lacks_record(root, m)]
+
+
+def cmd_doctor(argv: list[str]) -> int:
+    as_json = "--json" in argv
+    args = [a for a in argv if a != "--json"]
+    root = Path(args[0] if args else ".").resolve()
+    proofs = doctor(root)
+    if as_json:
+        print(json.dumps({"root": str(root), "done": all(p.holds for p in proofs),
+                          "proofs": [p.as_dict() for p in proofs]}, indent=2))
+    else:
+        for i, p in enumerate(proofs, 1):
+            print(f"proof {i} {p.key}: {'HOLDS' if p.holds else 'FAILS'}: {p.reason}")
+        print("doctor: done" if all(p.holds for p in proofs)
+              else f"doctor: not done ({sum(not p.holds for p in proofs)} of 3 proofs fail)")
+    return 0 if all(p.holds for p in proofs) else 1
+
+
+def main(argv: list[str]) -> int:
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0 if argv else 2
+    if argv[0] == "doctor":
+        return cmd_doctor(argv[1:])
+    print(f"attest: unknown subcommand {argv[0]!r}; only 'doctor' exists at this commit",
+          file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
