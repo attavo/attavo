@@ -5,7 +5,7 @@
   "description": "What a tenant declares to install Attest: the release it pins, the executor it chose, where the governed path begins and ends, the gates it runs, and where its specs, records, and rulings live. Every key is read by a script; a key no script reads does not belong here.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "attest", "executor", "spec", "gates", "paths"],
+  "required": ["schema_version", "attest", "executor", "spec", "gates", "paths", "operators"],
   "properties": {
     "schema_version": {
       "type": "integer",
@@ -101,6 +101,18 @@
         "rejections": {"type": "string", "minLength": 1, "description": "Directory of rejection fixtures, one subdirectory per gate name. The doctor's first proof runs each gate against its fixture and requires a rejection."},
         "records": {"type": "string", "minLength": 1, "description": "Directory of records, append-only, one subdirectory per work item named by issue number. Scripts write every file here."},
         "rulings": {"type": "string", "minLength": 1, "description": "The tenant's rulings file, rendered read-only; the merge of a proposed amendment is the ruling."}
+      }
+    },
+    "operators": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approvers"],
+      "properties": {
+        "approvers": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Logins allowed to bind a spec's approval to a commit. `attest approve` refuses a LOGIN not on this list."
+        }
       }
     }
   }

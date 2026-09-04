@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""attest: the command. At this commit its only subcommand is doctor.
+"""attest: the command.
 
     attest doctor [TENANT_ROOT] [--json]
+    attest spec-gate [N]
+    attest approve [N] --by LOGIN
+    attest approval-status [N]
 
 The doctor is the definition of done. It asserts three proofs against a
 tenant root and exits 1 until every proof holds:
@@ -17,20 +20,34 @@ tenant root and exits 1 until every proof holds:
                              paths.records (a record is committed with the
                              code it describes)
 
-Nothing here is a gate. The doctor reads; it never writes and it never
+Nothing in doctor is a gate. The doctor reads; it never writes and it never
 blocks a merge by itself. It is what CI runs to say whether the product
 is done.
+
+spec-gate, approve, and approval-status are gates and writers. They run
+from the tenant root (the current working directory); N, the work item id,
+is read from the branch (attest/N-*) when omitted. Every run of spec-gate
+or approve writes the next numbered attempt file under paths.records/N/
+and never overwrites one already written. See the spec contract in the
+project's Phase 1 issue for the full rules each one enforces.
 """
 from __future__ import annotations
 
 import json
+import os
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
+from datetime import datetime, timezone
 from pathlib import Path
 
 MANIFEST = "attest.toml"
 STAGES = ("spec", "approval", "build", "verify", "attestation")
+CRITERION_TIMEOUT = 120
+RECORD_RE = re.compile(r"^([a-z]+)-([0-9]{2,})\.json$")
 
 
 class Proof:
@@ -69,21 +86,82 @@ def git(root: Path, *args: str) -> str:
     return out.stdout
 
 
+def now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def derive_item_id(root: Path) -> str | None:
+    out = subprocess.run(["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"],
+                         capture_output=True, text=True, check=False)
+    branch = out.stdout.strip()
+    m = re.match(r"^attest/(\d+)-", branch)
+    return m.group(1) if m else None
+
+
+def last_commit_touching(root: Path, relpath: str) -> str | None:
+    out = subprocess.run(["git", "-C", str(root), "log", "-1", "--format=%H", "--", relpath],
+                         capture_output=True, text=True, check=False)
+    sha = out.stdout.strip()
+    return sha or None
+
+
+# --- record files: <stage>-NN.json, one per attempt, never overwritten ---
+
+def parse_attempts(records_dir: Path, stage: str) -> dict[int, dict]:
+    attempts: dict[int, dict] = {}
+    if not records_dir.is_dir():
+        return attempts
+    for f in records_dir.glob(f"{stage}-*.json"):
+        m = RECORD_RE.match(f.name)
+        if not m or m.group(1) != stage:
+            continue
+        try:
+            attempts[int(m.group(2))] = json.loads(f.read_text())
+        except json.JSONDecodeError:
+            continue
+    return attempts
+
+
+def latest_record(records_dir: Path, stage: str) -> dict | None:
+    attempts = parse_attempts(records_dir, stage)
+    return attempts[max(attempts)] if attempts else None
+
+
+def next_attempt_number(records_dir: Path, stage: str) -> int:
+    attempts = parse_attempts(records_dir, stage)
+    return (max(attempts) + 1) if attempts else 1
+
+
+def write_record(records_dir: Path, stage: str, record: dict) -> Path:
+    records_dir.mkdir(parents=True, exist_ok=True)
+    nn = next_attempt_number(records_dir, stage)
+    path = records_dir / f"{stage}-{nn:02d}.json"
+    path.write_text(json.dumps(record, indent=2) + "\n")
+    return path
+
+
 def load_records(records_dir: Path) -> dict[str, dict[str, dict]]:
-    """{item_id: {stage: record}} for every <records>/<item>/<stage>.json."""
+    """{item_id: {stage: latest_record}} for every <records>/<item>/<stage>-NN.json."""
     items: dict[str, dict[str, dict]] = {}
     if not records_dir.is_dir():
         return items
     for item_dir in sorted(p for p in records_dir.iterdir() if p.is_dir()):
-        stages: dict[str, dict] = {}
+        by_stage: dict[str, dict[int, dict]] = {}
         for rec in sorted(item_dir.glob("*.json")):
+            m = RECORD_RE.match(rec.name)
+            if not m:
+                continue
+            stage, n = m.group(1), int(m.group(2))
             try:
-                stages[rec.stem] = json.loads(rec.read_text())
+                data = json.loads(rec.read_text())
             except json.JSONDecodeError:
                 continue
-        items[item_dir.name] = stages
+            by_stage.setdefault(stage, {})[n] = data
+        items[item_dir.name] = {stage: attempts[max(attempts)] for stage, attempts in by_stage.items()}
     return items
 
+
+# --- doctor's three proofs ---
 
 def proof_every_gate_rejects(root: Path, m: dict | None) -> Proof:
     p = Proof("every-gate-rejects", "every gate rejects its fixture")
@@ -183,13 +261,229 @@ def cmd_doctor(argv: list[str]) -> int:
     return 0 if all(p.holds for p in proofs) else 1
 
 
+# --- the spec contract ---
+
+def parse_spec(spec_md: Path) -> tuple[dict | None, str | None]:
+    lines = spec_md.read_text().splitlines()
+    heading_idx = [i for i, l in enumerate(lines) if l.startswith("## ")]
+    headings = [lines[i].rstrip() for i in heading_idx]
+    expected = ["## Problem", "## Claims", "## Criteria"]
+    if headings != expected:
+        bad = next((h for h in headings if h not in expected), None)
+        if bad is None:
+            missing = [h for h in expected if h not in headings]
+            bad = missing[0] if missing else "heading order"
+        return None, f"headings: found {headings or ['(none)']}, expected {expected} ({bad})"
+    idx_problem, idx_claims, idx_criteria = heading_idx
+    claims = [l.strip()[2:].strip() for l in lines[idx_claims + 1:idx_criteria]
+              if l.strip().startswith("- ")]
+    criteria = []
+    for l in lines[idx_criteria + 1:]:
+        s = l.strip()
+        if not s.startswith("- ") or ":" not in s:
+            continue
+        name = s[2:].split(":", 1)[0].strip()
+        criteria.append(name)
+    return {"claims": claims, "criteria": criteria}, None
+
+
+def run_criterion(exe: Path, cwd: Path) -> int:
+    try:
+        run = subprocess.run([str(exe)], cwd=str(cwd), capture_output=True,
+                             timeout=CRITERION_TIMEOUT, check=False)
+        return run.returncode
+    except subprocess.TimeoutExpired:
+        return 124
+    except OSError:
+        return 126
+
+
+def run_criteria(root: Path, spec_dir: Path, names: list[str]) -> list[dict]:
+    criteria_dir = spec_dir / "criteria"
+    stub_dir = spec_dir / "stub"
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = Path(tmp) / "tree"
+        stubbed = Path(tmp) / "stubbed"
+        shutil.copytree(root, tree, ignore=shutil.ignore_patterns(".git"))
+        shutil.copytree(root, stubbed, ignore=shutil.ignore_patterns(".git"))
+        if stub_dir.is_dir():
+            shutil.copytree(stub_dir, stubbed, dirs_exist_ok=True)
+        results = []
+        for name in names:
+            exe = criteria_dir / name
+            results.append({"name": name,
+                            "on_tree": run_criterion(exe, tree),
+                            "on_stub": run_criterion(exe, stubbed)})
+        return results
+
+
+def cmd_spec_gate(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attest spec-gate: cannot derive item id; pass N or run on an attest/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attest spec-gate: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    spec_dir = root / specs_rel / item_id
+    spec_md = spec_dir / "spec.md"
+    if not spec_md.is_file():
+        print(f"attest spec-gate: no spec at {spec_dir}", file=sys.stderr)
+        return 2
+
+    parsed, refusal = parse_spec(spec_md)
+    results: list[dict] = []
+    if refusal is None:
+        if not parsed["claims"]:
+            refusal = "claims: empty; the build may touch nothing"
+        else:
+            criteria_dir = spec_dir / "criteria"
+            listed = parsed["criteria"]
+            existing = sorted(p.name for p in criteria_dir.iterdir()) if criteria_dir.is_dir() else []
+            prose = None
+            for name in listed:
+                if name not in existing:
+                    prose = name
+                    break
+            if prose is None:
+                for name in existing:
+                    if name not in listed:
+                        prose = name
+                        break
+            if prose is None:
+                for name in listed:
+                    if not os.access(criteria_dir / name, os.X_OK):
+                        prose = name
+                        break
+            if prose:
+                refusal = f"criterion is prose: {prose}"
+            else:
+                results = run_criteria(root, spec_dir, listed)
+                fail_tree = next((c for c in results if c["on_tree"] == 0), None)
+                if fail_tree:
+                    refusal = f"criterion passes against the tree: {fail_tree['name']}"
+                else:
+                    fail_stub = next((c for c in results if c["on_stub"] != 0), None)
+                    if fail_stub:
+                        refusal = f"criterion fails against the tree plus stub: {fail_stub['name']}"
+
+    status = "refused" if refusal else "pass"
+    spec_rel = str(Path(specs_rel) / item_id)
+    record = {"sha": git(root, "rev-parse", "HEAD").strip(),
+              "spec_sha": last_commit_touching(root, spec_rel),
+              "at": now_iso(), "status": status, "criteria": results, "refusal": refusal}
+    write_record(root / records_rel / item_id, "spec", record)
+
+    if refusal:
+        print(f"attest spec-gate: refused: {refusal}")
+        return 1
+    print(f"attest spec-gate: pass ({len(results)} criterion/criteria)")
+    return 0
+
+
+# --- approval, bound to a commit ---
+
+def cmd_approve(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    by = None
+    positional: list[str] = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--by":
+            by = argv[i + 1] if i + 1 < len(argv) else None
+            i += 2
+        else:
+            positional.append(argv[i])
+            i += 1
+    item_id = positional[0] if positional else derive_item_id(root)
+    if not item_id:
+        print("attest approve: cannot derive item id; pass N or run on an attest/N-* branch",
+              file=sys.stderr)
+        return 2
+    if not by:
+        print("attest approve: --by LOGIN is required", file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attest approve: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    spec_rel = str(Path(specs_rel) / item_id)
+    spec_sha_now = last_commit_touching(root, spec_rel)
+    records_dir = root / records_rel / item_id
+    latest_spec = latest_record(records_dir, "spec")
+    approvers = ((m.get("operators") or {}).get("approvers")) or []
+
+    refusal = None
+    if latest_spec is None or latest_spec.get("status") != "pass":
+        refusal = f"no passing spec-gate record for item {item_id}"
+    elif latest_spec.get("spec_sha") != spec_sha_now:
+        refusal = (f"spec-gate record is stale: recorded {latest_spec.get('spec_sha')}, "
+                   f"spec now at {spec_sha_now}")
+    elif by not in approvers:
+        refusal = f"{by} is not in [operators].approvers"
+
+    if refusal:
+        print(f"attest approve: refused: {refusal}")
+        return 1
+
+    record = {"sha": git(root, "rev-parse", "HEAD").strip(), "spec_sha": spec_sha_now,
+              "approved_by": by, "at": now_iso()}
+    write_record(records_dir, "approval", record)
+    print(f"attest approve: item {item_id} approved by {by}")
+    return 0
+
+
+def cmd_approval_status(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attest approval-status: cannot derive item id; pass N or run on an attest/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attest approval-status: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    spec_rel = str(Path(specs_rel) / item_id)
+    spec_sha_now = last_commit_touching(root, spec_rel)
+    records_dir = root / records_rel / item_id
+    latest_approval = latest_record(records_dir, "approval")
+
+    if latest_approval is None:
+        print("absent")
+        return 1
+    if latest_approval.get("spec_sha") == spec_sha_now:
+        print("valid")
+        return 0
+    print("expired")
+    return 1
+
+
 def main(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__.strip())
         return 0 if argv else 2
     if argv[0] == "doctor":
         return cmd_doctor(argv[1:])
-    print(f"attest: unknown subcommand {argv[0]!r}; only 'doctor' exists at this commit",
+    if argv[0] == "spec-gate":
+        return cmd_spec_gate(argv[1:])
+    if argv[0] == "approve":
+        return cmd_approve(argv[1:])
+    if argv[0] == "approval-status":
+        return cmd_approval_status(argv[1:])
+    print(f"attest: unknown subcommand {argv[0]!r}; "
+          f"only doctor, spec-gate, approve, approval-status exist at this commit",
           file=sys.stderr)
     return 2
 
