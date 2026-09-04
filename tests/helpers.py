@@ -38,3 +38,35 @@ def make_tenant(tmp_path: Path, fixture: str, name: str | None = None) -> Path:
     shutil.copytree(FIXTURES / fixture, dest)
     init_repo(dest)
     return dest
+
+
+def extract_step_run(yaml_text: str, step_name: str) -> str:
+    """Pull a workflow step's `run:` command out of template YAML text as-is,
+    so a test exercises the literal shell the step will run rather than a
+    reimplementation of it. Handles both `run: cmd` and `run: |` block forms.
+    """
+    lines = yaml_text.splitlines()
+    marker = f"- name: {step_name}"
+    start = next(i for i, l in enumerate(lines) if l.strip() == marker)
+    step_indent = len(lines[start]) - len(lines[start].lstrip(" "))
+    body_indent = step_indent + 2
+    run_idx = next(
+        i for i in range(start + 1, len(lines))
+        if lines[i].strip().startswith("run:")
+        and (len(lines[i]) - len(lines[i].lstrip(" "))) == body_indent)
+    run_line = lines[run_idx].strip()[len("run:"):].strip()
+    if run_line and not run_line.startswith("|"):
+        return run_line
+    block: list[str] = []
+    block_indent = None
+    for line in lines[run_idx + 1:]:
+        if not line.strip():
+            block.append("")
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent <= body_indent:
+            break
+        if block_indent is None:
+            block_indent = indent
+        block.append(line[block_indent:])
+    return "\n".join(block).rstrip("\n")
