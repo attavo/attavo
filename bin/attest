@@ -98,7 +98,17 @@ def derive_item_id(root: Path) -> str | None:
     return m.group(1) if m else None
 
 
+class ShallowCheckoutError(RuntimeError):
+    pass
+
+
 def last_commit_touching(root: Path, relpath: str) -> str | None:
+    shallow = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-shallow-repository"],
+                             capture_output=True, text=True, check=False)
+    if shallow.stdout.strip() == "true":
+        raise ShallowCheckoutError(
+            "shallow checkout: git log -1 -- <path> returns HEAD for every path on a "
+            "shallow clone; check out with fetch-depth: 0")
     out = subprocess.run(["git", "-C", str(root), "log", "-1", "--format=%H", "--", relpath],
                          capture_output=True, text=True, check=False)
     sha = out.stdout.strip()
@@ -335,6 +345,12 @@ def cmd_spec_gate(argv: list[str]) -> int:
     if not spec_md.is_file():
         print(f"attest spec-gate: no spec at {spec_dir}", file=sys.stderr)
         return 2
+    spec_rel = str(Path(specs_rel) / item_id)
+    try:
+        spec_sha = last_commit_touching(root, spec_rel)
+    except ShallowCheckoutError as exc:
+        print(f"attest spec-gate: refused: {exc}", file=sys.stderr)
+        return 2
 
     parsed, refusal = parse_spec(spec_md)
     results: list[dict] = []
@@ -373,9 +389,8 @@ def cmd_spec_gate(argv: list[str]) -> int:
                         refusal = f"criterion fails against the tree plus stub: {fail_stub['name']}"
 
     status = "refused" if refusal else "pass"
-    spec_rel = str(Path(specs_rel) / item_id)
     record = {"sha": git(root, "rev-parse", "HEAD").strip(),
-              "spec_sha": last_commit_touching(root, spec_rel),
+              "spec_sha": spec_sha,
               "at": now_iso(), "status": status, "criteria": results, "refusal": refusal}
     write_record(root / records_rel / item_id, "spec", record)
 
@@ -416,7 +431,11 @@ def cmd_approve(argv: list[str]) -> int:
     specs_rel = m["paths"]["specs"]
     records_rel = m["paths"]["records"]
     spec_rel = str(Path(specs_rel) / item_id)
-    spec_sha_now = last_commit_touching(root, spec_rel)
+    try:
+        spec_sha_now = last_commit_touching(root, spec_rel)
+    except ShallowCheckoutError as exc:
+        print(f"attest approve: refused: {exc}", file=sys.stderr)
+        return 2
     records_dir = root / records_rel / item_id
     latest_spec = latest_record(records_dir, "spec")
     approvers = ((m.get("operators") or {}).get("approvers")) or []
@@ -456,7 +475,11 @@ def cmd_approval_status(argv: list[str]) -> int:
     specs_rel = m["paths"]["specs"]
     records_rel = m["paths"]["records"]
     spec_rel = str(Path(specs_rel) / item_id)
-    spec_sha_now = last_commit_touching(root, spec_rel)
+    try:
+        spec_sha_now = last_commit_touching(root, spec_rel)
+    except ShallowCheckoutError as exc:
+        print(f"attest approval-status: refused: {exc}", file=sys.stderr)
+        return 2
     records_dir = root / records_rel / item_id
     latest_approval = latest_record(records_dir, "approval")
 

@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from helpers import commit_all, make_tenant
+from helpers import clone_shallow, commit_all, make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
 ATTEST = ROOT / "bin" / "attest"
@@ -81,3 +81,37 @@ def test_amendment_above_line_costs_one_act(tmp_path):
     assert valid_again.stdout.strip() == "valid"
 
     assert [p.name for p in approvals(root)] == ["approval-01.json", "approval-02.json"]
+
+
+def test_approve_refuses_shallow_checkout(tmp_path):
+    """On a --depth 1 clone, `git log -1 -- <path>` returns HEAD for every
+    path (there is no history to prove otherwise), so a shallow checkout
+    would compute a spec_sha that always matches HEAD and pass approval
+    for a spec that may have moved. attest approve must refuse instead of
+    trusting that number: exit 2, naming the cause, not "stale".
+    """
+    root = make_tenant(tmp_path, "valid")
+    assert run_attest(root, "spec-gate", "1").returncode == 0
+    commit_all(root, "spec-gate record")
+
+    shallow = tmp_path / "shallow"
+    clone_shallow(root, shallow)
+
+    run = run_attest(shallow, "approve", "1", "--by", "alice")
+    assert run.returncode == 2
+    assert "shallow checkout" in run.stderr
+    assert approvals(shallow) == []
+
+
+def test_approval_status_refuses_shallow_checkout(tmp_path):
+    root = make_tenant(tmp_path, "valid")
+    assert run_attest(root, "spec-gate", "1").returncode == 0
+    assert run_attest(root, "approve", "1", "--by", "alice").returncode == 0
+    commit_all(root, "spec-gate and approval records")
+
+    shallow = tmp_path / "shallow"
+    clone_shallow(root, shallow)
+
+    run = run_attest(shallow, "approval-status", "1")
+    assert run.returncode == 2
+    assert "shallow checkout" in run.stderr
