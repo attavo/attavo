@@ -32,6 +32,16 @@ def commit_all(root: Path, message: str) -> None:
     git(root, "commit", "-q", "-m", message)
 
 
+def clone_shallow(root: Path, dest: Path) -> None:
+    """A --depth 1 clone of root, the same history-truncated checkout
+    actions/checkout@v4 leaves behind with no fetch-depth set.
+    """
+    subprocess.run(["git", "clone", "--quiet", "--depth", "1", "--branch",
+                    git(root, "rev-parse", "--abbrev-ref", "HEAD").strip(),
+                    f"file://{root}", str(dest)],
+                   capture_output=True, text=True, check=True)
+
+
 def make_tenant(tmp_path: Path, fixture: str, name: str | None = None) -> Path:
     """Copy tests/fixtures/<fixture> to a fresh dir and git-init + commit it."""
     dest = tmp_path / (name or fixture)
