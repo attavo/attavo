@@ -9,6 +9,12 @@
 # would push another record, forever (issue #9). The skip step checks
 # whether the *triggering* commit touched anything outside paths.records;
 # a record-only commit (the gate's own push) skips every step after it.
+#
+# The job only runs on a work item's attest/N-* branch: this event fires on
+# every pull_request, and a PR from any other branch has no item id for the
+# gate to derive, so it would exit 2 and fail the required check on ordinary
+# PRs (issue #12). A branch that doesn't match skips the job, which
+# satisfies a required check rather than failing it.
 name: Attest spec gate
 
 on:
@@ -17,6 +23,7 @@ on:
 
 jobs:
   spec-gate:
+    if: startsWith(github.head_ref, 'attest/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
