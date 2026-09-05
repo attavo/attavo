@@ -50,6 +50,27 @@ def make_tenant(tmp_path: Path, fixture: str, name: str | None = None) -> Path:
     return dest
 
 
+def job_if_condition(yaml_text: str, job_name: str) -> str | None:
+    """Pull a workflow job's top-level `if:` condition out of template YAML
+    text, or None if the job has no such condition. Reads the literal file
+    rather than reimplementing YAML parsing, same as extract_step_run.
+    """
+    lines = yaml_text.splitlines()
+    marker = f"{job_name}:"
+    start = next(i for i, l in enumerate(lines) if l.strip() == marker)
+    job_indent = len(lines[start]) - len(lines[start].lstrip(" "))
+    body_indent = job_indent + 2
+    for line in lines[start + 1:]:
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent < body_indent:
+            break
+        if indent == body_indent and line.strip().startswith("if:"):
+            return line.strip()[len("if:"):].strip()
+    return None
+
+
 def extract_step_run(yaml_text: str, step_name: str) -> str:
     """Pull a workflow step's `run:` command out of template YAML text as-is,
     so a test exercises the literal shell the step will run rather than a

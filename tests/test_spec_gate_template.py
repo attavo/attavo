@@ -18,11 +18,12 @@ import os
 import subprocess
 from pathlib import Path
 
-from helpers import commit_all, extract_step_run, make_tenant
+from helpers import commit_all, extract_step_run, job_if_condition, make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "templates" / "workflows" / "attest-spec-gate.yml"
 STEP_NAME = "Skip when the head commit only touches records"
+JOB_NAME = "spec-gate"
 
 
 def run_skip_step(root: Path) -> str:
@@ -68,3 +69,14 @@ def test_skip_is_false_when_the_head_commit_touches_both_records_and_specs(tmp_p
     commit_all(root, "spec + record")
 
     assert run_skip_step(root) == "false"
+
+
+def test_job_guards_on_the_attest_branch_prefix():
+    """A pull_request event fires this workflow on every PR, not just ones
+    from a work item's attest/N-* branch. Without a branch guard, a PR from
+    any other branch runs the gate, which cannot derive an item id and exits
+    2, so the required spec-gate check goes red on ordinary PRs (issue #12).
+    """
+    condition = job_if_condition(TEMPLATE.read_text(), JOB_NAME)
+    assert condition is not None, f"job {JOB_NAME!r} has no if: condition"
+    assert "startsWith(github.head_ref, 'attest/')" in condition
