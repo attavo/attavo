@@ -1,0 +1,58 @@
+# Template. Copy this file into your own .github/workflows/ and fill in
+# uses: <owner>/attest@<tag> below. Not vendored or executed by attest's
+# own repository -- this is the tenant's workflow, not the product's.
+#
+# A push to a work item's PR runs `attest spec-gate`, then commits and
+# pushes the resulting spec-NN.json -- the push is what binds the record to
+# the commit it graded. That push is itself a commit on the branch, so
+# without the skip step below it would retrigger this same workflow, which
+# would push another record, forever (issue #9). The skip step checks
+# whether the *triggering* commit touched anything outside paths.records;
+# a record-only commit (the gate's own push) skips every step after it.
+name: Attest spec gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  spec-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Skip when the head commit only touches records
+        id: touch
+        run: |
+          records_rel="$(python3 -c "import tomllib; print(tomllib.load(open('attest.toml','rb'))['paths']['records'])")"
+          skip=true
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              "$records_rel"/*) ;;
+              *) skip=false ;;
+            esac
+          done <<< "$(git show --name-only --format= HEAD)"
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+      - uses: <owner>/attest@<tag>
+        if: steps.touch.outputs.skip != 'true'
+
+      - name: attest spec-gate
+        if: steps.touch.outputs.skip != 'true'
+        run: attest spec-gate
+
+      - name: Commit and push the spec-gate record
+        if: steps.touch.outputs.skip != 'true'
+        run: |
+          git config user.name "attest-bot"
+          git config user.email "attest-bot@users.noreply.github.com"
+          records_rel="$(python3 -c "import tomllib; print(tomllib.load(open('attest.toml','rb'))['paths']['records'])")"
+          git add "$records_rel"
+          git commit -m "attest: spec-gate record for #${{ github.event.pull_request.number }}"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
