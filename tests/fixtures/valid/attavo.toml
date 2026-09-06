@@ -1,6 +1,6 @@
 schema_version = 1
 
-[attest]
+[attavo]
 version = "v0.1.0"
 
 [executor]

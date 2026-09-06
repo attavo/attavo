@@ -22,7 +22,7 @@ def git(root: Path, *args: str) -> str:
 def init_repo(root: Path, message: str = "initial") -> None:
     git(root, "init", "-q", "-b", "main")
     git(root, "config", "user.email", "test@example.com")
-    git(root, "config", "user.name", "Attest Test")
+    git(root, "config", "user.name", "Attavo Test")
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", message)
 
@@ -69,6 +69,28 @@ def job_if_condition(yaml_text: str, job_name: str) -> str | None:
         if indent == body_indent and line.strip().startswith("if:"):
             return line.strip()[len("if:"):].strip()
     return None
+
+
+def step_block(yaml_text: str, marker: str) -> str:
+    """The raw lines of one workflow step, from the line matching `marker`
+    exactly (its stripped text -- typically "- name: X" or "- uses: X") to
+    the line before the next step at the same indent, or the file's end.
+    Reads the literal file rather than reimplementing YAML parsing, same
+    as job_if_condition and extract_step_run.
+    """
+    lines = yaml_text.splitlines()
+    start = next(i for i, l in enumerate(lines) if l.strip() == marker)
+    step_indent = len(lines[start]) - len(lines[start].lstrip(" "))
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent <= step_indent and line.lstrip().startswith("- "):
+            end = i
+            break
+    return "\n".join(lines[start:end])
 
 
 def extract_step_run(yaml_text: str, step_name: str) -> str:

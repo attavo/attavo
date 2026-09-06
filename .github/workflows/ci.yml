@@ -28,5 +28,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./
-      - run: attest spec-gate 1
+      - run: attavo spec-gate
         working-directory: tests/fixtures/valid
+        env:
+          ATTAVO_ITEM: "1"

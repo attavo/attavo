@@ -1,6 +1,6 @@
 schema_version = 1
 
-[attest]
+[attavo]
 version = "v0.1.0"
 
 [executor]
@@ -10,13 +10,11 @@ build = "noop"
 [spec.boundary]
 paths = ["src/**"]
 
-[gates.spec]
-command = "ATTEST_CMD spec-gate 1"
-retires = ["design stage", "second approval"]
+[gates]
 
 [paths]
 specs = "specs"
-records = "records"
+records = "attavo/records"
 rulings = "rulings.md"
 rejections = "rejections"
 
