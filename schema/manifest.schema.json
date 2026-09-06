@@ -1,24 +1,24 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attest.ai/schema/manifest/1",
-  "title": "Attest tenant manifest (attest.toml)",
-  "description": "What a tenant declares to install Attest: the release it pins, the executor it chose, where the governed path begins and ends, the gates it runs, and where its specs, records, and rulings live. Every key is read by a script; a key no script reads does not belong here.",
+  "$id": "https://attavo.dev/schema/manifest/1",
+  "title": "Attavo tenant manifest (attavo.toml)",
+  "description": "What a tenant declares to install Attavo: the release it pins, the executor it chose, where the governed path begins and ends, the gates it runs, and where its specs, records, and rulings live. Every key is read by a script; a key no script reads does not belong here.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "attest", "executor", "spec", "gates", "paths", "operators"],
+  "required": ["schema_version", "attavo", "executor", "spec", "gates", "paths", "operators"],
   "properties": {
     "schema_version": {
       "type": "integer",
       "const": 1
     },
-    "attest": {
+    "attavo": {
       "type": "object",
       "additionalProperties": false,
       "required": ["version"],
       "properties": {
         "version": {
           "type": "string",
-          "description": "The Attest release tag the tenant pins. The tenant holds no Attest binary; the pinned action supplies it.",
+          "description": "The Attavo release tag the tenant pins. The tenant holds no Attavo binary; the pinned action supplies it.",
           "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
         }
       }
@@ -111,7 +111,7 @@
         "approvers": {
           "type": "array",
           "items": {"type": "string", "minLength": 1},
-          "description": "Logins allowed to bind a spec's approval to a commit. `attest approve` refuses a LOGIN not on this list."
+          "description": "Logins allowed to bind a spec's approval to a commit. `attavo approve` refuses a LOGIN not on this list."
         }
       }
     }

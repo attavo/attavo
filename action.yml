@@ -1,5 +1,5 @@
-name: "Attest"
-description: "Installs the attest command, pinned at this tag, on PATH."
+name: "Attavo"
+description: "Installs the attavo command, pinned at this tag, on PATH."
 runs:
   using: "composite"
   steps:

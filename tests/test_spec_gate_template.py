@@ -1,7 +1,7 @@
-"""templates/workflows/attest-spec-gate.yml: the gate runs against a work
+"""templates/workflows/attavo-spec-gate.yml: the gate runs against a work
 item's branch and pushes its own spec-NN.json record. Without a skip, that
 record commit itself triggers the gate again, which pushes another record,
-forever -- the loop from issue #9 (code-factory PR #595: two operator
+forever -- the loop from issue #9 (a pilot tenant's PR #595: two operator
 releases of held runs produced two more record commits).
 
 Rejection test, written and run red before the skip step existed: the
@@ -21,7 +21,7 @@ from pathlib import Path
 from helpers import commit_all, extract_step_run, job_if_condition, make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
-TEMPLATE = ROOT / "templates" / "workflows" / "attest-spec-gate.yml"
+TEMPLATE = ROOT / "templates" / "workflows" / "attavo-spec-gate.yml"
 STEP_NAME = "Skip when the head commit only touches records"
 JOB_NAME = "spec-gate"
 
@@ -48,7 +48,7 @@ def test_skip_is_true_when_the_head_commit_only_touches_records(tmp_path):
     root = make_tenant(tmp_path, "valid")
     (root / "records" / "1").mkdir(parents=True)
     (root / "records" / "1" / "spec-01.json").write_text("{}\n")
-    commit_all(root, "attest: spec-gate record for #1")
+    commit_all(root, "attavo: spec-gate record for #1")
 
     assert run_skip_step(root) == "true"
 
@@ -71,12 +71,12 @@ def test_skip_is_false_when_the_head_commit_touches_both_records_and_specs(tmp_p
     assert run_skip_step(root) == "false"
 
 
-def test_job_guards_on_the_attest_branch_prefix():
+def test_job_guards_on_the_attavo_branch_prefix():
     """A pull_request event fires this workflow on every PR, not just ones
-    from a work item's attest/N-* branch. Without a branch guard, a PR from
+    from a work item's attavo/N-* branch. Without a branch guard, a PR from
     any other branch runs the gate, which cannot derive an item id and exits
     2, so the required spec-gate check goes red on ordinary PRs (issue #12).
     """
     condition = job_if_condition(TEMPLATE.read_text(), JOB_NAME)
     assert condition is not None, f"job {JOB_NAME!r} has no if: condition"
-    assert "startsWith(github.head_ref, 'attest/')" in condition
+    assert "startsWith(github.head_ref, 'attavo/')" in condition

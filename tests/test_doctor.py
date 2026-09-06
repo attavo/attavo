@@ -16,11 +16,11 @@ from pathlib import Path
 from helpers import FIXTURES, commit_all, init_repo
 
 ROOT = Path(__file__).resolve().parent.parent
-ATTEST = ROOT / "bin" / "attest"
+ATTAVO = ROOT / "bin" / "attavo"
 
 
 def run_doctor(root: Path) -> dict:
-    out = subprocess.run([sys.executable, str(ATTEST), "doctor", str(root), "--json"],
+    out = subprocess.run([sys.executable, str(ATTAVO), "doctor", str(root), "--json"],
                          capture_output=True, text=True, check=False)
     report = json.loads(out.stdout)
     assert out.returncode == (0 if report["done"] else 1)
@@ -61,7 +61,7 @@ def test_record_loader_uses_highest_attempt_number(tmp_path):
     """
     root = tmp_path / "attempts"
     root.mkdir()
-    (root / "attest.toml").write_text('[paths]\nrecords = "records"\n')
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
     init_repo(root, "install")
 
     (root / "src.txt").write_text("code\n")
@@ -79,17 +79,30 @@ def test_record_loader_uses_highest_attempt_number(tmp_path):
     assert p["holds"], p["reason"]
 
 
-def test_doctor_proof_one_holds_for_spec_gate(tmp_path):
-    """Acceptance 5 / test 9. A fixture tenant declares [gates.spec] with
-    retires, and its rejections/spec/ fixture is itself a tenant root on
-    which `attest spec-gate 1` refuses (a prose criterion). Doctor proof 1
-    must hold against it."""
+def test_doctor_proof_one_runs_the_gate_without_an_item_argument(tmp_path):
+    """Issue #7, and its regression test. [gates.spec].command is a bare
+    `attavo spec-gate`, no item argument, and its rejections/spec/ fixture
+    carries no attavo/N-* branch at all (init_repo leaves it on `main`) --
+    so before the doctor exported the fixture's item as ATTAVO_ITEM, the
+    gate command would exit 2 (cannot derive item id) without ever writing
+    a record, which still counts as "rejected" but proves nothing about the
+    prose criterion this fixture means to test.
+
+    Red at the merge base: no ATTAVO_ITEM export existed, so no
+    spec-01.json was ever written and reading it raised FileNotFoundError.
+    Green once the doctor exports it: the record exists and names the
+    prose criterion by name, which is the actual thing proof one asserts.
+    """
     outer = tmp_path / "gate_rejection"
     shutil.copytree(FIXTURES / "gate_rejection", outer)
-    cmd = f"{sys.executable} {ATTEST}"
-    toml = outer / "attest.toml"
-    toml.write_text(toml.read_text().replace("ATTEST_CMD", cmd))
+    cmd = f"{sys.executable} {ATTAVO}"
+    toml = outer / "attavo.toml"
+    toml.write_text(toml.read_text().replace("ATTAVO_CMD", cmd))
     init_repo(outer / "rejections" / "spec")
 
     p = run_doctor(outer)["every-gate-rejects"]
     assert p["holds"], p["reason"]
+
+    record = json.loads(
+        (outer / "rejections" / "spec" / "records" / "1" / "spec-01.json").read_text())
+    assert record["refusal"] == "criterion is prose: missing.sh"

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""attest: the command.
+"""attavo: the command.
 
-    attest doctor [TENANT_ROOT] [--json]
-    attest spec-gate [N]
-    attest approve [N] --by LOGIN
-    attest approval-status [N]
+    attavo doctor [TENANT_ROOT] [--json]
+    attavo spec-gate [N]
+    attavo approve [N] --by LOGIN
+    attavo approval-status [N]
 
 The doctor is the definition of done. It asserts three proofs against a
 tenant root and exits 1 until every proof holds:
@@ -26,10 +26,14 @@ is done.
 
 spec-gate, approve, and approval-status are gates and writers. They run
 from the tenant root (the current working directory); N, the work item id,
-is read from the branch (attest/N-*) when omitted. Every run of spec-gate
-or approve writes the next numbered attempt file under paths.records/N/
-and never overwrites one already written. See the spec contract in the
-project's Phase 1 issue for the full rules each one enforces.
+is read from the ATTAVO_ITEM environment variable when set, else from the
+branch (attavo/N-*). The doctor's first proof sets ATTAVO_ITEM for a
+rejection fixture's own item, so a gate's own command needs no argument
+even while the enclosing repository sits on a real item's attavo/N-*
+branch. Every run of spec-gate or approve writes the next numbered attempt
+file under paths.records/N/ and never overwrites one already written. See
+the spec contract in the project's Phase 1 issue for the full rules each
+one enforces.
 """
 from __future__ import annotations
 
@@ -44,7 +48,7 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
-MANIFEST = "attest.toml"
+MANIFEST = "attavo.toml"
 STAGES = ("spec", "approval", "build", "verify", "attestation")
 CRITERION_TIMEOUT = 120
 RECORD_RE = re.compile(r"^([a-z]+)-([0-9]{2,})\.json$")
@@ -91,11 +95,35 @@ def now_iso() -> str:
 
 
 def derive_item_id(root: Path) -> str | None:
+    """ATTAVO_ITEM first, not last: a rejection fixture's own item id must
+    win over whatever attavo/N-* branch the enclosing tenant repository
+    happens to be checked out on -- the common case is doctor running from
+    a real item's own branch, where a fallback-only env var would never be
+    consulted at all and every gate fixture would silently resolve to the
+    real item instead of its own."""
+    env_item = os.environ.get("ATTAVO_ITEM")
+    if env_item:
+        return env_item
     out = subprocess.run(["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"],
                          capture_output=True, text=True, check=False)
     branch = out.stdout.strip()
-    m = re.match(r"^attest/(\d+)-", branch)
+    m = re.match(r"^attavo/(\d+)-", branch)
     return m.group(1) if m else None
+
+
+def fixture_item_id(fixture: Path) -> str | None:
+    """The one item id under a rejection fixture's own paths.specs, so the
+    doctor can export it as ATTAVO_ITEM: a fixture carries no attavo/N-*
+    branch for a gate command with no argument to derive from otherwise."""
+    fm = read_manifest(fixture)
+    specs_rel = ((fm or {}).get("paths") or {}).get("specs")
+    if not specs_rel:
+        return None
+    specs_dir = fixture / specs_rel
+    if not specs_dir.is_dir():
+        return None
+    items = sorted(p.name for p in specs_dir.iterdir() if p.is_dir())
+    return items[0] if len(items) == 1 else None
 
 
 class ShallowCheckoutError(RuntimeError):
@@ -187,8 +215,12 @@ def proof_every_gate_rejects(root: Path, m: dict | None) -> Proof:
         if not fixture.is_dir():
             missing.append(name)
             continue
+        env = dict(os.environ)
+        item = fixture_item_id(fixture)
+        if item is not None:
+            env["ATTAVO_ITEM"] = item
         run = subprocess.run(gate["command"], shell=True, cwd=str(fixture),
-                             capture_output=True, text=True, check=False)
+                             capture_output=True, text=True, check=False, env=env)
         if run.returncode == 0:
             accepted.append(name)
     if missing:
@@ -331,25 +363,25 @@ def cmd_spec_gate(argv: list[str]) -> int:
     root = Path(".").resolve()
     item_id = argv[0] if argv else derive_item_id(root)
     if not item_id:
-        print("attest spec-gate: cannot derive item id; pass N or run on an attest/N-* branch",
+        print("attavo spec-gate: cannot derive item id; pass N or run on an attavo/N-* branch",
               file=sys.stderr)
         return 2
     m = read_manifest(root)
     if m is None:
-        print(f"attest spec-gate: no {MANIFEST} at {root}", file=sys.stderr)
+        print(f"attavo spec-gate: no {MANIFEST} at {root}", file=sys.stderr)
         return 2
     specs_rel = m["paths"]["specs"]
     records_rel = m["paths"]["records"]
     spec_dir = root / specs_rel / item_id
     spec_md = spec_dir / "spec.md"
     if not spec_md.is_file():
-        print(f"attest spec-gate: no spec at {spec_dir}", file=sys.stderr)
+        print(f"attavo spec-gate: no spec at {spec_dir}", file=sys.stderr)
         return 2
     spec_rel = str(Path(specs_rel) / item_id)
     try:
         spec_sha = last_commit_touching(root, spec_rel)
     except ShallowCheckoutError as exc:
-        print(f"attest spec-gate: refused: {exc}", file=sys.stderr)
+        print(f"attavo spec-gate: refused: {exc}", file=sys.stderr)
         return 2
 
     parsed, refusal = parse_spec(spec_md)
@@ -395,9 +427,9 @@ def cmd_spec_gate(argv: list[str]) -> int:
     write_record(root / records_rel / item_id, "spec", record)
 
     if refusal:
-        print(f"attest spec-gate: refused: {refusal}")
+        print(f"attavo spec-gate: refused: {refusal}")
         return 1
-    print(f"attest spec-gate: pass ({len(results)} criterion/criteria)")
+    print(f"attavo spec-gate: pass ({len(results)} criterion/criteria)")
     return 0
 
 
@@ -417,15 +449,15 @@ def cmd_approve(argv: list[str]) -> int:
             i += 1
     item_id = positional[0] if positional else derive_item_id(root)
     if not item_id:
-        print("attest approve: cannot derive item id; pass N or run on an attest/N-* branch",
+        print("attavo approve: cannot derive item id; pass N or run on an attavo/N-* branch",
               file=sys.stderr)
         return 2
     if not by:
-        print("attest approve: --by LOGIN is required", file=sys.stderr)
+        print("attavo approve: --by LOGIN is required", file=sys.stderr)
         return 2
     m = read_manifest(root)
     if m is None:
-        print(f"attest approve: no {MANIFEST} at {root}", file=sys.stderr)
+        print(f"attavo approve: no {MANIFEST} at {root}", file=sys.stderr)
         return 2
 
     specs_rel = m["paths"]["specs"]
@@ -434,7 +466,7 @@ def cmd_approve(argv: list[str]) -> int:
     try:
         spec_sha_now = last_commit_touching(root, spec_rel)
     except ShallowCheckoutError as exc:
-        print(f"attest approve: refused: {exc}", file=sys.stderr)
+        print(f"attavo approve: refused: {exc}", file=sys.stderr)
         return 2
     records_dir = root / records_rel / item_id
     latest_spec = latest_record(records_dir, "spec")
@@ -450,13 +482,13 @@ def cmd_approve(argv: list[str]) -> int:
         refusal = f"{by} is not in [operators].approvers"
 
     if refusal:
-        print(f"attest approve: refused: {refusal}")
+        print(f"attavo approve: refused: {refusal}")
         return 1
 
     record = {"sha": git(root, "rev-parse", "HEAD").strip(), "spec_sha": spec_sha_now,
               "approved_by": by, "at": now_iso()}
     write_record(records_dir, "approval", record)
-    print(f"attest approve: item {item_id} approved by {by}")
+    print(f"attavo approve: item {item_id} approved by {by}")
     return 0
 
 
@@ -464,12 +496,12 @@ def cmd_approval_status(argv: list[str]) -> int:
     root = Path(".").resolve()
     item_id = argv[0] if argv else derive_item_id(root)
     if not item_id:
-        print("attest approval-status: cannot derive item id; pass N or run on an attest/N-* branch",
+        print("attavo approval-status: cannot derive item id; pass N or run on an attavo/N-* branch",
               file=sys.stderr)
         return 2
     m = read_manifest(root)
     if m is None:
-        print(f"attest approval-status: no {MANIFEST} at {root}", file=sys.stderr)
+        print(f"attavo approval-status: no {MANIFEST} at {root}", file=sys.stderr)
         return 2
 
     specs_rel = m["paths"]["specs"]
@@ -478,7 +510,7 @@ def cmd_approval_status(argv: list[str]) -> int:
     try:
         spec_sha_now = last_commit_touching(root, spec_rel)
     except ShallowCheckoutError as exc:
-        print(f"attest approval-status: refused: {exc}", file=sys.stderr)
+        print(f"attavo approval-status: refused: {exc}", file=sys.stderr)
         return 2
     records_dir = root / records_rel / item_id
     latest_approval = latest_record(records_dir, "approval")
@@ -505,7 +537,7 @@ def main(argv: list[str]) -> int:
         return cmd_approve(argv[1:])
     if argv[0] == "approval-status":
         return cmd_approval_status(argv[1:])
-    print(f"attest: unknown subcommand {argv[0]!r}; "
+    print(f"attavo: unknown subcommand {argv[0]!r}; "
           f"only doctor, spec-gate, approve, approval-status exist at this commit",
           file=sys.stderr)
     return 2
