@@ -7,6 +7,7 @@ every one of these failed with "unknown subcommand".
 Run: python3 -m pytest tests -q
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,9 +18,12 @@ ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
 
 
-def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    full_env = dict(os.environ)
+    if env:
+        full_env.update(env)
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
-                          capture_output=True, text=True, check=False)
+                          capture_output=True, text=True, check=False, env=full_env)
 
 
 def latest_record(root: Path, item: str, stage: str) -> dict:
@@ -148,3 +152,65 @@ def test_spec_gate_runs_when_approval_expired(tmp_path):
     rec = latest_record(root, "1", "spec")
     assert rec["status"] == "refused"
     assert "checks_marker.sh" in rec["refusal"]
+
+
+def run_real_build(root: Path) -> subprocess.CompletedProcess:
+    """A real `attavo build`, the fixture adapter writing the marker.txt
+    the criterion checks for -- inside src/**, the claim -- unlike
+    complete_the_build above, which only fakes the commit shape."""
+    return run_attavo(root, "build", "1", env={"ATTAVO_FIXTURE_WRITE": "src/marker.txt"})
+
+
+def test_spec_gate_built_after_build(tmp_path):
+    """Issue #28, acceptance 1. Approve, build for real, then an
+    amendment above the line expires the approval: the gate reports
+    status built, not a refusal, and runs each criterion against the
+    tree only (on_stub null). Red today: refused for passing on the
+    tree, PR #600's specimen.
+    """
+    root = make_tenant(tmp_path, "valid")
+    approve_valid(root)
+    assert run_real_build(root).returncode == 0
+
+    amend_problem(root)
+
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0
+
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "built"
+    assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 0, "on_stub": None}]
+    assert rec["refusal"] is None
+
+
+def test_spec_gate_built_refuses_a_failing_criterion(tmp_path):
+    """Issue #28, acceptance 2. Same shape, but a criterion still fails
+    on the tree after the build: refused by name, not rubber-stamped
+    built just because a build record exists.
+    """
+    root = make_tenant(tmp_path, "valid")
+    approve_valid(root)
+    assert run_real_build(root).returncode == 0
+
+    (root / "src" / "marker.txt").unlink()
+    commit_all(root, "regression: remove the marker")
+    amend_problem(root)
+
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused"
+    assert "checks_marker.sh" in rec["refusal"]
+    assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 1, "on_stub": None}]
+
+
+def test_spec_gate_phase1_rule_unchanged_without_build(tmp_path):
+    """Issue #28, acceptance 3. No build record at all: the third verdict
+    does not apply, and Phase 1's original rule holds unchanged."""
+    root = make_tenant(tmp_path, "valid")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "pass"
+    assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 1, "on_stub": 0}]

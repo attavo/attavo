@@ -376,6 +376,24 @@ def run_criteria(root: Path, spec_dir: Path, names: list[str]) -> list[dict]:
         return results
 
 
+def run_criteria_on_tree(root: Path, spec_dir: Path, names: list[str]) -> list[dict]:
+    """Post-build re-check: against the tree only, no stub copy -- the
+    stub proved the criteria were reachable before approval; after a
+    build, the tree itself is what must satisfy them."""
+    criteria_dir = spec_dir / "criteria"
+    return [{"name": name, "on_tree": run_criterion(criteria_dir / name, root), "on_stub": None}
+            for name in names]
+
+
+def commit_postdates(root: Path, earlier: str, later: str) -> bool:
+    """Whether later is a strict descendant of earlier on this branch."""
+    if earlier == later:
+        return False
+    run = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", earlier, later],
+                         capture_output=True, check=False)
+    return run.returncode == 0
+
+
 def cmd_spec_gate(argv: list[str]) -> int:
     root = Path(".").resolve()
     item_id = argv[0] if argv else derive_item_id(root)
@@ -407,8 +425,8 @@ def cmd_spec_gate(argv: list[str]) -> int:
     except ShallowCheckoutError as exc:
         print(f"attavo spec-gate: refused: {exc}", file=sys.stderr)
         return 2
+    latest_approval = latest_record(records_dir, "approval")
     if approved:
-        latest_approval = latest_record(records_dir, "approval")
         record = {"sha": git(root, "rev-parse", "HEAD").strip(), "spec_sha": spec_sha,
                   "at": now_iso(), "status": "approved",
                   "approval_sha": latest_approval.get("sha") if latest_approval else None,
@@ -417,10 +435,25 @@ def cmd_spec_gate(argv: list[str]) -> int:
         print("attavo spec-gate: approved (no criteria run)")
         return 0
 
+    # Third verdict, beside "approved" and Phase 1's "pass": the approval
+    # is not valid, but a build already ran after it -- the amendment that
+    # expired the approval landed above the line, not below it, and the
+    # tree the build produced is what must satisfy the criteria now, not
+    # the stub that only ever proved they were reachable before approval.
+    latest_build = latest_record(records_dir, "build")
+    built = bool(
+        latest_approval and latest_build and latest_build.get("status") != "halted"
+        and commit_postdates(root, latest_approval["sha"], latest_build["sha"]))
+
     parsed, refusal = parse_spec(spec_md)
     results: list[dict] = []
     if refusal is None:
-        if not parsed["claims"]:
+        if built:
+            results = run_criteria_on_tree(root, spec_dir, parsed["criteria"])
+            fail = next((c for c in results if c["on_tree"] != 0), None)
+            if fail:
+                refusal = f"criterion fails against the tree: {fail['name']}"
+        elif not parsed["claims"]:
             refusal = "claims: empty; the build may touch nothing"
         else:
             criteria_dir = spec_dir / "criteria"
@@ -453,7 +486,7 @@ def cmd_spec_gate(argv: list[str]) -> int:
                     if fail_stub:
                         refusal = f"criterion fails against the tree plus stub: {fail_stub['name']}"
 
-    status = "refused" if refusal else "pass"
+    status = "refused" if refusal else ("built" if built else "pass")
     record = {"sha": git(root, "rev-parse", "HEAD").strip(),
               "spec_sha": spec_sha,
               "at": now_iso(), "status": status, "approval_sha": None,
@@ -463,7 +496,7 @@ def cmd_spec_gate(argv: list[str]) -> int:
     if refusal:
         print(f"attavo spec-gate: refused: {refusal}")
         return 1
-    print(f"attavo spec-gate: pass ({len(results)} criterion/criteria)")
+    print(f"attavo spec-gate: {status} ({len(results)} criterion/criteria)")
     return 0
 
 
@@ -507,7 +540,7 @@ def cmd_approve(argv: list[str]) -> int:
     approvers = ((m.get("operators") or {}).get("approvers")) or []
 
     refusal = None
-    if latest_spec is None or latest_spec.get("status") != "pass":
+    if latest_spec is None or latest_spec.get("status") not in ("pass", "built"):
         refusal = f"no passing spec-gate record for item {item_id}"
     elif latest_spec.get("spec_sha") != spec_sha_now:
         refusal = (f"spec-gate record is stale: recorded {latest_spec.get('spec_sha')}, "

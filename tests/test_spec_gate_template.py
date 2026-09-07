@@ -18,7 +18,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from helpers import commit_all, extract_step_run, git, job_if_condition, make_tenant
+from helpers import commit_all, extract_step_run, git, job_if_condition, make_tenant, step_block
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "templates" / "workflows" / "attavo-spec-gate.yml"
@@ -99,6 +99,26 @@ def test_skip_is_false_on_a_merge_commit_from_main(tmp_path):
     git(root, "merge", "--no-ff", "-m", "Merge branch 'main' into attavo/1-x", "main")
 
     assert run_skip_step(root) == "false"
+
+
+def test_template_pushes_on_refusal():
+    """Issue #28, acceptance 5. A step after a failed one is skipped by
+    default -- PR #600's specimen: `attavo spec-gate` refused, and the
+    refusal record never reached the branch because the push step
+    afterward never ran, existing only in the run log. The push step
+    must carry if: always() (still gated on the skip check, so the
+    anti-loop protection from issue #9 holds), and nothing upstream may
+    swallow the gate's own failure with continue-on-error.
+    """
+    text = TEMPLATE.read_text()
+
+    push_block = step_block(text, "- name: Commit and push the spec-gate record")
+    if_line = next(l for l in push_block.splitlines() if l.strip().startswith("if:"))
+    assert "always()" in if_line
+    assert "steps.touch.outputs.skip" in if_line
+
+    gate_block = step_block(text, "- name: attavo spec-gate")
+    assert "continue-on-error" not in gate_block
 
 
 def test_job_guards_on_the_attavo_branch_prefix():

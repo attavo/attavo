@@ -9,7 +9,7 @@
     "sha": {"type": "string", "minLength": 1},
     "spec_sha": {"type": ["string", "null"]},
     "at": {"type": "string", "minLength": 1},
-    "status": {"type": "string", "enum": ["pass", "refused", "approved"]},
+    "status": {"type": "string", "enum": ["pass", "refused", "approved", "built"]},
     "approval_sha": {"type": ["string", "null"]},
     "criteria": {
       "type": "array",
@@ -20,7 +20,7 @@
         "properties": {
           "name": {"type": "string", "minLength": 1},
           "on_tree": {"type": "integer"},
-          "on_stub": {"type": "integer"}
+          "on_stub": {"type": ["integer", "null"]}
         }
       }
     },

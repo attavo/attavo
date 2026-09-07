@@ -47,6 +47,17 @@ def test_records_match_their_shapes(tmp_path):
     assert approved.returncode == 0
     assert json.loads((root / "records" / "1" / "spec-02.json").read_text())["status"] == "approved"
 
+    # issue #28: an amendment above the line expires the approval, but a
+    # build already ran after it -- status "built", on_stub null.
+    spec_md = root / "specs" / "1" / "spec.md"
+    spec_md.write_text(spec_md.read_text().replace("does not emit", "used to not emit"))
+    commit_all(root, "amend problem prose")
+    built = run_attavo(root, "spec-gate", "1")
+    assert built.returncode == 0
+    spec_03 = json.loads((root / "records" / "1" / "spec-03.json").read_text())
+    assert spec_03["status"] == "built"
+    assert spec_03["criteria"][0]["on_stub"] is None
+
     schemas = {"spec": load_schema("spec"), "approval": load_schema("approval"),
               "build": load_schema("build")}
 

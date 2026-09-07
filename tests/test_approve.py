@@ -6,6 +6,8 @@ subcommand, so every one of these failed with "unknown subcommand".
 
 Run: python3 -m pytest tests -q
 """
+import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,9 +18,12 @@ ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
 
 
-def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    full_env = dict(os.environ)
+    if env:
+        full_env.update(env)
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
-                          capture_output=True, text=True, check=False)
+                          capture_output=True, text=True, check=False, env=full_env)
 
 
 def approvals(root: Path, item: str = "1") -> list[Path]:
@@ -80,6 +85,29 @@ def test_amendment_above_line_costs_one_act(tmp_path):
     assert valid_again.returncode == 0
     assert valid_again.stdout.strip() == "valid"
 
+    assert [p.name for p in approvals(root)] == ["approval-01.json", "approval-02.json"]
+
+
+def test_approve_accepts_built(tmp_path):
+    """Issue #28, acceptance 4. approve succeeds on a latest spec-gate
+    record of status built -- the re-approval path after an amendment
+    that landed above the line after a real build.
+    """
+    root = make_tenant(tmp_path, "valid")
+    assert run_attavo(root, "spec-gate", "1").returncode == 0
+    assert run_attavo(root, "approve", "1", "--by", "alice").returncode == 0
+
+    build = run_attavo(root, "build", "1", env={"ATTAVO_FIXTURE_WRITE": "src/marker.txt"})
+    assert build.returncode == 0
+
+    amend_problem(root)
+    built = run_attavo(root, "spec-gate", "1")
+    assert built.returncode == 0
+    latest_spec = sorted((root / "records" / "1").glob("spec-*.json"))[-1]
+    assert json.loads(latest_spec.read_text())["status"] == "built"
+
+    run = run_attavo(root, "approve", "1", "--by", "alice")
+    assert run.returncode == 0
     assert [p.name for p in approvals(root)] == ["approval-01.json", "approval-02.json"]
 
 
