@@ -1,0 +1,28 @@
+#!/bin/sh
+# adapters/fixture/run -- see ../README.md for the contract. Exists for the
+# tests and the doctor; it is not an executor, and it never writes a record.
+set -eu
+
+write_name="${ATTAVO_FIXTURE_WRITE:-built.txt}"
+
+if [ -n "${ATTAVO_FIXTURE_QUESTION:-}" ]; then
+  printf '{"status":"question","question":"%s","model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":0,"output":0},"cost_usd":0.0}\n' \
+    "$ATTAVO_FIXTURE_QUESTION"
+  exit 0
+fi
+
+should_write=1
+if [ -n "${ATTAVO_FIXTURE_REQUIRE_FEEDBACK:-}" ]; then
+  should_write=0
+  if [ -s "${ATTAVO_FEEDBACK:-/dev/null}" ]; then
+    should_write=1
+  fi
+fi
+
+if [ "$should_write" = "1" ]; then
+  echo "built" > "$write_name"
+  git add "$write_name"
+  git commit -q -m "fixture: write $write_name"
+fi
+
+echo '{"status":"done","question":null,"model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0}'

@@ -79,6 +79,30 @@ def test_record_loader_uses_highest_attempt_number(tmp_path):
     assert p["holds"], p["reason"]
 
 
+def test_doctor_proof_two_counts_three_of_five_stages_still_red(tmp_path):
+    """Acceptance 8. A work item carrying spec, approval, and build records
+    -- the three stages this lane can produce -- is three of the five
+    STAGES proof two names; verify and attestation don't exist yet, so the
+    proof stays red and names exactly those two as lacking.
+    """
+    root = tmp_path / "three_stages"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "spec-01.json").write_text(json.dumps({"status": "pass"}))
+    (records / "approval-01.json").write_text(json.dumps({"approved_by": "alice"}))
+    (records / "build-01.json").write_text(json.dumps({"status": "pass"}))
+    commit_all(root, "spec, approval, and build records")
+
+    p = run_doctor(root)["one-item-every-stage"]
+    assert not p["holds"]
+    assert "verify" in p["reason"] and "attestation" in p["reason"]
+    assert "build" not in p["reason"]
+
+
 def test_doctor_proof_one_runs_the_gate_without_an_item_argument(tmp_path):
     """Issue #7, and its regression test. [gates.spec].command is a bare
     `attavo spec-gate`, no item argument, and its rejections/spec/ fixture

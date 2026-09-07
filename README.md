@@ -22,12 +22,18 @@ A spec is one artifact with a line in it. Above the line — the problem and the
 
 All three run from the tenant root; `N` is read from the branch (`attavo/N-*`) when omitted. The full contract is in the Phase 1 issue.
 
+## Build (Phase 2)
+
+`attavo build N` refuses (exit 1, naming the cause, no record) unless the manifest declares `[executor].build` and `[tests].select` and `[tests].run`, and unless `attavo approval-status` would print `valid`. It invokes the named adapter — `adapters/<name>/run`, resolved first under the tenant's own `attavo/adapters/`, then under this product's `adapters/` — with the spec, the corpus, and the branch. After each return it checks that every path the adapter touched matches a spec claim, then runs the criteria against the tree and the tests `[tests].select` and `[tests].run` name for the touched paths, iterating on failure up to a fixed budget. A `question` from the adapter halts the loop at once (exit 3); nothing answers it in Phase 2. Every run writes the next `build-NN.json`, with the adapter's transcript beside it as `build-NN.log`. Nothing dispatches build; it is typed by the operator. The full contract is in the Phase 2 issue.
+
 ## Layout
 
-- `bin/attavo` — the command: `doctor`, `spec-gate`, `approve`, `approval-status`.
+- `bin/attavo` — the command: `doctor`, `spec-gate`, `approve`, `approval-status`, `build`.
 - `schema/manifest.schema.json` — the shape of a tenant's `attavo.toml`.
+- `schema/records/` — the shape of each stage's record.
+- `adapters/` — the adapter contract (`adapters/README.md`) and two adapters: `claude-code` and `fixture`.
 - `action.yml` — pins Attavo at a tag and puts `attavo` on `PATH`.
 - `templates/workflows/` — workflows a tenant copies into its own repository; nothing here is vendored or run by this one.
-- `tests/` — the doctor's proofs and the spec contract's rejection tests, with their fixtures under `tests/fixtures/`.
+- `tests/` — the doctor's proofs and the spec and build contracts' rejection tests, with their fixtures under `tests/fixtures/`.
 
 This repository contains no tenant name, path, or command string.

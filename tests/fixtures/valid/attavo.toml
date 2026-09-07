@@ -4,11 +4,15 @@ schema_version = 1
 version = "v0.1.0"
 
 [executor]
-build = "noop"
+build = "fixture"
 
 [spec]
 [spec.boundary]
 paths = ["src/**"]
+
+[tests]
+select = "cat"
+run = "true"
 
 [gates]
 
