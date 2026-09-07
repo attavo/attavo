@@ -5,6 +5,7 @@
     attavo spec-gate [N]
     attavo approve [N] --by LOGIN
     attavo approval-status [N]
+    attavo build [N]
 
 The doctor is the definition of done. It asserts three proofs against a
 tenant root and exits 1 until every proof holds:
@@ -34,9 +35,21 @@ branch. Every run of spec-gate or approve writes the next numbered attempt
 file under paths.records/N/ and never overwrites one already written. See
 the spec contract in the project's Phase 1 issue for the full rules each
 one enforces.
+
+build refuses (exit 1, naming the cause, no record) unless the manifest
+declares [executor].build and [tests].select and [tests].run, and unless
+approval-status would print valid. It invokes the named adapter
+(adapters/<name>/run) with the spec, the corpus, and the branch, checks
+that every path it touched matches a spec claim, then runs the criteria
+and the tests [tests].select and [tests].run name for the touched paths,
+iterating on failure up to a fixed budget. It writes the next
+build-NN.json under paths.records/N/, with the adapter's transcript beside
+it as build-NN.log. See the build contract in the project's Phase 2 issue
+for the full rules it enforces.
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
@@ -44,6 +57,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +66,9 @@ MANIFEST = "attavo.toml"
 STAGES = ("spec", "approval", "build", "verify", "attestation")
 CRITERION_TIMEOUT = 120
 RECORD_RE = re.compile(r"^([a-z]+)-([0-9]{2,})\.json$")
+BUILD_ITERATION_BUDGET = 3
+BUILD_HALT_EXIT = 3
+PRODUCT_ROOT = Path(__file__).resolve().parent.parent
 
 
 class Proof:
@@ -492,6 +509,27 @@ def cmd_approve(argv: list[str]) -> int:
     return 0
 
 
+def approval_status(root: Path, m: dict, item_id: str) -> str:
+    """"absent", "expired", or "valid": whether the latest approval record
+    for item_id still binds to the spec's current commit. Raises
+    ShallowCheckoutError on a shallow checkout, same as last_commit_touching.
+    Shared by cmd_approval_status and cmd_build so build refuses on exactly
+    what `attavo approval-status` would print.
+    """
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    spec_rel = str(Path(specs_rel) / item_id)
+    spec_sha_now = last_commit_touching(root, spec_rel)
+    records_dir = root / records_rel / item_id
+    latest_approval = latest_record(records_dir, "approval")
+
+    if latest_approval is None:
+        return "absent"
+    if latest_approval.get("spec_sha") == spec_sha_now:
+        return "valid"
+    return "expired"
+
+
 def cmd_approval_status(argv: list[str]) -> int:
     root = Path(".").resolve()
     item_id = argv[0] if argv else derive_item_id(root)
@@ -504,25 +542,227 @@ def cmd_approval_status(argv: list[str]) -> int:
         print(f"attavo approval-status: no {MANIFEST} at {root}", file=sys.stderr)
         return 2
 
-    specs_rel = m["paths"]["specs"]
-    records_rel = m["paths"]["records"]
-    spec_rel = str(Path(specs_rel) / item_id)
     try:
-        spec_sha_now = last_commit_touching(root, spec_rel)
+        status = approval_status(root, m, item_id)
     except ShallowCheckoutError as exc:
         print(f"attavo approval-status: refused: {exc}", file=sys.stderr)
         return 2
-    records_dir = root / records_rel / item_id
-    latest_approval = latest_record(records_dir, "approval")
 
-    if latest_approval is None:
-        print("absent")
+    print(status)
+    return 0 if status == "valid" else 1
+
+
+# --- build: adapter, claims boundary, criteria, and the tenant's tests ---
+
+def resolve_adapter(root: Path, name: str) -> Path | None:
+    """adapters/<name>/run, resolved first under the tenant's own
+    attavo/adapters/, then under this product's adapters/."""
+    for base in (root / "attavo" / "adapters", PRODUCT_ROOT / "adapters"):
+        candidate = base / name / "run"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def changed_paths(root: Path, start_sha: str, records_rel: str) -> list[str]:
+    """Paths changed between start_sha and HEAD, other than paths.records --
+    the records directory is where build itself writes, not a claim."""
+    out = git(root, "diff", "--name-only", start_sha, "HEAD").splitlines()
+    prefix = records_rel.rstrip("/") + "/"
+    return [p for p in out if p and p != records_rel and not p.startswith(prefix)]
+
+
+def matches_a_claim(path: str, claims: list[str]) -> bool:
+    return any(fnmatch.fnmatch(path, pattern) for pattern in claims)
+
+
+def split_adapter_stdout(stdout: str) -> tuple[str, dict | None]:
+    """(transcript, payload): the adapter's last non-empty stdout line is
+    its JSON report; everything before it is transcript. payload is None
+    if stdout carried no line, or the last line does not parse as JSON.
+    """
+    lines = stdout.splitlines()
+    non_empty = [i for i, l in enumerate(lines) if l.strip()]
+    if not non_empty:
+        return stdout, None
+    last = non_empty[-1]
+    transcript = "\n".join(lines[:last])
+    try:
+        payload = json.loads(lines[last])
+    except ValueError:
+        payload = None
+    return transcript, payload
+
+
+def cmd_build(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attavo build: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo build: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    adapter_name = (m.get("executor") or {}).get("build")
+    if not adapter_name:
+        print("attavo build: refused: no [executor].build in the manifest")
         return 1
-    if latest_approval.get("spec_sha") == spec_sha_now:
-        print("valid")
-        return 0
-    print("expired")
-    return 1
+
+    tests_cfg = m.get("tests") or {}
+    if not tests_cfg.get("select") or not tests_cfg.get("run"):
+        print("attavo build: refused: no [tests] table in the manifest "
+              "([tests].select and [tests].run are both required)")
+        return 1
+
+    try:
+        status = approval_status(root, m, item_id)
+    except ShallowCheckoutError as exc:
+        print(f"attavo build: refused: {exc}", file=sys.stderr)
+        return 2
+    if status != "valid":
+        print(f"attavo build: refused: approval is {status}")
+        return 1
+
+    adapter_path = resolve_adapter(root, adapter_name)
+    if adapter_path is None:
+        print(f"attavo build: refused: no adapter named {adapter_name!r}")
+        return 1
+
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    spec_dir = root / specs_rel / item_id
+    item_records_dir = root / records_rel / item_id
+    spec_sha = last_commit_touching(root, str(Path(specs_rel) / item_id))
+    latest_approval = latest_record(item_records_dir, "approval")
+    parsed, _ = parse_spec(spec_dir / "spec.md")
+    claims = parsed["claims"] if parsed else []
+    criteria_names = parsed["criteria"] if parsed else []
+
+    start_sha = git(root, "rev-parse", "HEAD").strip()
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    started = time.monotonic()
+
+    adapter_version = model = model_version = None
+    tokens = {"input": 0, "output": 0}
+    cost_usd = None
+    transcripts: list[str] = []
+    criteria_results: list[dict] = []
+    selected_tests: dict | None = None
+    status_out = "failed"
+    refusal = None
+    halted = None
+    iterations_used = 0
+
+    with tempfile.TemporaryDirectory() as tmp:
+        feedback_path = Path(tmp) / "feedback.txt"
+        feedback_path.write_text("")
+
+        for iteration in range(1, BUILD_ITERATION_BUDGET + 1):
+            iterations_used = iteration
+            env = dict(os.environ)
+            env["ATTAVO_SPEC_DIR"] = str(spec_dir)
+            env["ATTAVO_RECORDS_DIR"] = str(item_records_dir)
+            env["ATTAVO_RULINGS"] = str(root / m["paths"]["rulings"])
+            env["ATTAVO_BRANCH"] = branch
+            env["ATTAVO_ITERATION"] = str(iteration)
+            env["ATTAVO_FEEDBACK"] = str(feedback_path)
+
+            run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
+                                 capture_output=True, text=True, check=False)
+            transcript, payload = split_adapter_stdout(run.stdout)
+            transcripts.append(transcript)
+
+            if run.returncode != 0 or payload is None or not payload.get("model"):
+                status_out = "failed"
+                break
+
+            adapter_version = payload.get("adapter_version")
+            model = payload.get("model")
+            model_version = payload.get("model_version")
+            tok = payload.get("tokens") or {}
+            tokens["input"] += tok.get("input", 0) or 0
+            tokens["output"] += tok.get("output", 0) or 0
+            iter_cost = payload.get("cost_usd")
+            if iter_cost is not None:
+                cost_usd = (cost_usd or 0) + iter_cost
+
+            if payload.get("status") == "question":
+                status_out = "halted"
+                halted = {"question": payload.get("question")}
+                break
+
+            touched = sorted(changed_paths(root, start_sha, records_rel))
+            bad_path = next((p for p in touched if not matches_a_claim(p, claims)), None)
+            if bad_path:
+                status_out = "refused"
+                refusal = bad_path
+                break
+
+            criteria_results = [
+                {"name": name, "exit": run_criterion(spec_dir / "criteria" / name, root)}
+                for name in criteria_names]
+
+            select_in = "".join(p + "\n" for p in touched)
+            select_run = subprocess.run(tests_cfg["select"], shell=True, cwd=str(root),
+                                        input=select_in, capture_output=True,
+                                        text=True, check=False)
+            identifiers = [l for l in select_run.stdout.splitlines() if l.strip()]
+            run_in = "".join(i + "\n" for i in identifiers)
+            test_run = subprocess.run(tests_cfg["run"], shell=True, cwd=str(root),
+                                      input=run_in, capture_output=True,
+                                      text=True, check=False)
+            selected_tests = {"select": tests_cfg["select"], "run": tests_cfg["run"],
+                              "count": len(identifiers), "exit": test_run.returncode}
+
+            failing = [c for c in criteria_results if c["exit"] != 0]
+            if not failing and test_run.returncode == 0:
+                status_out = "pass"
+                break
+
+            if iteration == BUILD_ITERATION_BUDGET:
+                status_out = "failed"
+                break
+
+            feedback_lines = []
+            if failing:
+                feedback_lines.append("criteria failing:")
+                feedback_lines += [f"- {c['name']}: exit {c['exit']}" for c in failing]
+            if test_run.returncode != 0:
+                feedback_lines += [f"test run exit {test_run.returncode}",
+                                   "--- stdout ---", test_run.stdout,
+                                   "--- stderr ---", test_run.stderr]
+            feedback_path.write_text("\n".join(feedback_lines) + "\n")
+
+    record = {
+        "sha": git(root, "rev-parse", "HEAD").strip(),
+        "start_sha": start_sha,
+        "spec_sha": spec_sha,
+        "approval_sha": latest_approval.get("sha") if latest_approval else None,
+        "at": now_iso(),
+        "adapter": adapter_name,
+        "adapter_version": adapter_version,
+        "model": model,
+        "model_version": model_version,
+        "iterations": iterations_used,
+        "criteria": criteria_results,
+        "selected_tests": selected_tests,
+        "tokens": tokens,
+        "cost_usd": cost_usd,
+        "wall_clock_s": round(time.monotonic() - started, 3),
+        "status": status_out,
+        "refusal": refusal,
+        "halted": halted,
+    }
+    record_path = write_record(item_records_dir, "build", record)
+    record_path.with_suffix(".log").write_text("\n".join(transcripts))
+
+    print(f"attavo build: {status_out} ({record_path.name})")
+    if status_out == "halted":
+        return BUILD_HALT_EXIT
+    return 0 if status_out == "pass" else 1
 
 
 def main(argv: list[str]) -> int:
@@ -537,8 +777,10 @@ def main(argv: list[str]) -> int:
         return cmd_approve(argv[1:])
     if argv[0] == "approval-status":
         return cmd_approval_status(argv[1:])
+    if argv[0] == "build":
+        return cmd_build(argv[1:])
     print(f"attavo: unknown subcommand {argv[0]!r}; "
-          f"only doctor, spec-gate, approve, approval-status exist at this commit",
+          f"only doctor, spec-gate, approve, approval-status, build exist at this commit",
           file=sys.stderr)
     return 2
 

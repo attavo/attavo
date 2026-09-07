@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://attavo.dev/schema/records/spec/1",
+  "title": "attavo spec-gate record (spec-NN.json)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sha", "spec_sha", "at", "status", "criteria", "refusal"],
+  "properties": {
+    "sha": {"type": "string", "minLength": 1},
+    "spec_sha": {"type": ["string", "null"]},
+    "at": {"type": "string", "minLength": 1},
+    "status": {"type": "string", "enum": ["pass", "refused"]},
+    "criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "on_tree", "on_stub"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "on_tree": {"type": "integer"},
+          "on_stub": {"type": "integer"}
+        }
+      }
+    },
+    "refusal": {"type": ["string", "null"]}
+  }
+}

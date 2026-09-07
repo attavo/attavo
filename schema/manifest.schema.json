@@ -40,6 +40,24 @@
         }
       }
     },
+    "tests": {
+      "type": "object",
+      "description": "How build finds and runs the tests for a touched path. Both keys are required together; a tenant with no [tests] table has not declared selection, and attavo build refuses to run on it.",
+      "additionalProperties": false,
+      "required": ["select", "run"],
+      "properties": {
+        "select": {
+          "type": "string",
+          "description": "A command that reads touched paths on stdin, one per line, and writes test identifiers on stdout, one per line.",
+          "minLength": 1
+        },
+        "run": {
+          "type": "string",
+          "description": "A command that reads test identifiers on stdin, one per line; its exit code is the verdict.",
+          "minLength": 1
+        }
+      }
+    },
     "spec": {
       "type": "object",
       "additionalProperties": false,

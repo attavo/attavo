@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://attavo.dev/schema/records/approval/1",
+  "title": "attavo approve record (approval-NN.json)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sha", "spec_sha", "approved_by", "at"],
+  "properties": {
+    "sha": {"type": "string", "minLength": 1},
+    "spec_sha": {"type": ["string", "null"]},
+    "approved_by": {"type": "string", "minLength": 1},
+    "at": {"type": "string", "minLength": 1}
+  }
+}

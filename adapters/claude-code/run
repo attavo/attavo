@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""adapters/claude-code/run -- see ../README.md for the contract.
+
+Not exercised by the test suite (judgment is measured, not tested); its
+argument construction is checked by ATTAVO_ADAPTER_DRY_RUN=1, which prints
+the `claude` command line as a JSON array instead of running it.
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+STATUS_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["status", "question"],
+    "properties": {
+        "status": {"type": "string", "enum": ["done", "question"]},
+        "question": {"type": ["string", "null"]},
+    },
+}
+
+
+def read_text(path_env: str) -> str:
+    path = os.environ.get(path_env)
+    if not path:
+        return ""
+    p = Path(path)
+    return p.read_text() if p.is_file() else ""
+
+
+def build_instruction() -> str:
+    spec_dir = Path(os.environ["ATTAVO_SPEC_DIR"])
+    lines = (spec_dir / "spec.md").read_text().splitlines()
+    idx = [i for i, l in enumerate(lines) if l.startswith("## ")]
+    headings = {lines[i].strip(): i for i in idx}
+    bounds = sorted(idx) + [len(lines)]
+
+    def section(heading: str) -> str:
+        start = headings[heading]
+        end = bounds[bounds.index(start) + 1] if start in bounds else len(lines)
+        return "\n".join(lines[start:end]).strip()
+
+    parts = [section("## Problem"), section("## Claims"), section("## Criteria")]
+
+    rulings = read_text("ATTAVO_RULINGS")
+    if rulings.strip():
+        parts.append("## Rulings\n\n" + rulings.strip())
+
+    feedback = read_text("ATTAVO_FEEDBACK")
+    if feedback.strip():
+        parts.append("## Feedback from the previous attempt\n\n" + feedback.strip())
+
+    parts.append(
+        "commit your work on the current branch; if you cannot proceed "
+        "without a decision that changes the criteria, do not guess: "
+        "answer with status question")
+    return "\n\n".join(parts)
+
+
+def build_command(instruction: str) -> list[str]:
+    allowed_tools = "Read,Edit,Write,Bash(git *),Bash(python3 *)"
+    test_run = os.environ.get("ATTAVO_TEST_RUN_COMMAND")
+    if test_run:
+        allowed_tools += f",Bash({test_run} *)"
+
+    cmd = ["claude", "--bare", "-p", instruction,
+           "--output-format", "json",
+           "--json-schema", json.dumps(STATUS_SCHEMA),
+           "--permission-mode", "acceptEdits",
+           "--allowedTools", allowed_tools]
+    model = os.environ.get("ATTAVO_MODEL")
+    if model:
+        cmd += ["--model", model]
+    return cmd
+
+
+def main() -> int:
+    cmd = build_command(build_instruction())
+
+    if os.environ.get("ATTAVO_ADAPTER_DRY_RUN"):
+        print(json.dumps(cmd))
+        return 0
+
+    run = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if run.returncode != 0:
+        sys.stderr.write(run.stderr)
+        return run.returncode
+
+    response = json.loads(run.stdout)
+    structured = response.get("structured_output") or {}
+    version = subprocess.run(["claude", "--version"], capture_output=True,
+                             text=True, check=False).stdout.strip()
+    usage = response.get("usage") or {}
+    line = {
+        "status": structured.get("status", "done"),
+        "question": structured.get("question"),
+        "model": response.get("model") or os.environ.get("ATTAVO_MODEL") or "",
+        "model_version": response.get("model_version"),
+        "adapter_version": version,
+        "tokens": {
+            "input": usage.get("input_tokens", 0),
+            "output": usage.get("output_tokens", 0),
+        },
+        "cost_usd": response.get("total_cost_usd"),
+    }
+    print(json.dumps(line))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
