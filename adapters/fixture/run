@@ -22,6 +22,7 @@ if [ -n "${ATTAVO_FIXTURE_REQUIRE_FEEDBACK:-}" ]; then
 fi
 
 if [ "$should_write" = "1" ]; then
+  mkdir -p "$(dirname "$write_name")"
   echo "built" > "$write_name"
   git add "$write_name"
   git commit -q -m "fixture: write $write_name"
