@@ -18,7 +18,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from helpers import commit_all, extract_step_run, job_if_condition, make_tenant
+from helpers import commit_all, extract_step_run, git, job_if_condition, make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "templates" / "workflows" / "attavo-spec-gate.yml"
@@ -67,6 +67,36 @@ def test_skip_is_false_when_the_head_commit_touches_both_records_and_specs(tmp_p
     (root / "records" / "1" / "spec-01.json").write_text("{}\n")
     (root / "specs" / "1" / "spec.md").write_text("# spec, amended\n")
     commit_all(root, "spec + record")
+
+    assert run_skip_step(root) == "false"
+
+
+def test_skip_is_false_on_a_merge_commit_from_main(tmp_path):
+    """Issue #17. `git show --name-only --format= HEAD` on a merge commit
+    lists only paths that differ from *both* parents -- for a clean
+    update-from-main merge (no conflict, every changed path traces to
+    exactly one parent), that list is empty even though the merge brought
+    in a real, non-record change, so the old command reads no paths and
+    the step's `skip` default of `true` stands. `attavo/code-factory`
+    commit e6b5710 (PR #600's update-branch merge) hit exactly this: the
+    gate logged skip=true and wrote no spec-05.json.
+
+    The fixture branch's tip is a record commit; main moves on with an
+    unrelated file; merging main into the item branch reproduces the
+    clean-merge shape the old command was blind to.
+    """
+    root = make_tenant(tmp_path, "valid")
+    git(root, "checkout", "-b", "attavo/1-x")
+    (root / "records" / "1").mkdir(parents=True)
+    (root / "records" / "1" / "spec-01.json").write_text("{}\n")
+    commit_all(root, "attavo: spec-gate record for #1")
+
+    git(root, "checkout", "main")
+    (root / "on-main.txt").write_text("main moved on\n")
+    commit_all(root, "unrelated change on main")
+
+    git(root, "checkout", "attavo/1-x")
+    git(root, "merge", "--no-ff", "-m", "Merge branch 'main' into attavo/1-x", "main")
 
     assert run_skip_step(root) == "false"
 
