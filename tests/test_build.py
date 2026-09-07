@@ -114,6 +114,29 @@ def test_fixture_adapter_traverses_build(tmp_path):
     assert rec["selected_tests"]["count"] == len([l for l in touched.splitlines() if l.strip()])
 
 
+def test_adapter_config_reaches_the_adapter(tmp_path):
+    """Issue #24, acceptance 1. [executor.<adapter-name>] is an open table:
+    attavo build serializes it to JSON, passes it to the adapter as
+    ATTAVO_ADAPTER_CONFIG, and copies it verbatim into build-NN.json as
+    adapter_config. Regression: a pass-through break here would silently
+    reset every tenant's executor to defaults.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text() + "\n[executor.fixture]\nx = 1\n")
+    commit_all(root, "configure the fixture adapter")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1")
+    assert run.returncode == 0
+
+    rec = latest_build(root)
+    assert rec["adapter_config"] == {"x": 1}
+
+    log = (root / "records" / "1" / "build-01.log").read_text()
+    assert json.dumps({"x": 1}) in log
+
+
 def test_build_halts_on_question(tmp_path):
     root = make_tenant(tmp_path, "build_valid")
     approve_item(root)

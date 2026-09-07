@@ -657,6 +657,7 @@ def cmd_build(argv: list[str]) -> int:
     parsed, _ = parse_spec(spec_dir / "spec.md")
     claims = parsed["claims"] if parsed else []
     criteria_names = parsed["criteria"] if parsed else []
+    adapter_config = (m.get("executor") or {}).get(adapter_name) or {}
 
     start_sha = git(root, "rev-parse", "HEAD").strip()
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
@@ -686,6 +687,7 @@ def cmd_build(argv: list[str]) -> int:
             env["ATTAVO_BRANCH"] = branch
             env["ATTAVO_ITERATION"] = str(iteration)
             env["ATTAVO_FEEDBACK"] = str(feedback_path)
+            env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(adapter_config)
 
             run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
                                  capture_output=True, text=True, check=False)
@@ -760,6 +762,7 @@ def cmd_build(argv: list[str]) -> int:
         "approval_sha": latest_approval.get("sha") if latest_approval else None,
         "at": now_iso(),
         "adapter": adapter_name,
+        "adapter_config": adapter_config,
         "adapter_version": adapter_version,
         "model": model,
         "model_version": model_version,

@@ -1,19 +1,22 @@
-"""Acceptance 10: the claude-code adapter is not exercised by the suite --
-judgment is measured, not tested -- so its argument construction is checked
-through ATTAVO_ADAPTER_DRY_RUN=1, which prints the `claude` command line as
-a JSON array instead of running it, and its response handling is checked
-through ATTAVO_ADAPTER_RESPONSE_FILE, which feeds it a canned
---output-format json response instead of invoking `claude`.
+"""adapters/claude-code/run: its argument construction is checked through
+ATTAVO_ADAPTER_DRY_RUN=1, which prints the `claude` command line as a JSON
+array instead of running it, and its response handling is checked through
+ATTAVO_ADAPTER_RESPONSE_FILE, which feeds it a canned --output-format json
+response instead of invoking `claude`. Judgment itself is measured, not
+tested, so no real model is ever in this loop.
 
-The response-handling tests are a regression for a real response shape:
-`claude --bare -p ... --output-format json` carries no top-level "model"
-field at all -- the model id is the key of "modelUsage", its per-model
-cost/usage breakdown (confirmed against `claude --version 2.1.263` on
-2026-09-07). Before this fix the adapter read the absent "model" field,
-so every real build record carried `model: ""` -- which the build
-contract itself refuses. A future response-shape change on the
-executor's side that drops or renames "modelUsage" would fail these
-tests before it ever reached a record.
+Issue #24: [executor.<adapter>] is an open configuration table, passed
+through as ATTAVO_ADAPTER_CONFIG and copied verbatim into build-NN.json as
+adapter_config. claude-code reads auth, model, allowed_tools,
+setting_sources, and permission_mode from it; ATTAVO_MODEL is retired.
+
+The response-handling tests are a separate regression, for a real response
+shape: `claude --bare -p ... --output-format json` carries no top-level
+"model" field at all -- the model id is the key of "modelUsage", its
+per-model cost/usage breakdown (confirmed against `claude --version
+2.1.263` on 2026-09-07). A future response-shape change on the executor's
+side that drops or renames "modelUsage" would fail these tests before it
+ever reached a record.
 
 Run: python3 -m pytest tests -q
 """
@@ -31,7 +34,6 @@ CLAUDE_CODE_RUN = ROOT / "adapters" / "claude-code" / "run"
 def base_env(tmp_path: Path) -> dict:
     spec_dir = FIXTURES / "build_valid" / "specs" / "1"
     env = dict(os.environ)
-    env.pop("ATTAVO_MODEL", None)
     env.update({
         "ATTAVO_SPEC_DIR": str(spec_dir),
         "ATTAVO_RECORDS_DIR": str(tmp_path / "records"),
@@ -43,9 +45,11 @@ def base_env(tmp_path: Path) -> dict:
     return env
 
 
-def dry_run(tmp_path: Path, extra_env: dict | None = None) -> list[str]:
+def dry_run(tmp_path: Path, config: dict | None = None,
+           extra_env: dict | None = None) -> list[str]:
     env = base_env(tmp_path)
     env["ATTAVO_ADAPTER_DRY_RUN"] = "1"
+    env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(config or {})
     if extra_env:
         env.update(extra_env)
 
@@ -67,19 +71,44 @@ def run_with_response(tmp_path: Path, response: dict,
                           check=False, env=env)
 
 
-def test_claude_code_adapter_command_line(tmp_path):
+def test_claude_code_api_mode_is_default(tmp_path):
+    """Acceptance 3. With no [executor.claude-code] table at all, the
+    command line is unchanged from v0.3.0."""
     cmd = dry_run(tmp_path)
 
     assert "--bare" in cmd
     assert cmd[cmd.index("--output-format") + 1] == "json"
     assert "--json-schema" in cmd
+    assert cmd[cmd.index("--permission-mode") + 1] == "acceptEdits"
+    assert cmd[cmd.index("--allowedTools") + 1] == "Read,Edit,Write,Bash(git *),Bash(python3 *)"
     assert "--model" not in cmd
+    assert "--setting-sources" not in cmd
+    assert "--strict-mcp-config" not in cmd
 
 
-def test_claude_code_adapter_passes_the_model_when_set(tmp_path):
-    cmd = dry_run(tmp_path, {"ATTAVO_MODEL": "claude-sonnet-5"})
+def test_claude_code_subscription_mode(tmp_path):
+    """Acceptance 2. auth = "subscription": no --bare, and both
+    --setting-sources user and --strict-mcp-config so the tenant's own
+    project hooks and MCP servers do not load -- CLAUDE.md still does.
+    Regression: detects the tenant's hooks (tenant zero's editor guard,
+    which #576 deletes) creeping back into a subscription build.
+    """
+    cmd = dry_run(tmp_path, config={"auth": "subscription"})
 
+    assert "--bare" not in cmd
+    assert cmd[cmd.index("--setting-sources") + 1] == "user"
+    assert "--strict-mcp-config" in cmd
+
+
+def test_claude_code_model_from_config(tmp_path):
+    """Acceptance 4. model in the table appears as --model; the retired
+    ATTAVO_MODEL, even if still set in the environment, is ignored."""
+    cmd = dry_run(tmp_path, config={"model": "claude-sonnet-5"},
+                 extra_env={"ATTAVO_MODEL": "should-be-ignored"})
+
+    assert cmd.count("--model") == 1
     assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5"
+    assert "should-be-ignored" not in cmd
 
 
 def test_claude_code_adapter_derives_model_from_usage_breakdown(tmp_path):
@@ -115,9 +144,9 @@ def test_claude_code_adapter_derives_model_from_dominant_usage_key(tmp_path):
 
 
 def test_claude_code_adapter_fails_without_a_model_id(tmp_path):
-    """No top-level "model", empty modelUsage, and ATTAVO_MODEL unset: the
-    adapter must fail loudly rather than emit an empty model that would
-    let a "pass" record through with no identity behind it."""
+    """No top-level "model" and empty modelUsage: the adapter must fail
+    loudly rather than emit an empty model that would let a "pass" record
+    through with no identity behind it."""
     response = {"usage": {"input_tokens": 0, "output_tokens": 0}, "modelUsage": {}}
     run = run_with_response(tmp_path, response)
     assert run.returncode == 1

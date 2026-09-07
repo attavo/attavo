@@ -25,7 +25,6 @@
     },
     "executor": {
       "type": "object",
-      "additionalProperties": false,
       "required": ["build"],
       "properties": {
         "build": {
@@ -38,6 +37,10 @@
           "description": "Adapter name for the verify invocation. Defaults to build's adapter; may differ.",
           "minLength": 1
         }
+      },
+      "additionalProperties": {
+        "type": "object",
+        "description": "[executor.<adapter-name>]: that adapter's own configuration, passed through as ATTAVO_ADAPTER_CONFIG and copied verbatim into build-NN.json as adapter_config. The product does not know what an adapter's settings mean -- any keys, none required. Never put a secret in here: it lands in a record."
       }
     },
     "tests": {
