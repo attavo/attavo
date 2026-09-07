@@ -401,6 +401,22 @@ def cmd_spec_gate(argv: list[str]) -> int:
         print(f"attavo spec-gate: refused: {exc}", file=sys.stderr)
         return 2
 
+    records_dir = root / records_rel / item_id
+    try:
+        approved = approval_status(root, m, item_id) == "valid"
+    except ShallowCheckoutError as exc:
+        print(f"attavo spec-gate: refused: {exc}", file=sys.stderr)
+        return 2
+    if approved:
+        latest_approval = latest_record(records_dir, "approval")
+        record = {"sha": git(root, "rev-parse", "HEAD").strip(), "spec_sha": spec_sha,
+                  "at": now_iso(), "status": "approved",
+                  "approval_sha": latest_approval.get("sha") if latest_approval else None,
+                  "criteria": [], "refusal": None}
+        write_record(records_dir, "spec", record)
+        print("attavo spec-gate: approved (no criteria run)")
+        return 0
+
     parsed, refusal = parse_spec(spec_md)
     results: list[dict] = []
     if refusal is None:
@@ -440,8 +456,9 @@ def cmd_spec_gate(argv: list[str]) -> int:
     status = "refused" if refusal else "pass"
     record = {"sha": git(root, "rev-parse", "HEAD").strip(),
               "spec_sha": spec_sha,
-              "at": now_iso(), "status": status, "criteria": results, "refusal": refusal}
-    write_record(root / records_rel / item_id, "spec", record)
+              "at": now_iso(), "status": status, "approval_sha": None,
+              "criteria": results, "refusal": refusal}
+    write_record(records_dir, "spec", record)
 
     if refusal:
         print(f"attavo spec-gate: refused: {refusal}")

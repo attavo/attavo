@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from helpers import make_tenant
+from helpers import commit_all, make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
@@ -84,3 +84,67 @@ def test_spec_gate_passes_and_writes_record(tmp_path):
     run2 = run_attavo(root, "spec-gate", "1")
     assert run2.returncode == 0
     assert (root / "records" / "1" / "spec-02.json").is_file()
+
+
+def amend_problem(root: Path) -> None:
+    spec_md = root / "specs" / "1" / "spec.md"
+    spec_md.write_text(spec_md.read_text().replace(
+        "does not emit", "used to not emit"))
+    commit_all(root, "amend problem prose")
+
+
+def approve_valid(root: Path) -> None:
+    assert run_attavo(root, "spec-gate", "1").returncode == 0
+    assert run_attavo(root, "approve", "1", "--by", "alice").returncode == 0
+
+
+def complete_the_build(root: Path) -> None:
+    """The marker.txt the criterion checks for, committed with no touch to
+    spec.md: the same commit shape a real `attavo build` leaves behind --
+    spec_sha, and so the approval, is unchanged."""
+    (root / "src").mkdir(parents=True, exist_ok=True)
+    (root / "src" / "marker.txt").write_text("built\n")
+    commit_all(root, "build completed")
+
+
+def test_spec_gate_reports_approved_when_approval_is_valid(tmp_path):
+    """Issue #21, acceptance 1. Once a build has made the criterion pass on
+    the tree, the gate must not re-run it and refuse the very success
+    approval exists to bind: it reports the approval instead. Red today:
+    the unmodified gate refuses this by name ("criterion passes against
+    the tree: checks_marker.sh").
+    """
+    root = make_tenant(tmp_path, "valid")
+    approve_valid(root)
+    complete_the_build(root)
+
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0
+
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "approved"
+    assert rec["criteria"] == []
+    assert rec["refusal"] is None
+    assert rec["spec_sha"]
+    approval = json.loads(sorted((root / "records" / "1").glob("approval-*.json"))[-1].read_text())
+    assert rec["approval_sha"] == approval["sha"]
+
+
+def test_spec_gate_runs_when_approval_expired(tmp_path):
+    """Issue #21, acceptance 2. The same fixture, after an edit above the
+    line expires the approval: the gate must fall through to running the
+    criteria for real, not keep reporting approved past the approval it
+    no longer holds.
+    """
+    root = make_tenant(tmp_path, "valid")
+    approve_valid(root)
+    complete_the_build(root)
+    assert run_attavo(root, "spec-gate", "1").returncode == 0  # approved, short-circuited
+
+    amend_problem(root)
+
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused"
+    assert "checks_marker.sh" in rec["refusal"]

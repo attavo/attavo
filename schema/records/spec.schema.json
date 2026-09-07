@@ -4,12 +4,13 @@
   "title": "attavo spec-gate record (spec-NN.json)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["sha", "spec_sha", "at", "status", "criteria", "refusal"],
+  "required": ["sha", "spec_sha", "at", "status", "approval_sha", "criteria", "refusal"],
   "properties": {
     "sha": {"type": "string", "minLength": 1},
     "spec_sha": {"type": ["string", "null"]},
     "at": {"type": "string", "minLength": 1},
-    "status": {"type": "string", "enum": ["pass", "refused"]},
+    "status": {"type": "string", "enum": ["pass", "refused", "approved"]},
+    "approval_sha": {"type": ["string", "null"]},
     "criteria": {
       "type": "array",
       "items": {

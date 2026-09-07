@@ -34,6 +34,12 @@ def test_records_match_their_shapes(tmp_path):
     assert run_attavo(root, "approve", "1", "--by", "alice").returncode == 0
     assert run_attavo(root, "build", "1").returncode == 0
 
+    # the build didn't touch spec.md, so the approval is still valid: this
+    # spec-gate run writes the new spec-02.json with status "approved".
+    approved = run_attavo(root, "spec-gate", "1")
+    assert approved.returncode == 0
+    assert json.loads((root / "records" / "1" / "spec-02.json").read_text())["status"] == "approved"
+
     schemas = {"spec": load_schema("spec"), "approval": load_schema("approval"),
               "build": load_schema("build")}
 
