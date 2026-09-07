@@ -6,9 +6,9 @@
   "additionalProperties": false,
   "required": [
     "sha", "start_sha", "spec_sha", "approval_sha", "at", "adapter",
-    "adapter_version", "model", "model_version", "iterations", "criteria",
-    "selected_tests", "tokens", "cost_usd", "wall_clock_s", "status",
-    "refusal", "halted"
+    "adapter_config", "adapter_version", "model", "model_version",
+    "iterations", "criteria", "selected_tests", "tokens", "cost_usd",
+    "wall_clock_s", "status", "refusal", "halted"
   ],
   "properties": {
     "sha": {"type": "string", "minLength": 1},
@@ -17,6 +17,10 @@
     "approval_sha": {"type": ["string", "null"]},
     "at": {"type": "string", "minLength": 1},
     "adapter": {"type": "string", "minLength": 1},
+    "adapter_config": {
+      "type": "object",
+      "description": "Copied verbatim from [executor.<adapter>]; shape is the adapter's own contract, not this schema's."
+    },
     "adapter_version": {"type": ["string", "null"]},
     "model": {"type": ["string", "null"]},
     "model_version": {"type": ["string", "null"]},

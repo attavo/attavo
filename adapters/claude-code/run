@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""adapters/claude-code/run -- see ../README.md for the contract.
+"""adapters/claude-code/run -- see README.md (this directory) for the five
+configuration keys, and ../README.md for the shared adapter contract.
 
 Not exercised by the test suite (judgment is measured, not tested); its
 argument construction is checked by ATTAVO_ADAPTER_DRY_RUN=1, which prints
@@ -64,18 +65,38 @@ def build_instruction() -> str:
     return "\n\n".join(parts)
 
 
-def build_command(instruction: str) -> list[str]:
-    allowed_tools = "Read,Edit,Write,Bash(git *),Bash(python3 *)"
+DEFAULT_ALLOWED_TOOLS = ["Read", "Edit", "Write", "Bash(git *)", "Bash(python3 *)"]
+
+
+def load_config() -> dict:
+    raw = os.environ.get("ATTAVO_ADAPTER_CONFIG")
+    return json.loads(raw) if raw else {}
+
+
+def build_command(instruction: str, config: dict) -> list[str]:
+    auth = config.get("auth", "api")
+    allowed_tools = list(config.get("allowed_tools") or DEFAULT_ALLOWED_TOOLS)
     test_run = os.environ.get("ATTAVO_TEST_RUN_COMMAND")
     if test_run:
-        allowed_tools += f",Bash({test_run} *)"
+        allowed_tools.append(f"Bash({test_run} *)")
+    permission_mode = config.get("permission_mode", "acceptEdits")
 
-    cmd = ["claude", "--bare", "-p", instruction,
+    cmd = ["claude"]
+    if auth == "subscription":
+        # no --bare: this is the tenant's own login, not a bare API key, so
+        # the tenant's project hooks and MCP servers must not load -- only
+        # --setting-sources (CLAUDE.md still loads) and --strict-mcp-config
+        # keep them out, the same isolation --bare gives in api mode.
+        setting_sources = config.get("setting_sources", "user")
+        cmd += ["--setting-sources", setting_sources, "--strict-mcp-config"]
+    else:
+        cmd += ["--bare"]
+    cmd += ["-p", instruction,
            "--output-format", "json",
            "--json-schema", json.dumps(STATUS_SCHEMA),
-           "--permission-mode", "acceptEdits",
-           "--allowedTools", allowed_tools]
-    model = os.environ.get("ATTAVO_MODEL")
+           "--permission-mode", permission_mode,
+           "--allowedTools", ",".join(allowed_tools)]
+    model = config.get("model")
     if model:
         cmd += ["--model", model]
     return cmd
@@ -112,7 +133,8 @@ def adapter_version() -> str:
 
 
 def main() -> int:
-    cmd = build_command(build_instruction())
+    config = load_config()
+    cmd = build_command(build_instruction(), config)
 
     if os.environ.get("ATTAVO_ADAPTER_DRY_RUN"):
         print(json.dumps(cmd))
@@ -128,12 +150,12 @@ def main() -> int:
             return run.returncode
         response = json.loads(run.stdout)
 
-    model = derive_model(response) or os.environ.get("ATTAVO_MODEL")
+    model = derive_model(response)
     if not model:
         sys.stderr.write(
             "adapters/claude-code/run: could not derive a model id -- the "
             "response carried no top-level 'model' and an empty "
-            "'modelUsage', and ATTAVO_MODEL is unset\n")
+            "'modelUsage'\n")
         return 1
 
     structured = response.get("structured_output") or {}

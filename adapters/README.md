@@ -12,6 +12,7 @@ the tenant's `attavo/adapters/`, then under this product's `adapters/`.
 - `ATTAVO_BRANCH` — the branch the adapter must commit on.
 - `ATTAVO_ITERATION` — the 1-based attempt number within this `attavo build` invocation.
 - `ATTAVO_FEEDBACK` — a file holding the previous iteration's failing criteria and test output; empty on the first iteration.
+- `ATTAVO_ADAPTER_CONFIG` — the tenant manifest's `[executor.<adapter-name>]` table, serialized as JSON (`{}` when the tenant declared none). The product does not know what an adapter's settings mean; each adapter documents its own keys on its own `README.md`. **Never put a secret in this table** — it is copied verbatim into `build-NN.json` as `adapter_config`, and a record is not where secrets live.
 
 ## Output
 
