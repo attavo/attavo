@@ -16,7 +16,7 @@ Software teams are about to run more agents than engineers, and every one of tho
 
 A spec is one artifact with a line in it. Above the line — the problem and the claims — is amendable after approval at the cost of one act. Below the line — the criteria, which execute — is the only thing approval freezes.
 
-- `attavo spec-gate N` runs a work item's criteria against the tree, then against the tree plus its stub overlay, and refuses by name: wrong headings, an empty claim, a criterion that is prose, a criterion that already passes, or one that still fails with the stub applied. Every run writes the next `spec-NN.json`.
+- `attavo spec-gate N` runs a work item's criteria against the tree, then against the tree plus its stub overlay, and refuses by name: wrong headings, an empty claim, a criterion that is prose, a criterion that already passes, or one that still fails with the stub applied. Once `attavo approval-status` would print `valid` at `HEAD`, the gate runs no criterion at all: it writes `status: approved`, naming the spec and the approval it rests on, and exits 0 — the criteria after approval are build's and verify's to run and carry into the attestation, not the gate's to re-check. Every run writes the next `spec-NN.json`.
 - `attavo approve N --by LOGIN` binds approval to the commit that produced the latest passing `spec-NN.json`, and refuses a `LOGIN` not in the manifest's `[operators].approvers`.
 - `attavo approval-status N` reports `valid`, `expired`, or `absent` — expired the moment the spec directory moves, above the line or below it alike.
 
