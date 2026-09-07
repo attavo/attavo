@@ -114,6 +114,26 @@ def test_fixture_adapter_traverses_build(tmp_path):
     assert rec["selected_tests"]["count"] == len([l for l in touched.splitlines() if l.strip()])
 
 
+def test_build_renders_and_logs_events(tmp_path):
+    """Issue #26, acceptance 2. The fixture adapter emits two normalized
+    events on stderr; build prints one rendered line per event as it
+    arrives and appends the raw event lines to build-01.log. Regression:
+    the contract the cockpit (Phase 4) will read.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1")
+    assert run.returncode == 0
+
+    assert run.stdout.count("target-1") == 1
+    assert run.stdout.count("target-2") == 1
+
+    log = (root / "records" / "1" / "build-01.log").read_text()
+    assert '"target":"target-1"' in log
+    assert '"target":"target-2"' in log
+
+
 def test_adapter_config_reaches_the_adapter(tmp_path):
     """Issue #24, acceptance 1. [executor.<adapter-name>] is an open table:
     attavo build serializes it to JSON, passes it to the adapter as

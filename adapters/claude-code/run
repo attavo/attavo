@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """adapters/claude-code/run -- see README.md (this directory) for the five
-configuration keys, and ../README.md for the shared adapter contract.
+configuration keys, and ../README.md for the shared adapter contract,
+including the normalized event shape this adapter writes to stderr while
+running.
 
 Not exercised by the test suite (judgment is measured, not tested); its
 argument construction is checked by ATTAVO_ADAPTER_DRY_RUN=1, which prints
 the `claude` command line as a JSON array instead of running it, and its
 response handling is checked by ATTAVO_ADAPTER_RESPONSE_FILE, which reads a
-canned --output-format json response from a file instead of invoking
-`claude`.
+canned --output-format stream-json stream from a file (one JSON object per
+line, the last one the final result) instead of invoking `claude`. A file
+holding a single JSON object -- no stream, just the old single-response
+shape -- still works: zero preceding lines means zero events to map.
 """
 from __future__ import annotations
 
@@ -15,6 +19,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 STATUS_SCHEMA = {
@@ -92,7 +98,7 @@ def build_command(instruction: str, config: dict) -> list[str]:
     else:
         cmd += ["--bare"]
     cmd += ["-p", instruction,
-           "--output-format", "json",
+           "--output-format", "stream-json", "--verbose",
            "--json-schema", json.dumps(STATUS_SCHEMA),
            "--permission-mode", permission_mode,
            "--allowedTools", ",".join(allowed_tools)]
@@ -123,6 +129,53 @@ def derive_model(response: dict) -> str | None:
     return max(model_usage, key=total_tokens)
 
 
+def now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def normalized_event(event: str, tool: str | None = None, target: str | None = None,
+                     detail: str | None = None) -> dict:
+    """adapters/README.md's shape: {at, event, tool, target, detail}."""
+    return {"at": now_iso(), "event": event, "tool": tool, "target": target, "detail": detail}
+
+
+def tool_target(block: dict) -> str | None:
+    """A tool_use content block's target: a file path or a command, one
+    line -- never the tool's full input, which can be large or non-text.
+    """
+    inp = block.get("input") or {}
+    for key in ("file_path", "path", "notebook_path"):
+        if inp.get(key):
+            return str(inp[key])
+    command = inp.get("command")
+    if command:
+        return str(command).splitlines()[0]
+    return None
+
+
+def stream_events(raw: dict) -> list[dict]:
+    """One raw claude --output-format stream-json line -> zero or more
+    normalized events. Only assistant messages carry anything worth
+    surfacing live; init, rate-limit, and tool-result lines map to nothing.
+    """
+    if raw.get("type") != "assistant":
+        return []
+    blocks = (raw.get("message") or {}).get("content") or []
+    events = []
+    for block in blocks:
+        if block.get("type") == "tool_use":
+            events.append(normalized_event("tool", tool=block.get("name"),
+                                           target=tool_target(block)))
+        elif block.get("type") == "text":
+            events.append(normalized_event("text", detail=block.get("text")))
+    return events
+
+
+def emit(event: dict) -> None:
+    sys.stderr.write(json.dumps(event) + "\n")
+    sys.stderr.flush()
+
+
 def adapter_version() -> str:
     try:
         out = subprocess.run(["claude", "--version"], capture_output=True,
@@ -142,13 +195,46 @@ def main() -> int:
 
     response_file = os.environ.get("ATTAVO_ADAPTER_RESPONSE_FILE")
     if response_file:
-        response = json.loads(Path(response_file).read_text())
+        lines = [l for l in Path(response_file).read_text().splitlines() if l.strip()]
+        if not lines:
+            sys.stderr.write("adapters/claude-code/run: ATTAVO_ADAPTER_RESPONSE_FILE is empty\n")
+            return 1
+        for raw_line in lines[:-1]:
+            for event in stream_events(json.loads(raw_line)):
+                emit(event)
+        response = json.loads(lines[-1])
     else:
-        run = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        if run.returncode != 0:
-            sys.stderr.write(run.stderr)
-            return run.returncode
-        response = json.loads(run.stdout)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, bufsize=1)
+        stderr_lines: list[str] = []
+        stderr_thread = threading.Thread(
+            target=lambda: stderr_lines.extend(l.rstrip("\n") for l in proc.stderr))
+        stderr_thread.start()
+
+        last_line = None
+        for raw_line in proc.stdout:
+            raw_line = raw_line.rstrip("\n")
+            if not raw_line.strip():
+                continue
+            last_line = raw_line
+            try:
+                parsed = json.loads(raw_line)
+            except ValueError:
+                continue
+            for event in stream_events(parsed):
+                emit(event)
+
+        proc.stdout.close()
+        stderr_thread.join()
+        proc.wait()
+
+        if proc.returncode != 0:
+            sys.stderr.write("\n".join(stderr_lines))
+            return proc.returncode
+        if last_line is None:
+            sys.stderr.write("adapters/claude-code/run: claude produced no output\n")
+            return 1
+        response = json.loads(last_line)
 
     model = derive_model(response)
     if not model:

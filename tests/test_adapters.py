@@ -10,6 +10,12 @@ through as ATTAVO_ADAPTER_CONFIG and copied verbatim into build-NN.json as
 adapter_config. claude-code reads auth, model, allowed_tools,
 setting_sources, and permission_mode from it; ATTAVO_MODEL is retired.
 
+Issue #26: while running, an adapter writes one normalized event per line
+to stderr, mapping its executor's own stream into Attavo's {at, event,
+tool, target, detail} shape; the final JSON line on stdout is unchanged.
+claude-code uses --output-format stream-json --verbose and maps
+assistant tool_use content blocks to event=tool.
+
 The response-handling tests are a separate regression, for a real response
 shape: `claude --bare -p ... --output-format json` carries no top-level
 "model" field at all -- the model id is the key of "modelUsage", its
@@ -61,8 +67,17 @@ def dry_run(tmp_path: Path, config: dict | None = None,
 
 def run_with_response(tmp_path: Path, response: dict,
                       extra_env: dict | None = None) -> subprocess.CompletedProcess:
-    response_file = tmp_path / "response.json"
-    response_file.write_text(json.dumps(response))
+    return run_with_stream(tmp_path, [response], extra_env)
+
+
+def run_with_stream(tmp_path: Path, lines: list[dict],
+                    extra_env: dict | None = None) -> subprocess.CompletedProcess:
+    """A canned --output-format stream-json stream: one JSON object per
+    line, the last one the final result. A single-item list is the old
+    single-response shape -- zero preceding lines, zero events to map.
+    """
+    response_file = tmp_path / "response.jsonl"
+    response_file.write_text("\n".join(json.dumps(l) for l in lines))
     env = base_env(tmp_path)
     env["ATTAVO_ADAPTER_RESPONSE_FILE"] = str(response_file)
     if extra_env:
@@ -77,7 +92,8 @@ def test_claude_code_api_mode_is_default(tmp_path):
     cmd = dry_run(tmp_path)
 
     assert "--bare" in cmd
-    assert cmd[cmd.index("--output-format") + 1] == "json"
+    assert cmd[cmd.index("--output-format") + 1] == "stream-json"
+    assert "--verbose" in cmd
     assert "--json-schema" in cmd
     assert cmd[cmd.index("--permission-mode") + 1] == "acceptEdits"
     assert cmd[cmd.index("--allowedTools") + 1] == "Read,Edit,Write,Bash(git *),Bash(python3 *)"
@@ -152,3 +168,56 @@ def test_claude_code_adapter_fails_without_a_model_id(tmp_path):
     assert run.returncode == 1
     assert "model" in run.stderr
     assert run.stdout == ""
+
+
+RESULT = {
+    "usage": {"input_tokens": 5, "output_tokens": 9},
+    "total_cost_usd": 0.01,
+    "modelUsage": {"claude-sonnet-5": {"inputTokens": 5, "outputTokens": 9}},
+}
+
+
+def test_claude_code_adapter_emits_normalized_events(tmp_path):
+    """Acceptance 1. Two tool_use events and a result yield two event
+    lines in the Attavo shape on stderr, and the same JSON line as before
+    on stdout. Regression: detects the mapping or the final-result parse
+    breaking, which would fail every build silently.
+    """
+    stream = [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "ls -la"}}]}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Edit", "input": {"file_path": "src/foo.py"}}]}},
+        RESULT,
+    ]
+    run = run_with_stream(tmp_path, stream)
+    assert run.returncode == 0, run.stderr
+
+    events = [json.loads(l) for l in run.stderr.splitlines() if l.strip()]
+    assert len(events) == 2
+    assert {e["event"] for e in events} == {"tool"}
+    assert events[0]["tool"] == "Bash"
+    assert events[0]["target"] == "ls -la"
+    assert events[1]["tool"] == "Edit"
+    assert events[1]["target"] == "src/foo.py"
+    assert set(events[0]) == {"at", "event", "tool", "target", "detail"}
+
+    line = json.loads(run.stdout)
+    assert line["model"] == "claude-sonnet-5"
+
+
+def test_claude_code_adapter_json_line_unchanged(tmp_path):
+    """Acceptance 3. The JSON line from a streamed result equals the one
+    from the same response as a single object."""
+    single = run_with_response(tmp_path, RESULT)
+    assert single.returncode == 0, single.stderr
+
+    stream = [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}]}},
+        RESULT,
+    ]
+    streamed = run_with_stream(tmp_path, stream)
+    assert streamed.returncode == 0, streamed.stderr
+
+    assert json.loads(single.stdout) == json.loads(streamed.stdout)

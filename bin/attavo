@@ -57,6 +57,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 from datetime import datetime, timezone
@@ -611,6 +612,57 @@ def split_adapter_stdout(stdout: str) -> tuple[str, dict | None]:
     return transcript, payload
 
 
+def render_event(raw: str) -> str | None:
+    """One raw normalized-event line (adapters/README.md's {at, event,
+    tool, target, detail} shape) -> one short terminal line, or None if
+    the line is not a normalized event at all (an adapter's own diagnostic
+    noise on stderr, say)."""
+    try:
+        event = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(event, dict) or "event" not in event:
+        return None
+    parts = [str(event["event"])]
+    parts += [str(event[key]) for key in ("tool", "target", "detail") if event.get(key)]
+    return " ".join(parts)
+
+
+def _drain_lines(stream, sink: list[str]) -> None:
+    for line in stream:
+        sink.append(line.rstrip("\n"))
+
+
+def run_adapter(adapter_path: Path, root: Path, env: dict) -> tuple[int, str, list[str]]:
+    """Invoke the adapter, rendering each normalized event it writes to
+    stderr as one terminal line as it arrives -- not buffered until the
+    adapter exits, which is the whole point (issue #26: a long build
+    showed nothing until it finished). Returns (returncode, stdout,
+    raw_event_lines), the raw lines to append to build-NN.log verbatim.
+    """
+    proc = subprocess.Popen([str(adapter_path)], cwd=str(root), env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, bufsize=1)
+    stdout_lines: list[str] = []
+    stdout_thread = threading.Thread(target=_drain_lines, args=(proc.stdout, stdout_lines))
+    stdout_thread.start()
+
+    raw_events: list[str] = []
+    for line in proc.stderr:
+        line = line.rstrip("\n")
+        if not line.strip():
+            continue
+        raw_events.append(line)
+        rendered = render_event(line)
+        if rendered:
+            print(f"attavo build: {rendered}", flush=True)
+
+    proc.stderr.close()
+    stdout_thread.join()
+    proc.wait()
+    return proc.returncode, "\n".join(stdout_lines), raw_events
+
+
 def cmd_build(argv: list[str]) -> int:
     root = Path(".").resolve()
     item_id = argv[0] if argv else derive_item_id(root)
@@ -666,7 +718,7 @@ def cmd_build(argv: list[str]) -> int:
     adapter_version = model = model_version = None
     tokens = {"input": 0, "output": 0}
     cost_usd = None
-    transcripts: list[str] = []
+    log_lines: list[str] = []
     criteria_results: list[dict] = []
     selected_tests: dict | None = None
     status_out = "failed"
@@ -689,12 +741,12 @@ def cmd_build(argv: list[str]) -> int:
             env["ATTAVO_FEEDBACK"] = str(feedback_path)
             env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(adapter_config)
 
-            run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
-                                 capture_output=True, text=True, check=False)
-            transcript, payload = split_adapter_stdout(run.stdout)
-            transcripts.append(transcript)
+            returncode, stdout_text, raw_events = run_adapter(adapter_path, root, env)
+            transcript, payload = split_adapter_stdout(stdout_text)
+            log_lines.append(transcript)
+            log_lines.extend(raw_events)
 
-            if run.returncode != 0 or payload is None or not payload.get("model"):
+            if returncode != 0 or payload is None or not payload.get("model"):
                 status_out = "failed"
                 break
 
@@ -777,7 +829,7 @@ def cmd_build(argv: list[str]) -> int:
         "halted": halted,
     }
     record_path = write_record(item_records_dir, "build", record)
-    record_path.with_suffix(".log").write_text("\n".join(transcripts))
+    record_path.with_suffix(".log").write_text("\n".join(log_lines))
 
     print(f"attavo build: {status_out} ({record_path.name})")
     if status_out == "halted":

@@ -14,10 +14,27 @@ the tenant's `attavo/adapters/`, then under this product's `adapters/`.
 - `ATTAVO_FEEDBACK` — a file holding the previous iteration's failing criteria and test output; empty on the first iteration.
 - `ATTAVO_ADAPTER_CONFIG` — the tenant manifest's `[executor.<adapter-name>]` table, serialized as JSON (`{}` when the tenant declared none). The product does not know what an adapter's settings mean; each adapter documents its own keys on its own `README.md`. **Never put a secret in this table** — it is copied verbatim into `build-NN.json` as `adapter_config`, and a record is not where secrets live.
 
+## Events
+
+While running, an adapter writes to stderr one JSON object per line,
+mapping its own executor's stream into Attavo's shape:
+
+```json
+{"at": "<iso8601>", "event": "tool" | "text" | "question" | "done",
+ "tool": "<name or null>", "target": "<file path or command, one line, or null>",
+ "detail": "<free text or null>"}
+```
+
+`attavo build` (and `verify`) renders each event as one terminal line as it
+arrives — not buffered until the adapter exits — and appends the raw line
+to `build-NN.log`, which the cockpit later tails for a running stage. The
+events are executor-neutral: a second executor maps its own stream into
+the same shape.
+
 ## Output
 
 The adapter commits its work on the current branch itself. It prints one
-JSON object on its last stdout line:
+JSON object on its last stdout line, unchanged by the events above:
 
 ```json
 {"status": "done" | "question", "question": null | "<text>",
@@ -27,7 +44,8 @@ JSON object on its last stdout line:
 ```
 
 Anything else on stdout is the adapter's transcript and is saved beside the
-build record as `build-NN.log`, never inside the record.
+build record as `build-NN.log`, alongside the raw events, never inside the
+record.
 
 ## Exit status
 
