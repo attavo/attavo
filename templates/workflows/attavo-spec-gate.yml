@@ -71,7 +71,7 @@ jobs:
               "$records_rel"/*) ;;
               *) skip=false ;;
             esac
-          done <<< "$(git show --name-only --format= HEAD)"
+          done <<< "$(git diff --name-only HEAD^1 HEAD)"
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
       - uses: <owner>/attavo@<tag>
