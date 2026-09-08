@@ -276,3 +276,35 @@ def test_build_records_failed_on_adapter_is_error(tmp_path):
     # the adapter itself fails immediately on is_error -- not three
     # iterations exhausting the budget on an unrelated criterion failure
     assert rec["iterations"] == 1
+
+
+def test_build_logs_adapter_stderr_on_failure(tmp_path):
+    """Issue #38, acceptance 2. Whenever the adapter itself exits
+    non-zero, build appends its stderr to build-NN.log -- not just its
+    stdout -- so a message the adapter writes about its own failure
+    (as opposed to a wrapped tool's stdout, which the adapter is
+    responsible for relaying itself) still reaches the transcript.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    adapter_dir = root / "attavo" / "adapters" / "failing"
+    adapter_dir.mkdir(parents=True)
+    adapter_run = adapter_dir / "run"
+    adapter_run.write_text(
+        "#!/bin/sh\n"
+        "echo 'stderr from the failing adapter' >&2\n"
+        "exit 1\n")
+    adapter_run.chmod(0o755)
+
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace('build = "fixture"', 'build = "failing"'))
+    commit_all(root, "use a failing adapter")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1")
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    assert rec["status"] == "failed"
+
+    log = (root / "records" / "1" / "build-01.log").read_text()
+    assert "stderr from the failing adapter" in log

@@ -730,6 +730,8 @@ def cmd_build(argv: list[str]) -> int:
             run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
                                  capture_output=True, text=True, check=False)
             transcript, payload = split_adapter_stdout(run.stdout)
+            if run.returncode != 0 and run.stderr.strip():
+                transcript = (transcript + "\n" if transcript else "") + run.stderr.rstrip("\n")
             transcripts.append(transcript)
 
             if run.returncode != 0 or payload is None or not payload.get("model"):

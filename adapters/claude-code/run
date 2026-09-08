@@ -163,7 +163,12 @@ def main() -> int:
     else:
         run = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if run.returncode != 0:
-            sys.stderr.write(run.stderr)
+            # keep the evidence: claude's own account of a failure is the
+            # only record of it once this process exits.
+            if run.stdout.strip():
+                print(run.stdout.rstrip("\n"))
+            if run.stderr.strip():
+                print(run.stderr.rstrip("\n"))
             return run.returncode
         response = json.loads(run.stdout)
         # keep the evidence: the whole result, not just the five fields
