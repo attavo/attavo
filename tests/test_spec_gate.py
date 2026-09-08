@@ -164,9 +164,14 @@ def run_real_build(root: Path) -> subprocess.CompletedProcess:
 def test_spec_gate_built_after_build(tmp_path):
     """Issue #28, acceptance 1. Approve, build for real, then an
     amendment above the line expires the approval: the gate reports
-    status built, not a refusal, and runs each criterion against the
-    tree only (on_stub null). Red today: refused for passing on the
+    status built, not a refusal. Red today: refused for passing on the
     tree, PR #600's specimen.
+
+    Issue #36 changed built to judge each criterion (both on_tree and
+    on_stub, as a pass record already does) rather than the tree alone;
+    this fixture's stub also satisfies checks_marker.sh, so on_stub is
+    0 here, not null -- the null-on_stub shape was retired with the
+    "criterion fails against the tree" refusal it belonged to.
     """
     root = make_tenant(tmp_path, "valid")
     approve_valid(root)
@@ -179,21 +184,28 @@ def test_spec_gate_built_after_build(tmp_path):
 
     rec = latest_record(root, "1", "spec")
     assert rec["status"] == "built"
-    assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 0, "on_stub": None}]
+    assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 0, "on_stub": 0}]
     assert rec["refusal"] is None
 
 
 def test_spec_gate_built_refuses_a_failing_criterion(tmp_path):
-    """Issue #28, acceptance 2. Same shape, but a criterion still fails
-    on the tree after the build: refused by name, not rubber-stamped
-    built just because a build record exists.
+    """Issue #28, acceptance 2. Same shape, but a criterion no longer
+    satisfiable at all -- gone from the tree and from the stub overlay
+    both -- is refused by name, not rubber-stamped built just because a
+    build record exists.
+
+    Issue #36 made built judge tree-fail-stub-pass as an accepted new
+    obligation, not a refusal, so this specimen must fail on the stub
+    too (removed from specs/1/stub/, not just the real tree) to still
+    exercise a refusal at all.
     """
     root = make_tenant(tmp_path, "valid")
     approve_valid(root)
     assert run_real_build(root).returncode == 0
 
     (root / "src" / "marker.txt").unlink()
-    commit_all(root, "regression: remove the marker")
+    (root / "specs" / "1" / "stub" / "src" / "marker.txt").unlink()
+    commit_all(root, "regression: the marker is gone from the tree and the stub")
     amend_problem(root)
 
     run = run_attavo(root, "spec-gate", "1")
@@ -201,8 +213,8 @@ def test_spec_gate_built_refuses_a_failing_criterion(tmp_path):
 
     rec = latest_record(root, "1", "spec")
     assert rec["status"] == "refused"
-    assert "checks_marker.sh" in rec["refusal"]
-    assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 1, "on_stub": None}]
+    assert rec["refusal"] == "criterion fails against the tree plus stub: checks_marker.sh"
+    assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 1, "on_stub": 1}]
 
 
 def test_spec_gate_phase1_rule_unchanged_without_build(tmp_path):
@@ -214,3 +226,69 @@ def test_spec_gate_phase1_rule_unchanged_without_build(tmp_path):
     rec = latest_record(root, "1", "spec")
     assert rec["status"] == "pass"
     assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 1, "on_stub": 0}]
+
+
+def add_scripted_criterion(root: Path, satisfies_stub: bool) -> None:
+    """The move an operator makes when an executor skipped a ruling
+    nothing enforced: script it, after the build. Adds one criterion,
+    extra.sh, testing for extra.txt -- present in the stub overlay only
+    when satisfies_stub, so the new criterion fails on the tree (the
+    build never created it) and either passes or fails on the stub.
+    """
+    spec_md = root / "specs" / "1" / "spec.md"
+    spec_md.write_text(
+        spec_md.read_text() + "- extra.sh: a ruling scripted after the build\n")
+    script = root / "specs" / "1" / "criteria" / "extra.sh"
+    script.write_text("#!/bin/sh\ntest -f extra.txt\n")
+    script.chmod(0o755)
+    if satisfies_stub:
+        stub_marker = root / "specs" / "1" / "stub" / "extra.txt"
+        stub_marker.write_text("stub\n")
+    commit_all(root, "amend: script a ruling the executor skipped")
+
+
+def test_built_accepts_a_criterion_added_after_the_build(tmp_path):
+    """Issue #36, acceptance 1. A criterion added after a build, failing
+    on the tree (the build never satisfied it) but passing on the stub
+    (a new obligation the next build must meet), does not refuse built
+    -- it is exactly the move an operator makes when an executor skipped
+    a ruling nothing enforced: script it. Red today: built refuses any
+    tree failure regardless of the stub; specimen attavo/code-factory
+    spec-22.json, a correct amendment refused by name.
+    """
+    root = make_tenant(tmp_path, "valid")
+    approve_valid(root)
+    assert run_real_build(root).returncode == 0
+
+    add_scripted_criterion(root, satisfies_stub=True)
+
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0
+
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "built"
+    assert rec["refusal"] is None
+    by_name = {c["name"]: c for c in rec["criteria"]}
+    assert by_name["checks_marker.sh"] == {"name": "checks_marker.sh", "on_tree": 0, "on_stub": 0}
+    assert by_name["extra.sh"] == {"name": "extra.sh", "on_tree": 1, "on_stub": 0}
+
+
+def test_built_refuses_a_criterion_failing_on_both(tmp_path):
+    """Issue #36, acceptance 2. Same shape, but the new criterion is not
+    satisfiable at all -- fails on the tree and on the stub both:
+    refused by name, not accepted as a scriptable new obligation.
+    """
+    root = make_tenant(tmp_path, "valid")
+    approve_valid(root)
+    assert run_real_build(root).returncode == 0
+
+    add_scripted_criterion(root, satisfies_stub=False)
+
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused"
+    assert rec["refusal"] == "criterion fails against the tree plus stub: extra.sh"
+    by_name = {c["name"]: c for c in rec["criteria"]}
+    assert by_name["extra.sh"] == {"name": "extra.sh", "on_tree": 1, "on_stub": 1}

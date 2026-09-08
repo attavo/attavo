@@ -381,15 +381,6 @@ def run_criteria(root: Path, spec_dir: Path, names: list[str]) -> list[dict]:
         return results
 
 
-def run_criteria_on_tree(root: Path, spec_dir: Path, names: list[str]) -> list[dict]:
-    """Post-build re-check: against the tree only, no stub copy -- the
-    stub proved the criteria were reachable before approval; after a
-    build, the tree itself is what must satisfy them."""
-    criteria_dir = spec_dir / "criteria"
-    return [{"name": name, "on_tree": run_criterion(criteria_dir / name, root), "on_stub": None}
-            for name in names]
-
-
 def commit_postdates(root: Path, earlier: str, later: str) -> bool:
     """Whether later is a strict descendant of earlier on this branch."""
     if earlier == later:
@@ -454,10 +445,15 @@ def cmd_spec_gate(argv: list[str]) -> int:
     results: list[dict] = []
     if refusal is None:
         if built:
-            results = run_criteria_on_tree(root, spec_dir, parsed["criteria"])
-            fail = next((c for c in results if c["on_tree"] != 0), None)
+            # Per criterion, not the set: passing on the tree is what the
+            # build already satisfied; failing on the tree but passing on
+            # the stub is a new obligation the next build must meet -- an
+            # operator scripting a ruling the executor skipped. Refused
+            # only when a criterion satisfies neither.
+            results = run_criteria(root, spec_dir, parsed["criteria"])
+            fail = next((c for c in results if c["on_tree"] != 0 and c["on_stub"] != 0), None)
             if fail:
-                refusal = f"criterion fails against the tree: {fail['name']}"
+                refusal = f"criterion fails against the tree plus stub: {fail['name']}"
         elif not parsed["claims"]:
             refusal = "claims: empty; the build may touch nothing"
         else:

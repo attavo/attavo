@@ -18,9 +18,22 @@ record.
 
 ## The tenant's checks
 
-When `ATTAVO_CHECKS_COMMAND` is set (`../README.md`), the instruction names
-it: "the tenant's checks, `<command>`, must exit 0 before you commit." When
-it is unset, the instruction says nothing about checks.
+`attavo build` already runs `[checks].command` after each commit and feeds
+a failure back on the next iteration — the executor is not the runner of
+the tenant's checks. When `ATTAVO_CHECKS_COMMAND` is set (`../README.md`),
+the instruction says so: "after you commit, the tenant's checks (`<command>`)
+are run for you and any failure is returned to you on the next iteration;
+run only what you need while editing." When it is unset, the instruction
+says nothing about checks.
+
+## Allowed tools and permission_denials
+
+The default `allowed_tools` — `Read`, `Edit`, `Write`, `Bash(git *)`,
+`Bash(python3 *)` — is deliberately narrow. A tenant whose checks or tests
+need more (a shell loop, `gh`, `grep`, a platform command) names them in
+`[executor.claude-code].allowed_tools`. The raw result's
+`permission_denials` (in `build-NN.log` since `v0.3.4`) is where a tenant
+reads what its executor kept reaching for and denied.
 
 ## cost_usd is a meter, not always a bill
 
