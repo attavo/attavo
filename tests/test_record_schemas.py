@@ -49,7 +49,10 @@ def test_records_match_their_shapes(tmp_path):
     assert json.loads((root / "records" / "1" / "spec-02.json").read_text())["status"] == "approved"
 
     # issue #28: an amendment above the line expires the approval, but a
-    # build already ran after it -- status "built", on_stub null.
+    # build already ran after it -- status "built". Issue #36: built now
+    # judges each criterion on both on_tree and on_stub, like a pass
+    # record; this fixture's stub also satisfies checks_built.sh, so
+    # on_stub is 0, not null.
     spec_md = root / "specs" / "1" / "spec.md"
     spec_md.write_text(spec_md.read_text().replace("does not emit", "used to not emit"))
     commit_all(root, "amend problem prose")
@@ -57,7 +60,7 @@ def test_records_match_their_shapes(tmp_path):
     assert built.returncode == 0
     spec_03 = json.loads((root / "records" / "1" / "spec-03.json").read_text())
     assert spec_03["status"] == "built"
-    assert spec_03["criteria"][0]["on_stub"] is None
+    assert spec_03["criteria"][0]["on_stub"] == 0
 
     schemas = {"spec": load_schema("spec"), "approval": load_schema("approval"),
               "build": load_schema("build")}

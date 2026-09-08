@@ -127,22 +127,24 @@ def test_claude_code_model_from_config(tmp_path):
 
 
 def test_claude_code_names_the_tenants_checks(tmp_path):
-    """Issue #30, acceptance 5. The instruction names ATTAVO_CHECKS_COMMAND
-    as part of done when it is set, and says nothing about checks when it
-    is not. Regression: the executor not being told the tenant's checks
-    are part of done is the specimen's first cause (attavo/code-factory@2c5708d,
-    a build that passed while breaking three of the tenant's six required
-    checks).
+    """Issue #30, acceptance 5, reworded by issue #36. The instruction
+    names ATTAVO_CHECKS_COMMAND when it is set, and says nothing about
+    checks when it is not -- but it must not tell the executor to run
+    the check itself. Regression: build-10 on tenant zero, where "must
+    exit 0 before you commit" made the executor the runner (146 and 123
+    turns, 72 of 83 executor minutes waiting on tools) of a check attavo
+    build already runs after every commit.
     """
     with_checks = dry_run(tmp_path, extra_env={
         "ATTAVO_CHECKS_COMMAND": "python3 bin/factory-lane check --base origin/main"})
     instruction = with_checks[with_checks.index("-p") + 1]
     assert "python3 bin/factory-lane check --base origin/main" in instruction
-    assert "must exit 0 before you commit" in instruction
+    assert "are run for you" in instruction
+    assert "before you commit" not in instruction
 
     without_checks = dry_run(tmp_path)
     instruction_without = without_checks[without_checks.index("-p") + 1]
-    assert "must exit 0 before you commit" not in instruction_without
+    assert "are run for you" not in instruction_without
     assert "tenant's checks" not in instruction_without
 
 

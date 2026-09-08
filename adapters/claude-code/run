@@ -72,7 +72,10 @@ def build_instruction() -> str:
 
     checks_command = os.environ.get("ATTAVO_CHECKS_COMMAND")
     if checks_command:
-        parts.append(f"the tenant's checks, `{checks_command}`, must exit 0 before you commit")
+        parts.append(
+            f"after you commit, the tenant's checks (`{checks_command}`) are run "
+            "for you and any failure is returned to you on the next iteration; "
+            "run only what you need while editing")
 
     return "\n\n".join(parts)
 
