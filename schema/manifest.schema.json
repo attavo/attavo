@@ -61,6 +61,19 @@
         }
       }
     },
+    "checks": {
+      "type": "object",
+      "description": "The tenant's own definition of done: a whole-tree check, as the tenant runs it locally. attavo build runs it each iteration, after the claims boundary, the criteria, and the selected tests -- pass requires its exit to be 0, and a non-zero exit reaches the executor as feedback. Optional; a tenant that declares none is not refused (unlike [tests], which build requires).",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The tenant's whole-tree check, run from the tenant root.",
+          "minLength": 1
+        }
+      }
+    },
     "spec": {
       "type": "object",
       "additionalProperties": false,

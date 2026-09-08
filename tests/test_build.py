@@ -162,3 +162,81 @@ def test_build_iterates_with_feedback(tmp_path):
     rec = latest_build(root)
     assert rec["status"] == "pass"
     assert rec["iterations"] == 2
+
+
+def test_build_without_a_checks_table(tmp_path):
+    """Issue #30, acceptance 3. A tenant with no [checks] table is not
+    refused -- unlike [tests], which build requires -- and the record
+    carries checks: null."""
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1")
+    assert run.returncode == 0
+
+    rec = latest_build(root)
+    assert rec["status"] == "pass"
+    assert rec["checks"] is None
+
+
+def test_build_fails_when_the_tenant_checks_fail(tmp_path):
+    """Issue #30, acceptance 1. The tenant's checks are part of done: a
+    build whose criteria and tests all pass still fails, and never
+    writes pass, if [checks].command exits non-zero. Regression:
+    detects any later change that writes pass without the tenant's
+    checks -- the specimen is attavo/code-factory@2c5708d, where a
+    build passed while breaking three of the tenant's six required
+    checks because the executor was never told they were part of done.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text() + '\n[checks]\ncommand = "exit 7"\n')
+    commit_all(root, "configure checks")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1")
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    assert rec["status"] == "failed"
+    assert rec["checks"] == {"command": "exit 7", "exit": 7}
+    # the criteria and the tests passed -- only the tenant's checks failed
+    assert rec["criteria"] == [{"name": "checks_built.sh", "exit": 0}]
+    assert rec["selected_tests"]["exit"] == 0
+
+
+def test_checks_output_reaches_the_next_iteration(tmp_path):
+    """Issue #30, acceptance 2. A non-zero checks exit is fed back to the
+    next iteration -- "checks exit N" and the bounded tail of its
+    output -- beside the failing criteria and the test output.
+    Regression: the feedback file is the executor's only channel; a
+    silent drop burns the iteration budget and lands back on the forge.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    checks_script = root / "checks.sh"
+    checks_script.write_text(
+        "#!/bin/sh\n"
+        "if [ -f built.txt ]; then\n"
+        "  echo 'checks: built.txt present'\n"
+        "  exit 0\n"
+        "else\n"
+        "  echo 'checks: built.txt missing'\n"
+        "  exit 1\n"
+        "fi\n")
+    checks_script.chmod(0o755)
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text() + '\n[checks]\ncommand = "./checks.sh"\n')
+    commit_all(root, "configure checks")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1", env={"ATTAVO_FIXTURE_REQUIRE_FEEDBACK": "1"})
+    assert run.returncode == 0
+
+    rec = latest_build(root)
+    assert rec["status"] == "pass"
+    assert rec["iterations"] == 2
+    assert rec["checks"] == {"command": "./checks.sh", "exit": 0}
+
+    log = (root / "records" / "1" / "build-01.log").read_text()
+    assert "checks exit 1" in log
+    assert "checks: built.txt missing" in log

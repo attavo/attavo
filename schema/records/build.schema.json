@@ -7,8 +7,8 @@
   "required": [
     "sha", "start_sha", "spec_sha", "approval_sha", "at", "adapter",
     "adapter_config", "adapter_version", "model", "model_version",
-    "iterations", "criteria", "selected_tests", "tokens", "cost_usd",
-    "wall_clock_s", "status", "refusal", "halted"
+    "iterations", "criteria", "selected_tests", "checks", "tokens",
+    "cost_usd", "wall_clock_s", "status", "refusal", "halted"
   ],
   "properties": {
     "sha": {"type": "string", "minLength": 1},
@@ -45,6 +45,16 @@
         "select": {"type": "string", "minLength": 1},
         "run": {"type": "string", "minLength": 1},
         "count": {"type": "integer", "minimum": 0},
+        "exit": {"type": "integer"}
+      }
+    },
+    "checks": {
+      "type": ["object", "null"],
+      "description": "Null when the manifest declares no [checks] table.",
+      "additionalProperties": false,
+      "required": ["command", "exit"],
+      "properties": {
+        "command": {"type": "string", "minLength": 1},
         "exit": {"type": "integer"}
       }
     },

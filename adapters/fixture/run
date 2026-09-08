@@ -6,6 +6,9 @@ set -eu
 write_name="${ATTAVO_FIXTURE_WRITE:-built.txt}"
 
 echo "ATTAVO_ADAPTER_CONFIG=${ATTAVO_ADAPTER_CONFIG:-}"
+echo "--- ATTAVO_FEEDBACK ---"
+cat "${ATTAVO_FEEDBACK:-/dev/null}" 2>/dev/null || true
+echo "--- end feedback ---"
 
 if [ -n "${ATTAVO_FIXTURE_QUESTION:-}" ]; then
   printf '{"status":"question","question":"%s","model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":0,"output":0},"cost_usd":0.0}\n' \
