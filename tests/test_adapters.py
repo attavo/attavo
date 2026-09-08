@@ -32,6 +32,13 @@ per-model cost/usage breakdown (confirmed against `claude --version
 side that drops or renames "modelUsage" would fail these tests before it
 ever reached a record.
 
+Issue #38: a non-zero `claude` exit used to reach this adapter's own
+stderr only -- never stdout -- so build-NN.log, which reads only stdout,
+recorded nothing about the failure. The adapter now prints claude's
+stdout and stderr as transcript before exiting with claude's own code.
+Specimen: attavo/code-factory build-11.json, a "failed" record with a
+0-byte log after a 14-minute run.
+
 Run: python3 -m pytest tests -q
 """
 import json
@@ -274,3 +281,31 @@ def test_adapter_fails_on_an_empty_question(tmp_path):
     report = json.loads(run.stdout.splitlines()[-1])
     assert report["status"] == "question"
     assert report["question"] == real_question
+
+
+def test_adapter_keeps_output_on_a_nonzero_claude_exit(tmp_path):
+    """Issue #38, acceptance 1. A fake `claude` on PATH that prints to
+    both stdout and stderr, then exits 3: the adapter exits 3, and its
+    own stdout -- the only stream build-NN.log is built from -- carries
+    both of claude's streams. Regression: the specimen (a 14-minute
+    "failed" build with a 0-byte log) is exactly a claude failure whose
+    account never left this adapter's stderr.
+    """
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    fake_claude = fake_bin / "claude"
+    fake_claude.write_text(
+        "#!/bin/sh\n"
+        "echo 'claude stdout: ran out of budget'\n"
+        "echo 'claude stderr: overloaded_error' >&2\n"
+        "exit 3\n")
+    fake_claude.chmod(0o755)
+
+    env = base_env(tmp_path)
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+
+    run = subprocess.run([str(CLAUDE_CODE_RUN)], capture_output=True, text=True,
+                         check=False, env=env)
+    assert run.returncode == 3
+    assert "claude stdout: ran out of budget" in run.stdout
+    assert "claude stderr: overloaded_error" in run.stdout
