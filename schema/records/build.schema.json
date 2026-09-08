@@ -67,7 +67,10 @@
         "output": {"type": "integer", "minimum": 0}
       }
     },
-    "cost_usd": {"type": ["number", "null"]},
+    "cost_usd": {
+      "type": ["number", "null"],
+      "description": "The tool's list-price meter, from the adapter's own report. Billed only when the build ran under adapter_config.auth = \"api\"; under auth = \"subscription\" this figure is a measure, not a bill -- usage is included in the operator's plan."
+    },
     "wall_clock_s": {"type": "number", "minimum": 0},
     "status": {"type": "string", "enum": ["pass", "refused", "halted", "failed"]},
     "refusal": {"type": ["string", "null"]},

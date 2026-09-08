@@ -21,3 +21,23 @@ record.
 When `ATTAVO_CHECKS_COMMAND` is set (`../README.md`), the instruction names
 it: "the tenant's checks, `<command>`, must exit 0 before you commit." When
 it is unset, the instruction says nothing about checks.
+
+## cost_usd is a meter, not always a bill
+
+`build-NN.json`'s `cost_usd` is this adapter's report of the tool's
+list-price meter. It is billed only when `adapter_config.auth` (this
+table's `auth` key) is `"api"`. Under `auth = "subscription"`, the same
+figure is a measure of usage against the operator's plan, not a charge —
+that build ran on the subscription login, not an API key.
+
+## The raw result
+
+The whole `--output-format json` result is printed to stdout before this
+adapter's own final line, so `attavo build` saves it verbatim as the
+transcript in `build-NN.log` — the tool's own account of what happened,
+including fields (`num_turns`, `duration_ms`, `is_error`,
+`permission_denials`) the final line never carries. `is_error: true`, no
+`structured_output` at all, or a `status: "question"` whose `question` is
+missing or under 40 characters all make the adapter exit 1 (build records
+the attempt `failed`) instead of a halt someone has to rule on — a
+question worth a person's judgment is at least a sentence.

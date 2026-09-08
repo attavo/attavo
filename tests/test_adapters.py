@@ -16,6 +16,14 @@ instruction names it as part of done when set, and says nothing about
 checks when it is not. Retires the dead test-run-command environment
 variable this adapter used to read (dead: bin/attavo never set it).
 
+Issue #34: the adapter keeps the evidence it is handed. The whole result
+prints to stdout before the adapter's own final line, so build-NN.log
+carries it. is_error, an absent structured_output, or a "question" under
+40 characters all exit 1 (build's own "failed", not a halt to rule on).
+Every canned response below now carries is_error and structured_output
+for this reason -- a response without them now fails before ever
+reaching model derivation, which is the point.
+
 The response-handling tests are a separate regression, for a real response
 shape: `claude --bare -p ... --output-format json` carries no top-level
 "model" field at all -- the model id is the key of "modelUsage", its
@@ -141,6 +149,8 @@ def test_claude_code_names_the_tenants_checks(tmp_path):
 def test_claude_code_adapter_derives_model_from_usage_breakdown(tmp_path):
     """The real response shape: no top-level "model", one modelUsage key."""
     response = {
+        "is_error": False,
+        "structured_output": {"status": "done", "question": None},
         "usage": {"input_tokens": 5, "output_tokens": 9},
         "total_cost_usd": 0.01,
         "modelUsage": {
@@ -149,7 +159,7 @@ def test_claude_code_adapter_derives_model_from_usage_breakdown(tmp_path):
     }
     run = run_with_response(tmp_path, response)
     assert run.returncode == 0, run.stderr
-    line = json.loads(run.stdout)
+    line = json.loads(run.stdout.splitlines()[-1])
     assert line["model"] == "claude-sonnet-5"
 
 
@@ -157,6 +167,8 @@ def test_claude_code_adapter_derives_model_from_dominant_usage_key(tmp_path):
     """Several modelUsage keys (a lightweight helper model alongside the
     primary one): the key with the most total tokens wins."""
     response = {
+        "is_error": False,
+        "structured_output": {"status": "done", "question": None},
         "usage": {"input_tokens": 907, "output_tokens": 21},
         "total_cost_usd": 0.05,
         "modelUsage": {
@@ -166,16 +178,97 @@ def test_claude_code_adapter_derives_model_from_dominant_usage_key(tmp_path):
     }
     run = run_with_response(tmp_path, response)
     assert run.returncode == 0, run.stderr
-    line = json.loads(run.stdout)
+    line = json.loads(run.stdout.splitlines()[-1])
     assert line["model"] == "claude-haiku-4-5-20251001"
 
 
 def test_claude_code_adapter_fails_without_a_model_id(tmp_path):
     """No top-level "model" and empty modelUsage: the adapter must fail
     loudly rather than emit an empty model that would let a "pass" record
-    through with no identity behind it."""
-    response = {"usage": {"input_tokens": 0, "output_tokens": 0}, "modelUsage": {}}
+    through with no identity behind it. The raw result still reaches
+    stdout (issue #34) -- only the final report line is withheld."""
+    response = {"is_error": False, "structured_output": {"status": "done", "question": None},
+               "usage": {"input_tokens": 0, "output_tokens": 0}, "modelUsage": {}}
     run = run_with_response(tmp_path, response)
     assert run.returncode == 1
     assert "model" in run.stderr
-    assert run.stdout == ""
+    assert run.stdout == json.dumps(response) + "\n"
+
+
+def test_adapter_transcript_carries_the_raw_result(tmp_path):
+    """Issue #34, acceptance 1. The whole result -- not just the five
+    fields the final line carries -- is on stdout before the adapter's
+    own last line, so build-NN.log keeps the tool's own account of what
+    happened. Regression: the log going empty again; the two specimens
+    (attavo/code-factory build-07.json, build-09.json, both 0-byte logs)
+    are exactly this.
+    """
+    response = {
+        "is_error": False,
+        "num_turns": 3,
+        "duration_ms": 4567,
+        "permission_denials": [],
+        "result": "done",
+        "structured_output": {"status": "done", "question": None},
+        "usage": {"input_tokens": 5, "output_tokens": 9},
+        "total_cost_usd": 0.01,
+        "modelUsage": {"claude-sonnet-5": {"inputTokens": 5, "outputTokens": 9}},
+    }
+    run = run_with_response(tmp_path, response)
+    assert run.returncode == 0, run.stderr
+
+    lines = [l for l in run.stdout.splitlines() if l.strip()]
+    assert len(lines) == 2
+    transcript = lines[0]
+    assert '"num_turns": 3' in transcript
+    assert '"is_error": false' in transcript
+    assert '"duration_ms": 4567' in transcript
+    assert '"permission_denials": []' in transcript
+
+    report = json.loads(lines[-1])
+    assert report["status"] == "done"
+
+
+def test_adapter_fails_on_is_error(tmp_path):
+    """Issue #34, acceptance 2. is_error: true prints the result and
+    exits 1 -- build then records the attempt as failed, not a halt to
+    rule on. Regression: an error dressed as a question, which costs a
+    ruling act.
+    """
+    response = {
+        "is_error": True,
+        "result": "API error: overloaded",
+        "structured_output": {"status": "done", "question": None},
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+        "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}},
+    }
+    run = run_with_response(tmp_path, response)
+    assert run.returncode == 1
+    assert run.stdout == json.dumps(response) + "\n"
+
+
+def test_adapter_fails_on_an_empty_question(tmp_path):
+    """Issue #34, acceptance 3. A status "question" whose question is
+    null, empty, or under 40 characters is not a halt someone must rule
+    on -- it fails, the same as an error. A real, sentence-length
+    question still halts. Regression: the specimen halt
+    (question: "placeholder") on both attavo/code-factory build-07.json
+    and build-09.json.
+    """
+    base = {
+        "is_error": False,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+        "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}},
+    }
+    for question in (None, "", "placeholder"):
+        response = {**base, "structured_output": {"status": "question", "question": question}}
+        run = run_with_response(tmp_path, response)
+        assert run.returncode == 1, f"question={question!r} should have failed"
+
+    real_question = "x" * 60
+    response = {**base, "structured_output": {"status": "question", "question": real_question}}
+    run = run_with_response(tmp_path, response)
+    assert run.returncode == 0, run.stderr
+    report = json.loads(run.stdout.splitlines()[-1])
+    assert report["status"] == "question"
+    assert report["question"] == real_question
