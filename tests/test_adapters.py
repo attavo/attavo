@@ -39,6 +39,21 @@ stdout and stderr as transcript before exiting with claude's own code.
 Specimen: attavo/code-factory build-11.json, a "failed" record with a
 0-byte log after a 14-minute run.
 
+Issue #40: this file is claude-code-specific by construction (every test
+invokes CLAUDE_CODE_RUN directly), so it is not where a general executor
+contract belongs -- a second adapter inherits none of it. What used to
+be here and is genuinely general (the raw result reaching stdout,
+is_error and question-quality gating a halt, a non-zero tool exit
+passing through) moved, not copied, to
+tests/test_executor_conformance.py, which runs the same situations
+against any adapter that declares a conformance.json. What stays here
+is what is genuinely Claude Code's: --bare, --setting-sources,
+--strict-mcp-config, and modelUsage parsing.
+test_claude_code_names_the_tenants_checks keeps only its
+English-specific half (the instruction must not tell the executor to
+run the check) -- the command's mere presence in the instruction is now
+the conformance suite's situation 7.
+
 Run: python3 -m pytest tests -q
 """
 import json
@@ -135,24 +150,26 @@ def test_claude_code_model_from_config(tmp_path):
 
 def test_claude_code_names_the_tenants_checks(tmp_path):
     """Issue #30, acceptance 5, reworded by issue #36. The instruction
-    names ATTAVO_CHECKS_COMMAND when it is set, and says nothing about
-    checks when it is not -- but it must not tell the executor to run
-    the check itself. Regression: build-10 on tenant zero, where "must
-    exit 0 before you commit" made the executor the runner (146 and 123
-    turns, 72 of 83 executor minutes waiting on tools) of a check attavo
-    build already runs after every commit.
+    must not tell the executor to run the check itself. Regression:
+    build-10 on tenant zero, where "must exit 0 before you commit" made
+    the executor the runner (146 and 123 turns, 72 of 83 executor
+    minutes waiting on tools) of a check attavo build already runs after
+    every commit.
+
+    The command's mere presence in the instruction (with it, and its
+    absence without it) is now tests/test_executor_conformance.py's
+    situation 7 -- general across any adapter. What stays here is the
+    part that is an assertion about English and does not transfer.
     """
     with_checks = dry_run(tmp_path, extra_env={
         "ATTAVO_CHECKS_COMMAND": "python3 bin/factory-lane check --base origin/main"})
     instruction = with_checks[with_checks.index("-p") + 1]
-    assert "python3 bin/factory-lane check --base origin/main" in instruction
     assert "are run for you" in instruction
     assert "before you commit" not in instruction
 
     without_checks = dry_run(tmp_path)
     instruction_without = without_checks[without_checks.index("-p") + 1]
     assert "are run for you" not in instruction_without
-    assert "tenant's checks" not in instruction_without
 
 
 def test_claude_code_adapter_derives_model_from_usage_breakdown(tmp_path):
@@ -203,109 +220,3 @@ def test_claude_code_adapter_fails_without_a_model_id(tmp_path):
     assert "model" in run.stderr
     assert run.stdout == json.dumps(response) + "\n"
 
-
-def test_adapter_transcript_carries_the_raw_result(tmp_path):
-    """Issue #34, acceptance 1. The whole result -- not just the five
-    fields the final line carries -- is on stdout before the adapter's
-    own last line, so build-NN.log keeps the tool's own account of what
-    happened. Regression: the log going empty again; the two specimens
-    (attavo/code-factory build-07.json, build-09.json, both 0-byte logs)
-    are exactly this.
-    """
-    response = {
-        "is_error": False,
-        "num_turns": 3,
-        "duration_ms": 4567,
-        "permission_denials": [],
-        "result": "done",
-        "structured_output": {"status": "done", "question": None},
-        "usage": {"input_tokens": 5, "output_tokens": 9},
-        "total_cost_usd": 0.01,
-        "modelUsage": {"claude-sonnet-5": {"inputTokens": 5, "outputTokens": 9}},
-    }
-    run = run_with_response(tmp_path, response)
-    assert run.returncode == 0, run.stderr
-
-    lines = [l for l in run.stdout.splitlines() if l.strip()]
-    assert len(lines) == 2
-    transcript = lines[0]
-    assert '"num_turns": 3' in transcript
-    assert '"is_error": false' in transcript
-    assert '"duration_ms": 4567' in transcript
-    assert '"permission_denials": []' in transcript
-
-    report = json.loads(lines[-1])
-    assert report["status"] == "done"
-
-
-def test_adapter_fails_on_is_error(tmp_path):
-    """Issue #34, acceptance 2. is_error: true prints the result and
-    exits 1 -- build then records the attempt as failed, not a halt to
-    rule on. Regression: an error dressed as a question, which costs a
-    ruling act.
-    """
-    response = {
-        "is_error": True,
-        "result": "API error: overloaded",
-        "structured_output": {"status": "done", "question": None},
-        "usage": {"input_tokens": 1, "output_tokens": 1},
-        "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}},
-    }
-    run = run_with_response(tmp_path, response)
-    assert run.returncode == 1
-    assert run.stdout == json.dumps(response) + "\n"
-
-
-def test_adapter_fails_on_an_empty_question(tmp_path):
-    """Issue #34, acceptance 3. A status "question" whose question is
-    null, empty, or under 40 characters is not a halt someone must rule
-    on -- it fails, the same as an error. A real, sentence-length
-    question still halts. Regression: the specimen halt
-    (question: "placeholder") on both attavo/code-factory build-07.json
-    and build-09.json.
-    """
-    base = {
-        "is_error": False,
-        "usage": {"input_tokens": 1, "output_tokens": 1},
-        "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}},
-    }
-    for question in (None, "", "placeholder"):
-        response = {**base, "structured_output": {"status": "question", "question": question}}
-        run = run_with_response(tmp_path, response)
-        assert run.returncode == 1, f"question={question!r} should have failed"
-
-    real_question = "x" * 60
-    response = {**base, "structured_output": {"status": "question", "question": real_question}}
-    run = run_with_response(tmp_path, response)
-    assert run.returncode == 0, run.stderr
-    report = json.loads(run.stdout.splitlines()[-1])
-    assert report["status"] == "question"
-    assert report["question"] == real_question
-
-
-def test_adapter_keeps_output_on_a_nonzero_claude_exit(tmp_path):
-    """Issue #38, acceptance 1. A fake `claude` on PATH that prints to
-    both stdout and stderr, then exits 3: the adapter exits 3, and its
-    own stdout -- the only stream build-NN.log is built from -- carries
-    both of claude's streams. Regression: the specimen (a 14-minute
-    "failed" build with a 0-byte log) is exactly a claude failure whose
-    account never left this adapter's stderr.
-    """
-    fake_bin = tmp_path / "fakebin"
-    fake_bin.mkdir()
-    fake_claude = fake_bin / "claude"
-    fake_claude.write_text(
-        "#!/bin/sh\n"
-        "echo 'claude stdout: ran out of budget'\n"
-        "echo 'claude stderr: overloaded_error' >&2\n"
-        "exit 3\n")
-    fake_claude.chmod(0o755)
-
-    env = base_env(tmp_path)
-    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
-
-    run = subprocess.run([str(CLAUDE_CODE_RUN)], capture_output=True, text=True,
-                         check=False, env=env)
-    assert run.returncode == 3
-    assert "claude stdout: ran out of budget" in run.stdout
-    assert "claude stderr: overloaded_error" in run.stdout

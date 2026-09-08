@@ -1,0 +1,53 @@
+{
+  "dry_run_env": "ATTAVO_ADAPTER_DRY_RUN",
+  "response_env": "ATTAVO_ADAPTER_RESPONSE_FILE",
+  "tool_binary": "claude",
+  "situations": {
+    "done": {
+      "is_error": false,
+      "structured_output": {"status": "done", "question": null},
+      "usage": {"input_tokens": 5, "output_tokens": 9},
+      "total_cost_usd": 0.01,
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 5, "outputTokens": 9}}
+    },
+    "is_error": {
+      "is_error": true,
+      "result": "API error: overloaded",
+      "structured_output": {"status": "done", "question": null},
+      "usage": {"input_tokens": 1, "output_tokens": 1},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}}
+    },
+    "no_structured_output": {
+      "is_error": false,
+      "usage": {"input_tokens": 1, "output_tokens": 1},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}}
+    },
+    "question_null": {
+      "is_error": false,
+      "structured_output": {"status": "question", "question": null},
+      "usage": {"input_tokens": 1, "output_tokens": 1},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}}
+    },
+    "question_empty": {
+      "is_error": false,
+      "structured_output": {"status": "question", "question": ""},
+      "usage": {"input_tokens": 1, "output_tokens": 1},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}}
+    },
+    "question_short": {
+      "is_error": false,
+      "structured_output": {"status": "question", "question": "placeholder"},
+      "usage": {"input_tokens": 1, "output_tokens": 1},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}}
+    },
+    "question_long": {
+      "is_error": false,
+      "structured_output": {
+        "status": "question",
+        "question": "The criteria do not say which of two conflicting rulings applies here."
+      },
+      "usage": {"input_tokens": 1, "output_tokens": 1},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}}
+    }
+  }
+}
