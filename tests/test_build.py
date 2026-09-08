@@ -240,3 +240,39 @@ def test_checks_output_reaches_the_next_iteration(tmp_path):
     log = (root / "records" / "1" / "build-01.log").read_text()
     assert "checks exit 1" in log
     assert "checks: built.txt missing" in log
+
+
+def test_build_records_failed_on_adapter_is_error(tmp_path):
+    """Issue #34, acceptance 2 (build half). The claude-code adapter's
+    ATTAVO_ADAPTER_RESPONSE_FILE path, fed an is_error result, exits 1;
+    attavo build records the attempt as failed, not a halt someone must
+    rule on. Regression: an error dressed as a question, which costs a
+    ruling act -- the specimen is attavo/code-factory's build-07.json and
+    build-09.json, both a status: "placeholder"-question halt for what
+    the raw result would have shown was something else.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace('build = "fixture"', 'build = "claude-code"'))
+    commit_all(root, "use the claude-code adapter")
+    approve_item(root)
+
+    response_file = tmp_path / "response.json"
+    response_file.write_text(json.dumps({
+        "is_error": True,
+        "result": "API error: overloaded",
+        "structured_output": {"status": "done", "question": None},
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+        "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}},
+    }))
+
+    run = run_attavo(root, "build", "1",
+                     env={"ATTAVO_ADAPTER_RESPONSE_FILE": str(response_file)})
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    assert rec["status"] == "failed"
+    assert rec["adapter"] == "claude-code"
+    # the adapter itself fails immediately on is_error -- not three
+    # iterations exhausting the budget on an unrelated criterion failure
+    assert rec["iterations"] == 1

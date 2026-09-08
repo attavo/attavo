@@ -8,6 +8,13 @@ the `claude` command line as a JSON array instead of running it, and its
 response handling is checked by ATTAVO_ADAPTER_RESPONSE_FILE, which reads a
 canned --output-format json response from a file instead of invoking
 `claude`.
+
+The whole result is printed to stdout before this adapter's own final
+line, so build-NN.log carries it as the transcript -- a halt otherwise
+cannot be explained after the fact. is_error, an absent structured_output,
+or a status "question" whose question is missing or under
+MIN_QUESTION_CHARS characters all exit 1 (build records the attempt as
+failed) rather than a halt someone must rule on.
 """
 from __future__ import annotations
 
@@ -134,6 +141,9 @@ def adapter_version() -> str:
     return out.stdout.strip()
 
 
+MIN_QUESTION_CHARS = 40
+
+
 def main() -> int:
     config = load_config()
     cmd = build_command(build_instruction(), config)
@@ -144,13 +154,33 @@ def main() -> int:
 
     response_file = os.environ.get("ATTAVO_ADAPTER_RESPONSE_FILE")
     if response_file:
-        response = json.loads(Path(response_file).read_text())
+        raw_result = Path(response_file).read_text()
+        response = json.loads(raw_result)
+        print(raw_result.rstrip("\n"))
     else:
         run = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if run.returncode != 0:
             sys.stderr.write(run.stderr)
             return run.returncode
         response = json.loads(run.stdout)
+        # keep the evidence: the whole result, not just the five fields
+        # below, is the transcript build-NN.log saves -- a halt otherwise
+        # cannot be explained after the fact.
+        print(run.stdout.rstrip("\n"))
+        if run.stderr.strip():
+            print(run.stderr.rstrip("\n"))
+
+    structured = response.get("structured_output") or {}
+    status = structured.get("status", "done")
+    question = structured.get("question")
+
+    # An error dressed as a question still costs a ruling act. Treat both
+    # the same way build already treats a non-zero adapter exit: failed,
+    # not a halt someone must rule on.
+    if response.get("is_error") or not response.get("structured_output"):
+        return 1
+    if status == "question" and (not question or len(question) < MIN_QUESTION_CHARS):
+        return 1
 
     model = derive_model(response)
     if not model:
@@ -160,11 +190,10 @@ def main() -> int:
             "'modelUsage'\n")
         return 1
 
-    structured = response.get("structured_output") or {}
     usage = response.get("usage") or {}
     line = {
-        "status": structured.get("status", "done"),
-        "question": structured.get("question"),
+        "status": status,
+        "question": question,
         "model": model,
         "model_version": response.get("model_version"),
         "adapter_version": adapter_version(),
