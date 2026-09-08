@@ -10,6 +10,12 @@ through as ATTAVO_ADAPTER_CONFIG and copied verbatim into build-NN.json as
 adapter_config. claude-code reads auth, model, allowed_tools,
 setting_sources, and permission_mode from it; ATTAVO_MODEL is retired.
 
+Issue #30: the tenant's checks are part of done. build exports
+ATTAVO_CHECKS_COMMAND when the manifest declares [checks]; the
+instruction names it as part of done when set, and says nothing about
+checks when it is not. Retires the dead test-run-command environment
+variable this adapter used to read (dead: bin/attavo never set it).
+
 The response-handling tests are a separate regression, for a real response
 shape: `claude --bare -p ... --output-format json` carries no top-level
 "model" field at all -- the model id is the key of "modelUsage", its
@@ -34,6 +40,7 @@ CLAUDE_CODE_RUN = ROOT / "adapters" / "claude-code" / "run"
 def base_env(tmp_path: Path) -> dict:
     spec_dir = FIXTURES / "build_valid" / "specs" / "1"
     env = dict(os.environ)
+    env.pop("ATTAVO_CHECKS_COMMAND", None)
     env.update({
         "ATTAVO_SPEC_DIR": str(spec_dir),
         "ATTAVO_RECORDS_DIR": str(tmp_path / "records"),
@@ -109,6 +116,26 @@ def test_claude_code_model_from_config(tmp_path):
     assert cmd.count("--model") == 1
     assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5"
     assert "should-be-ignored" not in cmd
+
+
+def test_claude_code_names_the_tenants_checks(tmp_path):
+    """Issue #30, acceptance 5. The instruction names ATTAVO_CHECKS_COMMAND
+    as part of done when it is set, and says nothing about checks when it
+    is not. Regression: the executor not being told the tenant's checks
+    are part of done is the specimen's first cause (attavo/code-factory@2c5708d,
+    a build that passed while breaking three of the tenant's six required
+    checks).
+    """
+    with_checks = dry_run(tmp_path, extra_env={
+        "ATTAVO_CHECKS_COMMAND": "python3 bin/factory-lane check --base origin/main"})
+    instruction = with_checks[with_checks.index("-p") + 1]
+    assert "python3 bin/factory-lane check --base origin/main" in instruction
+    assert "must exit 0 before you commit" in instruction
+
+    without_checks = dry_run(tmp_path)
+    instruction_without = without_checks[without_checks.index("-p") + 1]
+    assert "must exit 0 before you commit" not in instruction_without
+    assert "tenant's checks" not in instruction_without
 
 
 def test_claude_code_adapter_derives_model_from_usage_breakdown(tmp_path):

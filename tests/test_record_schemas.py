@@ -31,8 +31,8 @@ def load_schema(stage: str) -> dict:
 def test_records_match_their_shapes(tmp_path):
     root = make_tenant(tmp_path, "build_valid")
     toml = root / "attavo.toml"
-    toml.write_text(toml.read_text() + "\n[executor.fixture]\ny = 2\n")
-    commit_all(root, "configure the fixture adapter")
+    toml.write_text(toml.read_text() + '\n[executor.fixture]\ny = 2\n\n[checks]\ncommand = "true"\n')
+    commit_all(root, "configure the fixture adapter and the tenant's checks")
 
     assert run_attavo(root, "spec-gate", "1").returncode == 0
     assert run_attavo(root, "approve", "1", "--by", "alice").returncode == 0
@@ -40,6 +40,7 @@ def test_records_match_their_shapes(tmp_path):
 
     build_rec = json.loads((root / "records" / "1" / "build-01.json").read_text())
     assert build_rec["adapter_config"] == {"y": 2}
+    assert build_rec["checks"] == {"command": "true", "exit": 0}
 
     # the build didn't touch spec.md, so the approval is still valid: this
     # spec-gate run writes the new spec-02.json with status "approved".
@@ -87,3 +88,30 @@ def test_manifest_schema_accepts_open_executor_config():
         "operators": {"approvers": ["alice"]},
     }
     jsonschema.validate(manifest, schema)
+
+
+def base_manifest() -> dict:
+    return {
+        "schema_version": 1,
+        "attavo": {"version": "v0.3.3"},
+        "executor": {"build": "fixture"},
+        "spec": {"boundary": {"paths": ["src/**"]}},
+        "gates": {},
+        "paths": {"specs": "specs", "records": "records",
+                 "rulings": "rulings.md", "rejections": "rejections"},
+        "operators": {"approvers": ["alice"]},
+    }
+
+
+def test_manifest_schema_describes_checks():
+    """Issue #30, acceptance 4 (manifest half): [checks] is optional, with
+    command required inside it -- a manifest with no [checks] table at
+    all is still valid (unlike [tests], which build itself requires)."""
+    schema = json.loads((ROOT / "schema" / "manifest.schema.json").read_text())
+
+    without_checks = base_manifest()
+    jsonschema.validate(without_checks, schema)
+
+    with_checks = base_manifest()
+    with_checks["checks"] = {"command": "python3 bin/factory-lane check --base origin/main"}
+    jsonschema.validate(with_checks, schema)

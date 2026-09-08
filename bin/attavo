@@ -40,12 +40,16 @@ build refuses (exit 1, naming the cause, no record) unless the manifest
 declares [executor].build and [tests].select and [tests].run, and unless
 approval-status would print valid. It invokes the named adapter
 (adapters/<name>/run) with the spec, the corpus, and the branch, checks
-that every path it touched matches a spec claim, then runs the criteria
-and the tests [tests].select and [tests].run name for the touched paths,
-iterating on failure up to a fixed budget. It writes the next
-build-NN.json under paths.records/N/, with the adapter's transcript beside
-it as build-NN.log. See the build contract in the project's Phase 2 issue
-for the full rules it enforces.
+that every path it touched matches a spec claim, then runs the criteria,
+the tests [tests].select and [tests].run name for the touched paths, and
+-- when the manifest declares [checks].command -- the tenant's own
+whole-tree check, from the tenant root. pass requires every criterion,
+the test run, and the tenant's checks (if declared) to exit 0; any
+non-zero exit iterates, with the failure as feedback, up to a fixed
+budget. [checks] is optional; a tenant that declares none is not
+refused. It writes the next build-NN.json under paths.records/N/, with
+the adapter's transcript beside it as build-NN.log. See the build
+contract in the project's Phase 2 issue for the full rules it enforces.
 """
 from __future__ import annotations
 
@@ -68,6 +72,7 @@ CRITERION_TIMEOUT = 120
 RECORD_RE = re.compile(r"^([a-z]+)-([0-9]{2,})\.json$")
 BUILD_ITERATION_BUDGET = 3
 BUILD_HALT_EXIT = 3
+CHECKS_FEEDBACK_TAIL_LINES = 200
 PRODUCT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -691,6 +696,7 @@ def cmd_build(argv: list[str]) -> int:
     claims = parsed["claims"] if parsed else []
     criteria_names = parsed["criteria"] if parsed else []
     adapter_config = (m.get("executor") or {}).get(adapter_name) or {}
+    checks_command = (m.get("checks") or {}).get("command")
 
     start_sha = git(root, "rev-parse", "HEAD").strip()
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
@@ -702,6 +708,7 @@ def cmd_build(argv: list[str]) -> int:
     transcripts: list[str] = []
     criteria_results: list[dict] = []
     selected_tests: dict | None = None
+    checks_result: dict | None = None
     status_out = "failed"
     refusal = None
     halted = None
@@ -721,6 +728,8 @@ def cmd_build(argv: list[str]) -> int:
             env["ATTAVO_ITERATION"] = str(iteration)
             env["ATTAVO_FEEDBACK"] = str(feedback_path)
             env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(adapter_config)
+            if checks_command:
+                env["ATTAVO_CHECKS_COMMAND"] = checks_command
 
             run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
                                  capture_output=True, text=True, check=False)
@@ -769,8 +778,15 @@ def cmd_build(argv: list[str]) -> int:
             selected_tests = {"select": tests_cfg["select"], "run": tests_cfg["run"],
                               "count": len(identifiers), "exit": test_run.returncode}
 
+            checks_run = None
+            if checks_command:
+                checks_run = subprocess.run(checks_command, shell=True, cwd=str(root),
+                                            capture_output=True, text=True, check=False)
+                checks_result = {"command": checks_command, "exit": checks_run.returncode}
+
             failing = [c for c in criteria_results if c["exit"] != 0]
-            if not failing and test_run.returncode == 0:
+            checks_ok = checks_run is None or checks_run.returncode == 0
+            if not failing and test_run.returncode == 0 and checks_ok:
                 status_out = "pass"
                 break
 
@@ -786,6 +802,11 @@ def cmd_build(argv: list[str]) -> int:
                 feedback_lines += [f"test run exit {test_run.returncode}",
                                    "--- stdout ---", test_run.stdout,
                                    "--- stderr ---", test_run.stderr]
+            if checks_run is not None and checks_run.returncode != 0:
+                tail = (checks_run.stdout.splitlines() + checks_run.stderr.splitlines())
+                tail = tail[-CHECKS_FEEDBACK_TAIL_LINES:]
+                feedback_lines += [f"checks exit {checks_run.returncode}",
+                                   "--- checks output (tail) ---", *tail]
             feedback_path.write_text("\n".join(feedback_lines) + "\n")
 
     record = {
@@ -802,6 +823,7 @@ def cmd_build(argv: list[str]) -> int:
         "iterations": iterations_used,
         "criteria": criteria_results,
         "selected_tests": selected_tests,
+        "checks": checks_result,
         "tokens": tokens,
         "cost_usd": cost_usd,
         "wall_clock_s": round(time.monotonic() - started, 3),

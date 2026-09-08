@@ -15,3 +15,9 @@ record.
 - `allowed_tools` — list; defaults to `["Read", "Edit", "Write", "Bash(git *)", "Bash(python3 *)"]`.
 - `setting_sources` — default `"user"`. Only meaningful in subscription mode; ignored in api mode (`--bare` already excludes everything).
 - `permission_mode` — default `"acceptEdits"`.
+
+## The tenant's checks
+
+When `ATTAVO_CHECKS_COMMAND` is set (`../README.md`), the instruction names
+it: "the tenant's checks, `<command>`, must exit 0 before you commit." When
+it is unset, the instruction says nothing about checks.

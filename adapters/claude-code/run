@@ -62,6 +62,11 @@ def build_instruction() -> str:
         "commit your work on the current branch; if you cannot proceed "
         "without a decision that changes the criteria, do not guess: "
         "answer with status question")
+
+    checks_command = os.environ.get("ATTAVO_CHECKS_COMMAND")
+    if checks_command:
+        parts.append(f"the tenant's checks, `{checks_command}`, must exit 0 before you commit")
+
     return "\n\n".join(parts)
 
 
@@ -76,9 +81,6 @@ def load_config() -> dict:
 def build_command(instruction: str, config: dict) -> list[str]:
     auth = config.get("auth", "api")
     allowed_tools = list(config.get("allowed_tools") or DEFAULT_ALLOWED_TOOLS)
-    test_run = os.environ.get("ATTAVO_TEST_RUN_COMMAND")
-    if test_run:
-        allowed_tools.append(f"Bash({test_run} *)")
     permission_mode = config.get("permission_mode", "acceptEdits")
 
     cmd = ["claude"]
