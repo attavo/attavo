@@ -1,7 +1,7 @@
-"""spec-NN.json, approval-NN.json, and build-NN.json validate against
-schema/records/*.schema.json. One test over all fixture records; extend it,
-don't duplicate it, as new record shapes land (issue #24's adapter_config
-among them).
+"""spec-NN.json, approval-NN.json, build-NN.json, and verify-NN.json
+validate against schema/records/*.schema.json. One test over all fixture
+records; extend it, don't duplicate it, as new record shapes land (issue
+#24's adapter_config, issue #40's verify, among them).
 
 Run: python3 -m pytest tests -q
 """
@@ -31,8 +31,11 @@ def load_schema(stage: str) -> dict:
 def test_records_match_their_shapes(tmp_path):
     root = make_tenant(tmp_path, "build_valid")
     toml = root / "attavo.toml"
-    toml.write_text(toml.read_text() + '\n[executor.fixture]\ny = 2\n\n[checks]\ncommand = "true"\n')
-    commit_all(root, "configure the fixture adapter and the tenant's checks")
+    toml.write_text(toml.read_text()
+                    + '\n[executor.fixture]\ny = 2\n'
+                    + '\n[checks]\ncommand = "true"\n'
+                    + """\n[forge]\nchecks_command = "printf 'ci success\\n'"\n""")
+    commit_all(root, "configure the fixture adapter, the tenant's checks, and the forge read")
 
     assert run_attavo(root, "spec-gate", "1").returncode == 0
     assert run_attavo(root, "approve", "1", "--by", "alice").returncode == 0
@@ -41,6 +44,12 @@ def test_records_match_their_shapes(tmp_path):
     build_rec = json.loads((root / "records" / "1" / "build-01.json").read_text())
     assert build_rec["adapter_config"] == {"y": 2}
     assert build_rec["checks"] == {"command": "true", "exit": 0}
+
+    verify = run_attavo(root, "verify", "1")
+    assert verify.returncode == 0
+    verify_rec = json.loads((root / "records" / "1" / "verify-01.json").read_text())
+    assert verify_rec["status"] == "pass"
+    assert verify_rec["findings"]
 
     # the build didn't touch spec.md, so the approval is still valid: this
     # spec-gate run writes the new spec-02.json with status "approved".
@@ -63,10 +72,10 @@ def test_records_match_their_shapes(tmp_path):
     assert spec_03["criteria"][0]["on_stub"] == 0
 
     schemas = {"spec": load_schema("spec"), "approval": load_schema("approval"),
-              "build": load_schema("build")}
+              "build": load_schema("build"), "verify": load_schema("verify")}
 
     records = sorted((root / "records" / "1").glob("*.json"))
-    assert {p.stem.split("-")[0] for p in records} == {"spec", "approval", "build"}
+    assert {p.stem.split("-")[0] for p in records} == {"spec", "approval", "build", "verify"}
     for path in records:
         stage = path.stem.split("-")[0]
         jsonschema.validate(json.loads(path.read_text()), schemas[stage])

@@ -74,6 +74,23 @@
         }
       }
     },
+    "forge": {
+      "type": "object",
+      "description": "The tenant's own commit-status and issue-tracking reads. The product names no vendor: both keys are commands the tenant supplies. Optional; attavo verify refuses without checks_command, and attavo file-findings refuses without file_issue_command, but neither key requires the other.",
+      "additionalProperties": false,
+      "properties": {
+        "checks_command": {
+          "type": "string",
+          "description": "Takes a full commit sha on argv; prints one line per check as \"<name> <conclusion>\". attavo verify runs it on the item's latest build record's sha before calling any adapter.",
+          "minLength": 1
+        },
+        "file_issue_command": {
+          "type": "string",
+          "description": "Reads one finding as JSON on stdin and files it as a tenant issue. attavo file-findings runs it once per finding in the item's latest verify record.",
+          "minLength": 1
+        }
+      }
+    },
     "spec": {
       "type": "object",
       "additionalProperties": false,

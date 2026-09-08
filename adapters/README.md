@@ -14,6 +14,9 @@ the tenant's `attavo/adapters/`, then under this product's `adapters/`.
 - `ATTAVO_FEEDBACK` — a file holding the previous iteration's failing criteria, test output, and checks output; empty on the first iteration.
 - `ATTAVO_ADAPTER_CONFIG` — the tenant manifest's `[executor.<adapter-name>]` table, serialized as JSON (`{}` when the tenant declared none). The product does not know what an adapter's settings mean; each adapter documents its own keys on its own `README.md`. **Never put a secret in this table** — it is copied verbatim into `build-NN.json` as `adapter_config`, and a record is not where secrets live.
 - `ATTAVO_CHECKS_COMMAND` — the tenant's `[checks].command`, unset when the tenant declared no `[checks]` table. The product does not know what it checks; the tenant does. An adapter should tell the executor it is part of done when set, and say nothing about checks when it is not.
+- `ATTAVO_STAGE` — `"build"` or `"verify"`, which invocation this is. An adapter that supports both branches on it; one that only builds may ignore it.
+- `ATTAVO_DIFF` — verify only: a file holding the diff since the build's approval.
+- `ATTAVO_BUILD_RECORD` — verify only: the path to the `build-NN.json` being verified.
 
 ## Output
 
@@ -30,11 +33,7 @@ JSON object on its last stdout line:
 Anything else on stdout is the adapter's transcript and is saved beside the
 build record as `build-NN.log`, never inside the record.
 
-## Exit status
-
-- `0` with `status: "done"` — the adapter made its attempt; build checks the claims, the criteria, the tests, and the tenant's checks (if declared).
-- `0` with `status: "question"` — the adapter cannot proceed without a decision that changes the criteria; build halts at once.
-- non-zero — the adapter failed to run; build records the attempt as `failed`.
-
 An adapter never writes a record. `attavo build` writes the one
-`build-NN.json` for the whole invocation.
+`build-NN.json` for the whole invocation. What it must do with a tool
+error, an absent report, or a bad question is `tests/test_executor_conformance.py`,
+run against every `adapters/<name>/conformance.json` it declares.

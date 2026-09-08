@@ -6,6 +6,8 @@
     attavo approve [N] --by LOGIN
     attavo approval-status [N]
     attavo build [N]
+    attavo verify [N]
+    attavo file-findings [N]
 
 The doctor is the definition of done. It asserts three proofs against a
 tenant root and exits 1 until every proof holds:
@@ -50,6 +52,25 @@ budget. [checks] is optional; a tenant that declares none is not
 refused. It writes the next build-NN.json under paths.records/N/, with
 the adapter's transcript beside it as build-NN.log. See the build
 contract in the project's Phase 2 issue for the full rules it enforces.
+
+verify refuses (exit 1) unless the item's latest build record has
+status pass, and unless the manifest declares [forge].checks_command --
+a tenant command, taking a full commit sha on argv, that prints one
+line per check as "<name> <conclusion>". verify runs it on the build
+record's sha first: any conclusion other than success, neutral, or
+skipped writes verify-NN.json with status returned and calls no
+adapter, because a judge is never spent on a tree the forge already
+called red. With the forge green, verify calls the adapter named by
+[executor].verify (defaulting to [executor].build) with the diff since
+the build's approval, the spec, and the build record, and records its
+findings. [executor.<adapter>.<stage>] shadows [executor.<adapter>] for
+build or verify alone; both merge parent then stage before setting
+ATTAVO_ADAPTER_CONFIG, and the record's adapter_config is the merged
+result. file-findings opens one tenant issue per finding in the item's
+latest verify record via [forge].file_issue_command, and refuses (exit
+1, nothing filed) a record carrying a finding with no retires. See the
+verify contract in the project's Phase 2 issue for the full rules both
+enforce.
 """
 from __future__ import annotations
 
@@ -57,6 +78,7 @@ import fnmatch
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -190,6 +212,14 @@ def latest_record(records_dir: Path, stage: str) -> dict | None:
 def next_attempt_number(records_dir: Path, stage: str) -> int:
     attempts = parse_attempts(records_dir, stage)
     return (max(attempts) + 1) if attempts else 1
+
+
+def latest_attempt_path(records_dir: Path, stage: str) -> Path | None:
+    """The path of the highest-numbered <stage>-NN.json, or None."""
+    attempts = parse_attempts(records_dir, stage)
+    if not attempts:
+        return None
+    return records_dir / f"{stage}-{max(attempts):02d}.json"
 
 
 def write_record(records_dir: Path, stage: str, record: dict) -> Path:
@@ -605,6 +635,24 @@ def cmd_approval_status(argv: list[str]) -> int:
 
 # --- build: adapter, claims boundary, criteria, and the tenant's tests ---
 
+STAGE_NAMES = ("build", "verify")
+
+
+def merge_adapter_config(m: dict, adapter_name: str, stage: str) -> dict:
+    """[executor.<adapter>] merged with [executor.<adapter>.<stage>], the
+    stage table shadowing the parent for that stage only. Both build and
+    verify call this before setting ATTAVO_ADAPTER_CONFIG, and the
+    record's adapter_config is the merged result."""
+    parent = (m.get("executor") or {}).get(adapter_name) or {}
+    if not isinstance(parent, dict):
+        return {}
+    merged = {k: v for k, v in parent.items() if k not in STAGE_NAMES}
+    stage_table = parent.get(stage)
+    if isinstance(stage_table, dict):
+        merged.update(stage_table)
+    return merged
+
+
 def resolve_adapter(root: Path, name: str) -> Path | None:
     """adapters/<name>/run, resolved first under the tenant's own
     attavo/adapters/, then under this product's adapters/."""
@@ -691,7 +739,7 @@ def cmd_build(argv: list[str]) -> int:
     parsed, _ = parse_spec(spec_dir / "spec.md")
     claims = parsed["claims"] if parsed else []
     criteria_names = parsed["criteria"] if parsed else []
-    adapter_config = (m.get("executor") or {}).get(adapter_name) or {}
+    adapter_config = merge_adapter_config(m, adapter_name, "build")
     checks_command = (m.get("checks") or {}).get("command")
 
     start_sha = git(root, "rev-parse", "HEAD").strip()
@@ -724,6 +772,7 @@ def cmd_build(argv: list[str]) -> int:
             env["ATTAVO_ITERATION"] = str(iteration)
             env["ATTAVO_FEEDBACK"] = str(feedback_path)
             env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(adapter_config)
+            env["ATTAVO_STAGE"] = "build"
             if checks_command:
                 env["ATTAVO_CHECKS_COMMAND"] = checks_command
 
@@ -838,6 +887,222 @@ def cmd_build(argv: list[str]) -> int:
     return 0 if status_out == "pass" else 1
 
 
+# --- verify: the forge's own read first, a judge only once it is green ---
+
+FORGE_OK_CONCLUSIONS = {"success", "neutral", "skipped"}
+
+
+def read_forge_checks(root: Path, checks_command: str, sha: str) -> dict:
+    """Runs the tenant's [forge].checks_command on sha; the product does
+    not know what forge that command reads. One line per check as
+    "<name> <conclusion>"; a command that fails to run, or any conclusion
+    other than success/neutral/skipped, is not green."""
+    run = subprocess.run(f"{checks_command} {shlex.quote(sha)}", shell=True, cwd=str(root),
+                         capture_output=True, text=True, check=False)
+    conclusions = []
+    for line in run.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.rsplit(" ", 1)
+        if len(parts) == 2:
+            conclusions.append({"name": parts[0], "conclusion": parts[1]})
+    ok = run.returncode == 0 and all(c["conclusion"] in FORGE_OK_CONCLUSIONS for c in conclusions)
+    return {"command": checks_command, "sha": sha, "conclusions": conclusions}, ok
+
+
+def cmd_verify(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attavo verify: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo verify: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    item_records_dir = root / records_rel / item_id
+
+    latest_build = latest_record(item_records_dir, "build")
+    if latest_build is None:
+        print(f"attavo verify: refused: no build record for item {item_id}")
+        return 1
+    if latest_build.get("status") != "pass":
+        print(f"attavo verify: refused: latest build record is "
+              f"{latest_build.get('status')!r}, not pass")
+        return 1
+
+    forge_cfg = m.get("forge") or {}
+    checks_command = forge_cfg.get("checks_command")
+    if not checks_command:
+        print("attavo verify: refused: no [forge].checks_command in the manifest")
+        return 1
+
+    build_sha = latest_build["sha"]
+    build_record_path = latest_attempt_path(item_records_dir, "build")
+    started = time.monotonic()
+    forge_checks, forge_ok = read_forge_checks(root, checks_command, build_sha)
+
+    if not forge_ok:
+        record = {
+            "sha": git(root, "rev-parse", "HEAD").strip(),
+            "build_sha": build_sha,
+            "build_record": build_record_path.stem if build_record_path else None,
+            "approval_sha": latest_build.get("approval_sha"),
+            "at": now_iso(),
+            "adapter": None, "adapter_config": {}, "adapter_version": None,
+            "model": None, "model_version": None,
+            "forge_checks": forge_checks,
+            "findings": None,
+            "tests_named": [],
+            "mutation": None, "weak_stub": False, "stub_ratio": None,
+            "tokens": {"input": 0, "output": 0}, "cost_usd": None,
+            "wall_clock_s": round(time.monotonic() - started, 3),
+            "status": "returned",
+        }
+        record_path = write_record(item_records_dir, "verify", record)
+        print(f"attavo verify: returned ({record_path.name}); the forge checks are not green")
+        return 0
+
+    executor = m.get("executor") or {}
+    adapter_name = executor.get("verify") or executor.get("build")
+    if not adapter_name:
+        print("attavo verify: refused: no [executor].verify or [executor].build in the manifest")
+        return 1
+    adapter_path = resolve_adapter(root, adapter_name)
+    if adapter_path is None:
+        print(f"attavo verify: refused: no adapter named {adapter_name!r}")
+        return 1
+
+    adapter_config = merge_adapter_config(m, adapter_name, "verify")
+    approval_sha = latest_build.get("approval_sha")
+    spec_dir = root / specs_rel / item_id
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        diff_path = Path(tmp) / "diff.patch"
+        diff_text = git(root, "diff", approval_sha, "HEAD") if approval_sha else ""
+        diff_path.write_text(diff_text)
+
+        env = dict(os.environ)
+        env["ATTAVO_SPEC_DIR"] = str(spec_dir)
+        env["ATTAVO_RECORDS_DIR"] = str(item_records_dir)
+        env["ATTAVO_RULINGS"] = str(root / m["paths"]["rulings"])
+        env["ATTAVO_BRANCH"] = branch
+        env["ATTAVO_STAGE"] = "verify"
+        env["ATTAVO_DIFF"] = str(diff_path)
+        env["ATTAVO_BUILD_RECORD"] = str(build_record_path) if build_record_path else ""
+        env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(adapter_config)
+
+        run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
+                             capture_output=True, text=True, check=False)
+        transcript, payload = split_adapter_stdout(run.stdout)
+        if run.returncode != 0 and run.stderr.strip():
+            transcript = (transcript + "\n" if transcript else "") + run.stderr.rstrip("\n")
+
+    status_out = "failed"
+    findings = None
+    tests_named: list[str] = []
+    model = model_version = adapter_version_out = None
+    tokens = {"input": 0, "output": 0}
+    cost_usd = None
+
+    if run.returncode == 0 and payload is not None and payload.get("model"):
+        model = payload.get("model")
+        model_version = payload.get("model_version")
+        adapter_version_out = payload.get("adapter_version")
+        tok = payload.get("tokens") or {}
+        tokens = {"input": tok.get("input", 0) or 0, "output": tok.get("output", 0) or 0}
+        cost_usd = payload.get("cost_usd")
+        findings = payload.get("findings") or []
+        tests_named = payload.get("tests_named") or []
+        status_out = "pass"
+
+    record = {
+        "sha": git(root, "rev-parse", "HEAD").strip(),
+        "build_sha": build_sha,
+        "build_record": build_record_path.stem if build_record_path else None,
+        "approval_sha": approval_sha,
+        "at": now_iso(),
+        "adapter": adapter_name,
+        "adapter_config": adapter_config,
+        "adapter_version": adapter_version_out,
+        "model": model,
+        "model_version": model_version,
+        "forge_checks": forge_checks,
+        "findings": findings,
+        "tests_named": tests_named,
+        "mutation": None, "weak_stub": False, "stub_ratio": None,
+        "tokens": tokens,
+        "cost_usd": cost_usd,
+        "wall_clock_s": round(time.monotonic() - started, 3),
+        "status": status_out,
+    }
+    record_path = write_record(item_records_dir, "verify", record)
+    record_path.with_suffix(".log").write_text(transcript)
+
+    print(f"attavo verify: {status_out} ({record_path.name})")
+    return 0 if status_out == "pass" else 1
+
+
+# --- file-findings: one tenant issue per finding, nothing filed silently ---
+
+def cmd_file_findings(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attavo file-findings: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo file-findings: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    records_rel = m["paths"]["records"]
+    item_records_dir = root / records_rel / item_id
+
+    forge_cfg = m.get("forge") or {}
+    file_issue_command = forge_cfg.get("file_issue_command")
+    if not file_issue_command:
+        print("attavo file-findings: refused: no [forge].file_issue_command in the manifest")
+        return 1
+
+    latest_verify = latest_record(item_records_dir, "verify")
+    if latest_verify is None:
+        print(f"attavo file-findings: refused: no verify record for item {item_id}")
+        return 1
+
+    findings = latest_verify.get("findings") or []
+    if not findings:
+        print("attavo file-findings: no findings to file")
+        return 0
+
+    for finding in findings:
+        if not finding.get("retires"):
+            title = finding.get("title", "<untitled>")
+            print(f"attavo file-findings: refused: finding {title!r} carries no retires; "
+                  f"nothing filed")
+            return 1
+
+    for finding in findings:
+        run = subprocess.run(file_issue_command, shell=True, cwd=str(root),
+                             input=json.dumps(finding) + "\n", capture_output=True,
+                             text=True, check=False)
+        if run.returncode != 0:
+            title = finding.get("title", "<untitled>")
+            print(f"attavo file-findings: refused: filing {title!r} exited {run.returncode}: "
+                  f"{run.stderr.strip()}")
+            return 1
+
+    print(f"attavo file-findings: filed {len(findings)} issue(s)")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__.strip())
@@ -852,8 +1117,12 @@ def main(argv: list[str]) -> int:
         return cmd_approval_status(argv[1:])
     if argv[0] == "build":
         return cmd_build(argv[1:])
-    print(f"attavo: unknown subcommand {argv[0]!r}; "
-          f"only doctor, spec-gate, approve, approval-status, build exist at this commit",
+    if argv[0] == "verify":
+        return cmd_verify(argv[1:])
+    if argv[0] == "file-findings":
+        return cmd_file_findings(argv[1:])
+    print(f"attavo: unknown subcommand {argv[0]!r}; only doctor, spec-gate, approve, "
+          f"approval-status, build, verify, file-findings exist at this commit",
           file=sys.stderr)
     return 2
 

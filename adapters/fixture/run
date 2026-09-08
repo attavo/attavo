@@ -10,6 +10,13 @@ echo "--- ATTAVO_FEEDBACK ---"
 cat "${ATTAVO_FEEDBACK:-/dev/null}" 2>/dev/null || true
 echo "--- end feedback ---"
 
+if [ "${ATTAVO_STAGE:-build}" = "verify" ]; then
+  # verify is a report, not a commit: one canned finding naming what the
+  # criteria did not assert.
+  printf '{"model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0,"findings":[{"title":"fixture finding","specimen":"fixture","retires":"nothing real","rejection_test":"none","severity":"info"}],"tests_named":["tests/test_fixture.py::test_marker"]}\n'
+  exit 0
+fi
+
 if [ -n "${ATTAVO_FIXTURE_QUESTION:-}" ]; then
   printf '{"status":"question","question":"%s","model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":0,"output":0},"cost_usd":0.0}\n' \
     "$ATTAVO_FIXTURE_QUESTION"
