@@ -139,7 +139,7 @@ def verify_instruction() -> str:
         "criteria and name what the criteria do not assert but the diff "
         "should still be judged on, and name the tests that would assert "
         "it if they existed. A spec whose approval commit does not "
-        "describe the working tree the diff produced is itself a "
+        "describe the working tree the build produced is itself a "
         "finding: the diff is judged against what was approved, and a "
         "divergence between them is reportable rather than assumed "
         "away. Report each as a finding: title, specimen (the file or "
