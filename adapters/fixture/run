@@ -11,9 +11,22 @@ cat "${ATTAVO_FEEDBACK:-/dev/null}" 2>/dev/null || true
 echo "--- end feedback ---"
 
 if [ "${ATTAVO_STAGE:-build}" = "verify" ]; then
-  # verify is a report, not a commit: one canned finding naming what the
-  # criteria did not assert.
-  printf '{"model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0,"findings":[{"title":"fixture finding","specimen":"fixture","retires":"nothing real","rejection_test":"none","severity":"info"}],"tests_named":["tests/test_fixture.py::test_marker"]}\n'
+  if [ -n "${ATTAVO_FIXTURE_COMMIT_DURING_VERIFY:-}" ]; then
+    # a verifier that commits anyway (issue #46) -- for the rejection
+    # test only; a real adapter must never do this.
+    echo "should not exist" > verify-side-effect.txt
+    git add verify-side-effect.txt
+    git commit -q -m "fixture: illegitimate commit during verify"
+  fi
+  if [ -n "${ATTAVO_FIXTURE_OMIT_FINDINGS:-}" ]; then
+    # no findings key at all -- the absent-channel case issue #46 fixes,
+    # distinct from an explicit empty list.
+    printf '{"model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0}\n'
+  else
+    # verify is a report, not a commit: one canned finding naming what
+    # the criteria did not assert.
+    printf '{"model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0,"findings":[{"title":"fixture finding","specimen":"fixture","retires":"nothing real","rejection_test":"none","severity":"info"}],"tests_named":["tests/test_fixture.py::test_marker"]}\n'
+  fi
   exit 0
 fi
 

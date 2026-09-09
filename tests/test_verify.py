@@ -188,3 +188,55 @@ def test_verify_merges_stage_config(tmp_path):
     verify_rec = latest_verify(root)
     assert verify_rec["status"] == "pass"
     assert verify_rec["adapter_config"] == {"x": "override"}
+
+
+def head_of(root: Path) -> str:
+    return subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_verify_fails_when_findings_key_is_absent(tmp_path):
+    """Issue #46, rejection test 1. A verify report line carrying no
+    findings key at all is failed, not pass -- the absence of a channel
+    to report a finding is not a clean bill of health, and is not the
+    same thing as an explicit empty list. Red at 0b2b869, where
+    payload.get("findings") or [] collapsed an absent key and an
+    explicit empty list into the same "pass".
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    approve_item(root)
+    assert run_attavo(root, "build", "1").returncode == 0
+
+    run = run_attavo(root, "verify", "1", env={"ATTAVO_FIXTURE_OMIT_FINDINGS": "1"})
+    assert run.returncode == 1
+
+    rec = latest_verify(root)
+    assert rec["status"] == "failed"
+    assert rec["findings"] is None
+
+
+def test_verify_fails_when_the_adapter_commits(tmp_path):
+    """Issue #46, rejection test 2. Verify is a report, not a commit: an
+    adapter that moves the branch head during the invocation fails the
+    attempt, and the record names the commit it should not have made.
+    Red at 0b2b869, where the commit was silently kept on the branch and
+    the record reported success with no trace of it.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    approve_item(root)
+    assert run_attavo(root, "build", "1").returncode == 0
+
+    pre_head = head_of(root)
+
+    run = run_attavo(root, "verify", "1", env={"ATTAVO_FIXTURE_COMMIT_DURING_VERIFY": "1"})
+    assert run.returncode == 1
+
+    post_head = head_of(root)
+    assert post_head != pre_head, "the fixture's own commit should have landed"
+
+    rec = latest_verify(root)
+    assert rec["status"] == "failed"
+    assert rec["sha"] == pre_head  # what was actually being verified
+    assert rec["commits"] == [post_head]  # named, not silently kept

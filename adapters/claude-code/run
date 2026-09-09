@@ -11,10 +11,17 @@ canned --output-format json response from a file instead of invoking
 
 The whole result is printed to stdout before this adapter's own final
 line, so build-NN.log carries it as the transcript -- a halt otherwise
-cannot be explained after the fact. is_error, an absent structured_output,
-or a status "question" whose question is missing or under
-MIN_QUESTION_CHARS characters all exit 1 (build records the attempt as
-failed) rather than a halt someone must rule on.
+cannot be explained after the fact. is_error or an absent
+structured_output exit 1 on either stage; a build status "question"
+whose question is missing or under MIN_QUESTION_CHARS characters also
+exits 1 (build records the attempt as failed) rather than a halt
+someone must rule on.
+
+ATTAVO_STAGE=verify branches to a different objective, schema, and
+report shape (issue #46): the instruction states the verify objective
+(see verify_instruction) instead of the build one, --json-schema is
+VERIFY_SCHEMA instead of STATUS_SCHEMA, and the final line carries
+findings and tests_named instead of status and question.
 """
 from __future__ import annotations
 
@@ -34,6 +41,35 @@ STATUS_SCHEMA = {
     },
 }
 
+# The verify objective (issue #46): a verifier reports findings, not a
+# commit. additionalProperties: False means the tool cannot hand back a
+# structured_output shaped like STATUS_SCHEMA's status/question by
+# accident -- an absent findings key is what cmd_verify treats as
+# failed, not a lenient default here.
+VERIFY_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["findings", "tests_named"],
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["title", "specimen", "retires", "rejection_test", "severity"],
+                "properties": {
+                    "title": {"type": "string", "minLength": 1},
+                    "specimen": {"type": "string", "minLength": 1},
+                    "retires": {"type": "string", "minLength": 1},
+                    "rejection_test": {"type": "string", "minLength": 1},
+                    "severity": {"type": "string", "minLength": 1},
+                },
+            },
+        },
+        "tests_named": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    },
+}
+
 
 def read_text(path_env: str) -> str:
     path = os.environ.get(path_env)
@@ -43,7 +79,10 @@ def read_text(path_env: str) -> str:
     return p.read_text() if p.is_file() else ""
 
 
-def build_instruction() -> str:
+def spec_sections() -> list[str]:
+    """The spec's Problem, Claims, and Criteria sections verbatim -- what
+    both build and verify need to see, in the shape the spec contract
+    (not this adapter) already gives them."""
     spec_dir = Path(os.environ["ATTAVO_SPEC_DIR"])
     lines = (spec_dir / "spec.md").read_text().splitlines()
     idx = [i for i, l in enumerate(lines) if l.startswith("## ")]
@@ -55,7 +94,11 @@ def build_instruction() -> str:
         end = bounds[bounds.index(start) + 1] if start in bounds else len(lines)
         return "\n".join(lines[start:end]).strip()
 
-    parts = [section("## Problem"), section("## Claims"), section("## Criteria")]
+    return [section("## Problem"), section("## Claims"), section("## Criteria")]
+
+
+def build_instruction() -> str:
+    parts = list(spec_sections())
 
     rulings = read_text("ATTAVO_RULINGS")
     if rulings.strip():
@@ -80,6 +123,31 @@ def build_instruction() -> str:
     return "\n\n".join(parts)
 
 
+def verify_instruction() -> str:
+    parts = list(spec_sections())
+
+    diff = read_text("ATTAVO_DIFF")
+    parts.append("## Diff since the approved spec\n\n" + (diff.strip() or "(the diff is empty)"))
+
+    build_record = read_text("ATTAVO_BUILD_RECORD")
+    if build_record.strip():
+        parts.append("## The build record\n\n" + build_record.strip())
+
+    parts.append(
+        "you are verifying a completed build, not building: make no edits, "
+        "write no files, commit nothing. Read the diff above against the "
+        "criteria and name what the criteria do not assert but the diff "
+        "should still be judged on, and name the tests that would assert "
+        "it if they existed. Report each as a finding: title, specimen "
+        "(the file or commit the finding is about), retires (what having "
+        "this finding on record replaces or closes -- every finding must "
+        "carry one, or it is refused unfiled), rejection_test (the test "
+        "that would catch a regression of it), and severity. An empty "
+        "findings list means you looked and found nothing to report, not "
+        "that you did not look.")
+    return "\n\n".join(parts)
+
+
 DEFAULT_ALLOWED_TOOLS = ["Read", "Edit", "Write", "Bash(git *)", "Bash(python3 *)"]
 
 
@@ -88,7 +156,7 @@ def load_config() -> dict:
     return json.loads(raw) if raw else {}
 
 
-def build_command(instruction: str, config: dict) -> list[str]:
+def build_command(instruction: str, config: dict, schema: dict) -> list[str]:
     auth = config.get("auth", "api")
     allowed_tools = list(config.get("allowed_tools") or DEFAULT_ALLOWED_TOOLS)
     permission_mode = config.get("permission_mode", "acceptEdits")
@@ -105,7 +173,7 @@ def build_command(instruction: str, config: dict) -> list[str]:
         cmd += ["--bare"]
     cmd += ["-p", instruction,
            "--output-format", "json",
-           "--json-schema", json.dumps(STATUS_SCHEMA),
+           "--json-schema", json.dumps(schema),
            "--permission-mode", permission_mode,
            "--allowedTools", ",".join(allowed_tools)]
     model = config.get("model")
@@ -149,7 +217,11 @@ MIN_QUESTION_CHARS = 40
 
 def main() -> int:
     config = load_config()
-    cmd = build_command(build_instruction(), config)
+    verifying = os.environ.get("ATTAVO_STAGE") == "verify"
+    if verifying:
+        cmd = build_command(verify_instruction(), config, VERIFY_SCHEMA)
+    else:
+        cmd = build_command(build_instruction(), config, STATUS_SCHEMA)
 
     if os.environ.get("ATTAVO_ADAPTER_DRY_RUN"):
         print(json.dumps(cmd))
@@ -179,15 +251,12 @@ def main() -> int:
             print(run.stderr.rstrip("\n"))
 
     structured = response.get("structured_output") or {}
-    status = structured.get("status", "done")
-    question = structured.get("question")
 
     # An error dressed as a question still costs a ruling act. Treat both
     # the same way build already treats a non-zero adapter exit: failed,
-    # not a halt someone must rule on.
+    # not a halt someone must rule on. Stage-independent: a tool error or
+    # an absent report is a failure whether this is a build or a verify.
     if response.get("is_error") or not response.get("structured_output"):
-        return 1
-    if status == "question" and (not question or len(question) < MIN_QUESTION_CHARS):
         return 1
 
     model = derive_model(response)
@@ -199,9 +268,7 @@ def main() -> int:
         return 1
 
     usage = response.get("usage") or {}
-    line = {
-        "status": status,
-        "question": question,
+    common = {
         "model": model,
         "model_version": response.get("model_version"),
         "adapter_version": adapter_version(),
@@ -211,6 +278,23 @@ def main() -> int:
         },
         "cost_usd": response.get("total_cost_usd"),
     }
+
+    if verifying:
+        # .get(), not "or []": an absent findings key must reach
+        # cmd_verify as None, distinct from an explicit empty list --
+        # that distinction is the whole fix for issue #46.
+        line = {**common,
+               "findings": structured.get("findings"),
+               "tests_named": structured.get("tests_named")}
+        print(json.dumps(line))
+        return 0
+
+    status = structured.get("status", "done")
+    question = structured.get("question")
+    if status == "question" and (not question or len(question) < MIN_QUESTION_CHARS):
+        return 1
+
+    line = {**common, "status": status, "question": question}
     print(json.dumps(line))
     return 0
 
