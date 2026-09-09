@@ -15,10 +15,10 @@ new here -- the name of the executable the adapter shells out to when
 neither hook is set, needed to fake a non-zero exit from it (situation 5)
 without a model in the loop.
 
-Situation 8 (a commit the adapter makes carries the identity attavo build
-exported) has no mechanism yet -- issue #33. It is written as a real,
-currently-failing assertion and deselected in CI by name, exactly as
-tests/test_doctor.py's proofs two and three are.
+Situation 8: a commit the adapter makes carries the identity attavo build
+exports (issue #33) -- checked by faking the adapter's own tool_binary on
+PATH, the same technique situation 5 uses, so the fake tool can commit
+for real inside a throwaway repo without a model in the loop.
 
 Run: python3 -m pytest tests/test_executor_conformance.py -q
 """
@@ -86,10 +86,10 @@ def base_env(tmp_path: Path) -> dict:
     return env
 
 
-def run_adapter(adapter_name: str, env: dict) -> subprocess.CompletedProcess:
+def run_adapter(adapter_name: str, env: dict, cwd: Path | None = None) -> subprocess.CompletedProcess:
     run_path = ADAPTERS_DIR / adapter_name / "run"
     return subprocess.run([str(run_path)], capture_output=True, text=True,
-                          check=False, env=env)
+                          check=False, env=env, cwd=str(cwd) if cwd else None)
 
 
 def dry_run(adapter_name: str, tmp_path: Path, extra_env: dict | None = None) -> list[str]:
@@ -219,11 +219,56 @@ def test_situation_7_checks_command_in_the_invocation(adapter_name, tmp_path):
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
 def test_situation_8_commits_carry_the_attavo_build_identity(adapter_name, tmp_path):
-    """No mechanism yet exports a commit identity for the adapter to use
-    (issue #33). Red by design; deselected in CI by name, like
-    tests/test_doctor.py's proofs two and three.
+    """Issue #33. attavo build exports the executor identity -- set by the
+    product, never the tenant's git config -- as GIT_AUTHOR_NAME/EMAIL and
+    GIT_COMMITTER_NAME/EMAIL before invoking the adapter; the adapter must
+    pass it through rather than setting its own explicit environment for
+    the underlying tool. The fake tool_binary here commits for real, so
+    this checks the adapter's own subprocess call, not just the harness.
+    Regression: the specimen is attavo/code-factory@e22fa85, an executor
+    commit indistinguishable in git log from the operator's own, because
+    no identity was exported for it to carry.
     """
-    pytest.fail("no mechanism yet exports a commit identity for the adapter to use (issue #33)")
+    manifest = CONFORMANCE[adapter_name]
+    tool_binary = manifest["tool_binary"]
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=str(repo), check=True)
+    subprocess.run(["git", "config", "user.name", "a tenant operator"], cwd=str(repo), check=True)
+    subprocess.run(["git", "config", "user.email", "operator@example.com"], cwd=str(repo), check=True)
+    (repo / "README.md").write_text("seed\n")
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=str(repo), check=True)
+
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    fake_tool = fake_bin / tool_binary
+    fake_tool.write_text(
+        "#!/bin/sh\n"
+        "git commit -q --allow-empty -m 'adapter commit'\n"
+        "printf '{\"is_error\": false, \"structured_output\": "
+        "{\"status\": \"done\", \"question\": null}, "
+        "\"usage\": {\"input_tokens\": 1, \"output_tokens\": 1}, "
+        "\"modelUsage\": {\"claude-sonnet-5\": "
+        "{\"inputTokens\": 1, \"outputTokens\": 1}}}\\n'\n")
+    fake_tool.chmod(0o755)
+
+    identity_name = f"attavo executor ({adapter_name})"
+    identity_email = f"executor+{adapter_name}@attavo.invalid"
+    env = base_env(tmp_path)
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+    env["GIT_AUTHOR_NAME"] = identity_name
+    env["GIT_AUTHOR_EMAIL"] = identity_email
+    env["GIT_COMMITTER_NAME"] = identity_name
+    env["GIT_COMMITTER_EMAIL"] = identity_email
+
+    run = run_adapter(adapter_name, env, cwd=repo)
+    assert run.returncode == 0, run.stderr
+
+    log = subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%an/%ae"],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    assert log == f"{identity_name}/{identity_email}"
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
