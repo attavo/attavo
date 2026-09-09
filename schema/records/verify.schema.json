@@ -7,8 +7,8 @@
   "required": [
     "sha", "build_sha", "build_record", "approval_sha", "at", "adapter",
     "adapter_config", "adapter_version", "model", "model_version",
-    "forge_checks", "findings", "tests_named", "mutation", "weak_stub",
-    "stub_ratio", "tokens", "cost_usd", "wall_clock_s", "status"
+    "forge_checks", "findings", "tests_named", "commits", "mutation",
+    "weak_stub", "stub_ratio", "tokens", "cost_usd", "wall_clock_s", "status"
   ],
   "properties": {
     "sha": {"type": "string", "minLength": 1},
@@ -47,7 +47,7 @@
     },
     "findings": {
       "type": ["array", "null"],
-      "description": "null when the forge checks were not green and no adapter was called.",
+      "description": "null when no adapter was called (the forge checks were not green), or when the adapter ran but reported no findings key at all -- distinct from an explicit empty list, which is a clean report, not a missing channel.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -63,6 +63,11 @@
     },
     "tests_named": {
       "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "commits": {
+      "type": "array",
+      "description": "Empty unless the adapter moved the branch head during verify -- a report, not a commit; a non-empty list here always accompanies status: \"failed\", naming exactly what the adapter should not have created.",
       "items": {"type": "string", "minLength": 1}
     },
     "mutation": {

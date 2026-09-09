@@ -973,6 +973,7 @@ def cmd_verify(argv: list[str]) -> int:
             "forge_checks": forge_checks,
             "findings": None,
             "tests_named": [],
+            "commits": [],
             "mutation": None, "weak_stub": False, "stub_ratio": None,
             "tokens": {"input": 0, "output": 0}, "cost_usd": None,
             "wall_clock_s": round(time.monotonic() - started, 3),
@@ -1018,6 +1019,15 @@ def cmd_verify(argv: list[str]) -> int:
         if run.returncode != 0 and run.stderr.strip():
             transcript = (transcript + "\n" if transcript else "") + run.stderr.rstrip("\n")
 
+    # Verify is a report, not a commit (issue #46): the adapter is invoked
+    # on the branch head it was handed, and must leave that head alone.
+    # Checked by comparing the head before the invocation (head_sha,
+    # already read above for the forge) against the head after it.
+    post_adapter_head = git(root, "rev-parse", "HEAD").strip()
+    commits: list[str] = []
+    if post_adapter_head != head_sha:
+        commits = git(root, "rev-list", f"{head_sha}..{post_adapter_head}", "--reverse").split()
+
     status_out = "failed"
     findings = None
     tests_named: list[str] = []
@@ -1032,9 +1042,14 @@ def cmd_verify(argv: list[str]) -> int:
         tok = payload.get("tokens") or {}
         tokens = {"input": tok.get("input", 0) or 0, "output": tok.get("output", 0) or 0}
         cost_usd = payload.get("cost_usd")
-        findings = payload.get("findings") or []
-        tests_named = payload.get("tests_named") or []
-        status_out = "pass"
+        # "findings" absent (or explicitly null) is not the same as an
+        # empty list: the adapter had no channel to report one at all,
+        # which is not a clean bill of health (issue #46). A commit
+        # during verify fails the attempt regardless of what it reported.
+        if not commits and "findings" in payload and payload["findings"] is not None:
+            findings = payload["findings"]
+            tests_named = payload.get("tests_named") or []
+            status_out = "pass"
 
     record = {
         "sha": head_sha,
@@ -1050,6 +1065,7 @@ def cmd_verify(argv: list[str]) -> int:
         "forge_checks": forge_checks,
         "findings": findings,
         "tests_named": tests_named,
+        "commits": commits,
         "mutation": None, "weak_stub": False, "stub_ratio": None,
         "tokens": tokens,
         "cost_usd": cost_usd,

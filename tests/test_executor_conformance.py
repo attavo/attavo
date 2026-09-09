@@ -224,3 +224,18 @@ def test_situation_8_commits_carry_the_attavo_build_identity(adapter_name, tmp_p
     tests/test_doctor.py's proofs two and three.
     """
     pytest.fail("no mechanism yet exports a commit identity for the adapter to use (issue #33)")
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_9_verify_stage_uses_a_findings_schema(adapter_name, tmp_path):
+    """Issue #46, rejection test 3. With ATTAVO_STAGE=verify, the
+    invocation names a response shape carrying findings and tests_named
+    -- not build's status/question. Red at 699f56d for claude-code,
+    where ATTAVO_STAGE was read nowhere and every invocation got the
+    build schema.
+    """
+    cmd = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_STAGE": "verify"})
+    schema_index = cmd.index("--json-schema") + 1
+    schema = json.loads(cmd[schema_index])
+    assert "findings" in schema.get("properties", {})
+    assert "tests_named" in schema.get("properties", {})
