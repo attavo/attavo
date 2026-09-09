@@ -239,3 +239,31 @@ def test_situation_9_verify_stage_uses_a_findings_schema(adapter_name, tmp_path)
     schema = json.loads(cmd[schema_index])
     assert "findings" in schema.get("properties", {})
     assert "tests_named" in schema.get("properties", {})
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_10_verify_names_approval_commit_divergence_as_reportable(adapter_name, tmp_path):
+    """Issue #48, rejection test 1. With ATTAVO_STAGE=verify, the
+    invocation's instruction names a spec whose approval commit does
+    not describe the working tree as itself a reportable finding --
+    issue #4's absorption, specified in issue #40's section 2, lost
+    between issue #40 and issue #46. Red at d04b484, where
+    verify_instruction() never said this.
+    """
+    cmd = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_STAGE": "verify"})
+    instruction = cmd[cmd.index("-p") + 1]
+    assert "approval commit" in instruction
+    assert "reportable" in instruction
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_11_verify_defines_severity_as_derived(adapter_name, tmp_path):
+    """Issue #48, rejection test 2. With ATTAVO_STAGE=verify, the
+    invocation's instruction defines severity as derived rather than
+    judged. Red at d04b484, where severity was named once in the
+    finding fields and defined nowhere.
+    """
+    cmd = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_STAGE": "verify"})
+    instruction = cmd[cmd.index("-p") + 1]
+    assert "severity" in instruction
+    assert "derived rather than judged" in instruction
