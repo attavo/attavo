@@ -12,12 +12,15 @@
 # exact tree the merge will produce -- so an incoherent chain refuses
 # while the branch can still be pushed to.
 #
-# This step is not folded into attavo-spec-gate.yml's job: that job skips
-# an ordinary pull request from any branch that doesn't start with
-# attavo/ (issue #12), and also skips every step after a record-only
-# commit -- an approval push carries no build or verify record yet to
-# check. Coherence has neither restriction: it runs on any pull request
-# that names an item, item or not, record-only commit or not, and reports
+# This step is not folded into attavo-spec-gate.yml's job, for two
+# reasons: that job skips an ordinary pull request from any branch that
+# doesn't start with attavo/ (issue #12), and every step after its skip
+# step is skipped on a record-only commit. An approval push is a
+# record-only commit -- including a re-approval after a build, the exact
+# shape that broke the chain on tenant zero (approval-07, issue #62) --
+# so folding coherence into that job would skip the check on precisely
+# the commit most likely to need it. Coherence has neither restriction:
+# it runs on any pull request, record-only commit or not, and reports
 # its own required context so a tenant can gate the merge queue on it
 # without widening the spec-gate job's guards.
 #
