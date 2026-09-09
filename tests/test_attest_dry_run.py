@@ -190,3 +190,85 @@ def test_dry_run_does_not_read_ci_runs(tmp_path, monkeypatch):
     run = run_attavo(root, "attest", "--dry-run")
     assert run.returncode == 0, run.stderr
     assert records_snapshot(root) == before
+
+
+# --partial (issue #67): on a pull request, the coherence check and
+# attavo verify deadlock -- coherence demands a complete chain at the one
+# moment (before verify has run) the chain cannot be complete. --partial
+# treats a missing later record as "not yet" rather than a refusal, while
+# still enforcing the two chain assertions over whatever records exist.
+# Written and run red first: on main before this lane, --dry-run accepted
+# no --partial flag, so every --partial invocation here failed as an
+# unrecognized item id or subcommand argument.
+
+def build_missing_verify_after_reapproval(root: Path) -> None:
+    """Row 2's fixture: spec, approval, build present, then a second
+    approval after the build -- the shape that broke the chain in issue
+    #62 -- verify absent."""
+    git(root, "checkout", "-b", "attavo/1-x")
+    assert run_attavo(root, "spec-gate", "1").returncode == 0
+    commit_all(root, "attavo: spec-gate record for #1")
+    assert run_attavo(root, "approve", "1", "--by", "alice").returncode == 0
+    commit_all(root, "attavo: approval record for #1")
+    assert run_attavo(root, "build", "1").returncode == 0
+    commit_all(root, "attavo: build record for #1")
+    assert run_attavo(root, "approve", "1", "--by", "alice").returncode == 0
+    commit_all(root, "attavo: second approval record for #1")
+    merge_into_main(root, "attavo/1-x")
+
+
+def test_partial_exits_0_naming_verify_absent_and_writes_nothing(tmp_path):
+    """Acceptance row 1 (issue #67): spec, approval, build present, verify
+    absent, on a no-fast-forward merge -- --dry-run --partial exits 0,
+    names the item and the stages present and absent, writes nothing."""
+    root = make_tenant(tmp_path, "build_valid")
+    configure_forge(root)
+    build_missing_verify_record(root)
+
+    before = records_snapshot(root)
+    run = run_attavo(root, "attest", "--dry-run", "--partial")
+
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "1" in run.stdout
+    assert "verify" in run.stdout
+    assert records_snapshot(root) == before
+    assert git(root, "status", "--porcelain") == ""
+
+
+def test_partial_still_refuses_a_stale_approval_sha(tmp_path):
+    """Acceptance row 2: the same fixture with a re-approval after the
+    build -- --partial does not bypass the approval_sha chain assertion."""
+    root = make_tenant(tmp_path, "build_valid")
+    configure_forge(root)
+    build_missing_verify_after_reapproval(root)
+
+    run = run_attavo(root, "attest", "--dry-run", "--partial")
+
+    assert run.returncode == 1
+    assert "approval_sha" in run.stderr
+
+
+def test_without_partial_the_row_1_fixture_still_refuses_on_missing_verify(tmp_path):
+    """Acceptance row 3: the row-1 fixture without --partial -- unchanged,
+    exit 1, 'no verify record'."""
+    root = make_tenant(tmp_path, "build_valid")
+    configure_forge(root)
+    build_missing_verify_record(root)
+
+    run = run_attavo(root, "attest", "--dry-run")
+
+    assert run.returncode == 1
+    assert "no verify record" in run.stderr
+
+
+def test_partial_still_refuses_a_stale_build_sha_on_verify(tmp_path):
+    """Acceptance row 4: build present, verify present with a stale
+    build_sha -- --partial does not bypass the build_sha chain assertion."""
+    root = make_tenant(tmp_path, "build_valid")
+    configure_forge(root)
+    build_stale_verify_build_sha(root)
+
+    run = run_attavo(root, "attest", "--dry-run", "--partial")
+
+    assert run.returncode == 1
+    assert "build_sha" in run.stderr
