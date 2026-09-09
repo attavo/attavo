@@ -9,7 +9,7 @@
     attavo verify [N]
     attavo file-findings [N]
     attavo record-only
-    attavo attest [N]
+    attavo attest [--dry-run] [N]
 
 The doctor is the definition of done. It asserts three proofs against a
 tenant root and exits 1 until every proof holds:
@@ -103,9 +103,12 @@ under paths.records/N/, asserting that the item was specified, approved
 at a commit, built by one invocation, judged by another, and merged.
 attest never signs anything itself -- signed and signature default to
 false and null; a forge-specific template signs after this record is
-written and patches those two fields before committing it. See the
-attestation contract in the project's Phase 2, Lane 4 issue for the full
-rules it enforces.
+written and patches those two fields before committing it. --dry-run runs
+the same derivation and the same three assertions, on the same code path,
+and writes nothing -- meant for a pull request or merge group, before the
+merge that attest itself demands, so an incoherent chain refuses while a
+re-run is still possible. See the attestation contract in the project's
+Phase 2, Lane 4 issue for the full rules it enforces.
 """
 from __future__ import annotations
 
@@ -1384,7 +1387,40 @@ def derive_attest_items(root: Path, records_rel: str) -> tuple[set[str], str | N
     return items, None
 
 
+def check_attest_chain(records_dir: Path, item_id: str) -> tuple[dict, dict, dict, dict] | None:
+    """The three assertions attavo attest and attavo attest --dry-run both
+    refuse on: the latest spec, approval, build, and verify records for
+    item_id all exist, build's approval_sha names the latest approval --
+    a re-approval after a build must force a re-run of what changed -- and
+    verify's build_sha names that build. Prints the refusal both modes
+    print and returns None on any of them; returns the four latest records
+    (spec, approval, build, verify) when the chain holds."""
+    latest_spec = latest_record(records_dir, "spec")
+    latest_approval = latest_record(records_dir, "approval")
+    latest_build = latest_record(records_dir, "build")
+    latest_verify = latest_record(records_dir, "verify")
+    for stage, rec in (("spec", latest_spec), ("approval", latest_approval),
+                       ("build", latest_build), ("verify", latest_verify)):
+        if rec is None:
+            print(f"attavo attest: refused: no {stage} record for item {item_id}", file=sys.stderr)
+            return None
+
+    if latest_build.get("approval_sha") != latest_approval.get("sha"):
+        print("attavo attest: refused: build's approval_sha does not name the latest "
+              "approval; a re-approval after the build must force a re-run", file=sys.stderr)
+        return None
+    if latest_verify.get("build_sha") != latest_build.get("sha"):
+        print("attavo attest: refused: verify's build_sha does not name the latest build",
+              file=sys.stderr)
+        return None
+
+    return latest_spec, latest_approval, latest_build, latest_verify
+
+
 def cmd_attest(argv: list[str]) -> int:
+    dry_run = "--dry-run" in argv
+    argv = [a for a in argv if a != "--dry-run"]
+
     root = Path(".").resolve()
     m = read_manifest(root)
     if m is None:
@@ -1414,34 +1450,22 @@ def cmd_attest(argv: list[str]) -> int:
         item_id = next(iter(items))
 
     records_dir = root / records_rel / item_id
-    latest_spec = latest_record(records_dir, "spec")
-    latest_approval = latest_record(records_dir, "approval")
-    latest_build = latest_record(records_dir, "build")
-    latest_verify = latest_record(records_dir, "verify")
-    for stage, rec in (("spec", latest_spec), ("approval", latest_approval),
-                       ("build", latest_build), ("verify", latest_verify)):
-        if rec is None:
-            print(f"attavo attest: refused: no {stage} record for item {item_id}", file=sys.stderr)
-            return 1
-
-    # A re-approval after a build must force a re-run of what changed --
-    # this is the only place a script asserts it. build's approval_sha is
-    # bound at build time; a later approval invalidates that build's
-    # claim to be built against the tenant's current ruling.
-    if latest_build.get("approval_sha") != latest_approval.get("sha"):
-        print("attavo attest: refused: build's approval_sha does not name the latest "
-              "approval; a re-approval after the build must force a re-run", file=sys.stderr)
+    chain = check_attest_chain(records_dir, item_id)
+    if chain is None:
         return 1
-    if latest_verify.get("build_sha") != latest_build.get("sha"):
-        print("attavo attest: refused: verify's build_sha does not name the latest build",
-              file=sys.stderr)
-        return 1
+    latest_spec, latest_approval, latest_build, latest_verify = chain
 
-    head_sha = git(root, "rev-parse", "HEAD").strip()
     spec_path = latest_attempt_path(records_dir, "spec")
     approval_path = latest_attempt_path(records_dir, "approval")
     build_path = latest_attempt_path(records_dir, "build")
     verify_path = latest_attempt_path(records_dir, "verify")
+
+    if dry_run:
+        print(f"attavo attest --dry-run: item {item_id} coherent "
+              f"({spec_path.name}, {approval_path.name}, {build_path.name}, {verify_path.name})")
+        return 0
+
+    head_sha = git(root, "rev-parse", "HEAD").strip()
 
     record = {
         "sha": head_sha,

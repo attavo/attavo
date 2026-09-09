@@ -1,0 +1,54 @@
+# Template. Copy this file into your own .github/workflows/ and fill in
+# uses: <owner>/attavo@<tag> below. Not vendored or executed by Attavo's
+# own repository -- this is the tenant's workflow, not the product's.
+#
+# `attavo attest` runs on a push to main and refuses a merge whose build,
+# approval, and verify records do not chain -- correctly, but by the time
+# it runs, the merge has already happened and the re-run its refusal
+# demands is no longer available (issue #62). `attavo attest --dry-run`
+# is the same derivation and the same three assertions, on the same code
+# path, writing nothing; this workflow runs it on pull_request, against
+# the pull request's own merge ref, and again on merge_group, against the
+# exact tree the merge will produce -- so an incoherent chain refuses
+# while the branch can still be pushed to.
+#
+# This step is not folded into attavo-spec-gate.yml's job, for two
+# reasons: that job skips an ordinary pull request from any branch that
+# doesn't start with attavo/ (issue #12), and every step after its skip
+# step is skipped on a record-only commit. An approval push is a
+# record-only commit -- including a re-approval after a build, the exact
+# shape that broke the chain on tenant zero (approval-07, issue #62) --
+# so folding coherence into that job would skip the check on precisely
+# the commit most likely to need it. Coherence has neither restriction:
+# it runs on any pull request, record-only commit or not, and reports
+# its own required context so a tenant can gate the merge queue on it
+# without widening the spec-gate job's guards.
+#
+# actions/checkout@v4 takes no ref: -- the pull_request and merge_group
+# events default to the merge commit checkout already needs, the same
+# tree `attavo attest` reads git diff --name-only HEAD^1 HEAD against
+# after the real merge. fetch-depth: 0 keeps that first parent reachable.
+#
+# Read-only throughout: no app token is minted, nothing is pushed, and
+# permissions grants only contents: read -- attest --dry-run writes
+# nothing for this job to commit.
+name: Attavo coherence
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  merge_group:
+
+jobs:
+  coherence:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: <owner>/attavo@<tag>
+
+      - run: attavo attest --dry-run
