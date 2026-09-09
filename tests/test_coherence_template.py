@@ -1,7 +1,11 @@
 """templates/workflows/attavo-coherence.yml: attavo attest --dry-run,
 run on pull_request and merge_group, so an incoherent build/approval/verify
 chain refuses before the merge that attavo attest itself demands, while a
-re-run is still possible (issue #62, acceptance row 5).
+re-run is still possible (issue #62, acceptance row 5). On pull_request
+the run line also carries --partial (issue #67, acceptance row 5): the
+verify record a complete chain would need is the output of a stage that
+is itself waiting on this check, so only the merge group and main still
+demand the whole chain.
 
 Read-only throughout -- no app token, no push -- unlike the other three
 templates, which write a record back to the branch.
@@ -46,11 +50,17 @@ def test_no_step_mints_a_token_or_pushes():
     assert "secrets." not in text
 
 
-def test_run_step_is_exactly_attest_dry_run():
+def test_run_step_is_exactly_attest_dry_run_partial_by_event():
+    """Issue #67, acceptance row 5: --partial only on pull_request -- a
+    merge group still demands the whole chain, since nothing after it
+    can still supply a record it finds missing."""
     text = TEMPLATE.read_text()
     run_lines = [l.strip().removeprefix("- ") for l in text.splitlines()
                 if l.strip().removeprefix("- ").startswith("run:")]
-    assert run_lines == ["run: attavo attest --dry-run"]
+    assert run_lines == [
+        "run: attavo attest --dry-run "
+        "${{ github.event_name == 'pull_request' && '--partial' || '' }}"
+    ]
 
 
 def test_checkout_step_has_no_ref_and_full_history():

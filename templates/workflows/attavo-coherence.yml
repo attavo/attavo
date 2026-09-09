@@ -32,6 +32,16 @@
 # Read-only throughout: no app token is minted, nothing is pushed, and
 # permissions grants only contents: read -- attest --dry-run writes
 # nothing for this job to commit.
+#
+# On pull_request the run line also carries --partial (issue #67): the
+# verify record a complete chain would need is the output of `attavo
+# verify`, which itself waits on this check going green, so the two
+# checks deadlock without it. --partial treats a missing later record as
+# "not yet" rather than a refusal, while still enforcing that a build's
+# approval_sha names the latest approval and a verify's build_sha names
+# the latest build. merge_group and the push to main still demand the
+# whole chain -- nothing runs after either that could still supply a
+# record found missing there.
 name: Attavo coherence
 
 on:
@@ -51,4 +61,4 @@ jobs:
 
       - uses: <owner>/attavo@<tag>
 
-      - run: attavo attest --dry-run
+      - run: attavo attest --dry-run ${{ github.event_name == 'pull_request' && '--partial' || '' }}
