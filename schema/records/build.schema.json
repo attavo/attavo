@@ -6,9 +6,9 @@
   "additionalProperties": false,
   "required": [
     "sha", "start_sha", "spec_sha", "approval_sha", "at", "adapter",
-    "adapter_config", "adapter_version", "model", "model_version",
-    "iterations", "criteria", "selected_tests", "checks", "tokens",
-    "cost_usd", "wall_clock_s", "status", "refusal", "halted",
+    "adapter_config", "executor_identity", "adapter_version", "model",
+    "model_version", "iterations", "criteria", "selected_tests", "checks",
+    "tokens", "cost_usd", "wall_clock_s", "status", "refusal", "halted",
     "product_version", "product_pin"
   ],
   "properties": {
@@ -21,6 +21,16 @@
     "adapter_config": {
       "type": "object",
       "description": "Copied verbatim from [executor.<adapter>]; shape is the adapter's own contract, not this schema's."
+    },
+    "executor_identity": {
+      "type": "object",
+      "description": "Set by the product, never the tenant's git config (issue #33); every commit between start_sha and sha must carry it.",
+      "additionalProperties": false,
+      "required": ["name", "email"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "email": {"type": "string", "minLength": 1}
+      }
     },
     "adapter_version": {"type": ["string", "null"]},
     "model": {"type": ["string", "null"]},

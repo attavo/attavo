@@ -308,3 +308,52 @@ def test_build_logs_adapter_stderr_on_failure(tmp_path):
 
     log = (root / "records" / "1" / "build-01.log").read_text()
     assert "stderr from the failing adapter" in log
+
+
+def test_executor_commits_carry_the_executor_identity(tmp_path):
+    """Issue #33, acceptance 1. attavo build exports the executor
+    identity -- set by the product, never the tenant's git config -- as
+    GIT_AUTHOR_NAME/EMAIL and GIT_COMMITTER_NAME/EMAIL; every commit the
+    adapter makes between start_sha and its own sha carries it, and the
+    record names it under executor_identity. Regression: the specimen is
+    attavo/code-factory@e22fa85, an executor commit indistinguishable in
+    git log from the operator's own amendments beside it, because no
+    identity was exported for it to carry.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1")
+    assert run.returncode == 0
+
+    rec = latest_build(root)
+    assert rec["status"] == "pass"
+    assert rec["executor_identity"] == {
+        "name": "attavo executor (fixture)",
+        "email": "executor+fixture@attavo.invalid",
+    }
+
+    log = subprocess.run(
+        ["git", "-C", str(root), "log", "--format=%an/%ae",
+         f"{rec['start_sha']}..{rec['sha']}"],
+        capture_output=True, text=True, check=True).stdout
+    authors = {l for l in log.splitlines() if l.strip()}
+    assert authors == {"attavo executor (fixture)/executor+fixture@attavo.invalid"}
+
+
+def test_build_refuses_a_commit_not_authored_by_the_executor(tmp_path):
+    """Issue #33, acceptance 2. A commit whose author is not the executor
+    identity build exported -- however it got there -- refuses the build
+    the same class as a write outside the claims: the identity is only
+    evidence if a foreign commit cannot pass through build unremarked.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1",
+                     env={"ATTAVO_FIXTURE_FOREIGN_COMMIT": "1"})
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    assert rec["status"] == "refused"
+    assert "not authored by the executor" in rec["refusal"]

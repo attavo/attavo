@@ -17,6 +17,7 @@ the tenant's `attavo/adapters/`, then under this product's `adapters/`.
 - `ATTAVO_STAGE` — `"build"` or `"verify"`, which invocation this is. An adapter that supports both branches on it; one that only builds may ignore it.
 - `ATTAVO_DIFF` — verify only: a file holding the diff since the build's approval.
 - `ATTAVO_BUILD_RECORD` — verify only: the path to the `build-NN.json` being verified.
+- `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` — build only: the executor's identity (issue #33), set by the product and never the tenant's git config. An adapter must not override these for the commits it makes; a commit build finds not carrying this identity is refused.
 
 ## Output
 

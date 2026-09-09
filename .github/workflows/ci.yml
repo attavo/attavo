@@ -18,11 +18,8 @@ jobs:
           --deselect tests/test_doctor.py::test_every_gate_rejects
           --deselect tests/test_doctor.py::test_one_item_traversed_every_stage
           --deselect tests/test_doctor.py::test_no_commit_lacks_a_record
-          --deselect "tests/test_executor_conformance.py::test_situation_8_commits_carry_the_attavo_build_identity[claude-code]"
       - name: doctor's three proofs (expected to still fail against this repo's own root)
         run: python3 -m pytest tests/test_doctor.py -q -k "every_gate_rejects or one_item_traversed_every_stage or no_commit_lacks_a_record" || true
-      - name: executor conformance situation 8 (expected to still fail; issue #33 turns it green)
-        run: python3 -m pytest tests/test_executor_conformance.py -q -k "test_situation_8_commits_carry_the_attavo_build_identity" || true
 
   action-self-check:
     runs-on: ubuntu-latest
