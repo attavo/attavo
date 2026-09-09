@@ -907,7 +907,14 @@ def read_forge_checks(root: Path, checks_command: str, sha: str) -> dict:
         parts = line.rsplit(" ", 1)
         if len(parts) == 2:
             conclusions.append({"name": parts[0], "conclusion": parts[1]})
-    ok = run.returncode == 0 and all(c["conclusion"] in FORGE_OK_CONCLUSIONS for c in conclusions)
+    # A commit the forge has no record of is not green -- it is unread.
+    # The executor's own commit is exactly this: the forge attaches
+    # checks to a pull request's head, and that commit stops being the
+    # head the moment a record commit lands on top of it. all() over an
+    # empty list is True, which is why this is spelled out rather than
+    # implied by the loop above.
+    ok = run.returncode == 0 and bool(conclusions) and all(
+        c["conclusion"] in FORGE_OK_CONCLUSIONS for c in conclusions)
     return {"command": checks_command, "sha": sha, "conclusions": conclusions}, ok
 
 
@@ -945,11 +952,18 @@ def cmd_verify(argv: list[str]) -> int:
     build_sha = latest_build["sha"]
     build_record_path = latest_attempt_path(item_records_dir, "build")
     started = time.monotonic()
-    forge_checks, forge_ok = read_forge_checks(root, checks_command, build_sha)
+    head_sha = git(root, "rev-parse", "HEAD").strip()
+    # The forge attaches checks to a pull request's head, not to the
+    # executor's own commit -- that commit stops being the head the
+    # moment a record commit lands on top of it (issue #44). Reading the
+    # forge on head_sha is what the forge actually checked and what will
+    # be merged; build_sha and forge_checks["sha"] can differ, and both
+    # are kept on the record rather than one sha serving two purposes.
+    forge_checks, forge_ok = read_forge_checks(root, checks_command, head_sha)
 
     if not forge_ok:
         record = {
-            "sha": git(root, "rev-parse", "HEAD").strip(),
+            "sha": head_sha,
             "build_sha": build_sha,
             "build_record": build_record_path.stem if build_record_path else None,
             "approval_sha": latest_build.get("approval_sha"),
@@ -1023,7 +1037,7 @@ def cmd_verify(argv: list[str]) -> int:
         status_out = "pass"
 
     record = {
-        "sha": git(root, "rev-parse", "HEAD").strip(),
+        "sha": head_sha,
         "build_sha": build_sha,
         "build_record": build_record_path.stem if build_record_path else None,
         "approval_sha": approval_sha,
