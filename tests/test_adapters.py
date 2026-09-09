@@ -93,7 +93,7 @@ def dry_run(tmp_path: Path, config: dict | None = None,
     run = subprocess.run([str(CLAUDE_CODE_RUN)], capture_output=True, text=True,
                          check=False, env=env)
     assert run.returncode == 0, run.stderr
-    return json.loads(run.stdout)
+    return json.loads(run.stdout)["argv"]
 
 
 def run_with_response(tmp_path: Path, response: dict,

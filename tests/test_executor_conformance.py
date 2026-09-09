@@ -8,17 +8,33 @@ conformance.json, not by copying a test file.
 
 Each adapter under adapters/ (except NOT_AN_EXECUTOR) declares its own
 conformance.json: {"dry_run_env": "<VAR>", "response_env": "<VAR>",
-"tool_binary": "<name>", "situations": {"<name>": <canned response>}}.
+"tool_binary": "<name>", "success_script": "<shell text>",
+"reports": ["<field>", ...], "situations": {"<name>": <canned response>}}.
 dry_run_env and response_env are the two hooks tests/test_adapters.py
 already exercised for claude-code (issues #24, #30, #34); tool_binary is
-new here -- the name of the executable the adapter shells out to when
-neither hook is set, needed to fake a non-zero exit from it (situation 5)
-without a model in the loop.
+the name of the executable the adapter shells out to when neither hook
+is set, needed to fake a non-zero exit from it (situation 5) without a
+model in the loop. success_script and reports are issue #41's, once a
+second adapter (codex) proved the first two claude-code-shaped: a
+canned "done" response's shape and a fake tool's own successful output
+are each adapter's private contract, not this file's assumption.
+
+dry_run()'s own envelope -- {"argv", "instruction", "schema"} -- is
+issue #41's too. argv alone was claude-code's shape: its instruction
+lives in argv's own "-p" value, but codex delivers its instruction on
+stdin, where argv carries none at all, so the suite reads "instruction"
+and "schema" directly rather than parsing either out of argv.
 
 Situation 8: a commit the adapter makes carries the identity attavo build
 exports (issue #33) -- checked by faking the adapter's own tool_binary on
 PATH, the same technique situation 5 uses, so the fake tool can commit
-for real inside a throwaway repo without a model in the loop.
+for real inside a throwaway repo without a model in the loop. Its own
+canned "success_script" (above) is what lets this generalize past
+claude-code's single-JSON-blob response shape.
+
+Situation 12: vendor independence (2026-09-09 ruling) -- an adapter's
+declared "reports" fields must actually be non-null on a "done" run, so
+a silent measurement gap fails the suite instead of writing one.
 
 Run: python3 -m pytest tests/test_executor_conformance.py -q
 """
@@ -75,6 +91,11 @@ def base_env(tmp_path: Path) -> dict:
     spec_dir = FIXTURES / "build_valid" / "specs" / "1"
     env = dict(os.environ)
     env.pop("ATTAVO_CHECKS_COMMAND", None)
+    # codex's own auth guard (issue #41) refuses "subscription" (the
+    # default) when this is set -- absent here regardless of what the
+    # ambient shell running these tests happens to carry, so the suite
+    # never depends on the operator's own environment.
+    env.pop("OPENAI_API_KEY", None)
     env.update({
         "ATTAVO_SPEC_DIR": str(spec_dir),
         "ATTAVO_RECORDS_DIR": str(tmp_path / "records"),
@@ -82,6 +103,9 @@ def base_env(tmp_path: Path) -> dict:
         "ATTAVO_BRANCH": "attavo/1-example",
         "ATTAVO_ITERATION": "1",
         "ATTAVO_FEEDBACK": str(tmp_path / "feedback.txt"),
+        # codex requires [executor.codex].model (issue #41); harmless
+        # for claude-code, which treats every key here as optional.
+        "ATTAVO_ADAPTER_CONFIG": json.dumps({"model": "test-model"}),
     })
     return env
 
@@ -92,7 +116,10 @@ def run_adapter(adapter_name: str, env: dict, cwd: Path | None = None) -> subpro
                           check=False, env=env, cwd=str(cwd) if cwd else None)
 
 
-def dry_run(adapter_name: str, tmp_path: Path, extra_env: dict | None = None) -> list[str]:
+def dry_run(adapter_name: str, tmp_path: Path, extra_env: dict | None = None) -> dict:
+    """{"argv", "instruction", "schema"}: the instruction and the schema
+    named separately from argv, because a second adapter (issue #41)
+    delivers the instruction on stdin, where argv itself carries none."""
     manifest = CONFORMANCE[adapter_name]
     env = base_env(tmp_path)
     env[manifest["dry_run_env"]] = "1"
@@ -211,10 +238,10 @@ def test_situation_6_transcript_non_empty_on_every_path(adapter_name, tmp_path):
 def test_situation_7_checks_command_in_the_invocation(adapter_name, tmp_path):
     command = "python3 bin/factory-lane check --base origin/main"
     with_checks = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_CHECKS_COMMAND": command})
-    assert command in json.dumps(with_checks)
+    assert command in with_checks["instruction"]
 
     without_checks = dry_run(adapter_name, tmp_path)
-    assert command not in json.dumps(without_checks)
+    assert command not in without_checks["instruction"]
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
@@ -244,14 +271,12 @@ def test_situation_8_commits_carry_the_attavo_build_identity(adapter_name, tmp_p
     fake_bin = tmp_path / "fakebin"
     fake_bin.mkdir()
     fake_tool = fake_bin / tool_binary
-    fake_tool.write_text(
-        "#!/bin/sh\n"
-        "git commit -q --allow-empty -m 'adapter commit'\n"
-        "printf '{\"is_error\": false, \"structured_output\": "
-        "{\"status\": \"done\", \"question\": null}, "
-        "\"usage\": {\"input_tokens\": 1, \"output_tokens\": 1}, "
-        "\"modelUsage\": {\"claude-sonnet-5\": "
-        "{\"inputTokens\": 1, \"outputTokens\": 1}}}\\n'\n")
+    # A successful invocation's own shape is per-adapter (claude-code's
+    # single JSON blob vs. codex's JSONL-plus-output-file), so each
+    # adapter declares its own script rather than this file assuming
+    # one -- assuming claude-code's shape here was itself the
+    # claude-code-ism issue #41 found building a second adapter.
+    fake_tool.write_text(manifest["success_script"])
     fake_tool.chmod(0o755)
 
     identity_name = f"attavo executor ({adapter_name})"
@@ -279,9 +304,7 @@ def test_situation_9_verify_stage_uses_a_findings_schema(adapter_name, tmp_path)
     where ATTAVO_STAGE was read nowhere and every invocation got the
     build schema.
     """
-    cmd = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_STAGE": "verify"})
-    schema_index = cmd.index("--json-schema") + 1
-    schema = json.loads(cmd[schema_index])
+    schema = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_STAGE": "verify"})["schema"]
     assert "findings" in schema.get("properties", {})
     assert "tests_named" in schema.get("properties", {})
 
@@ -295,8 +318,7 @@ def test_situation_10_verify_names_approval_commit_divergence_as_reportable(adap
     between issue #40 and issue #46. Red at d04b484, where
     verify_instruction() never said this.
     """
-    cmd = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_STAGE": "verify"})
-    instruction = cmd[cmd.index("-p") + 1]
+    instruction = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_STAGE": "verify"})["instruction"]
     assert "approval commit" in instruction
     assert "reportable" in instruction
 
@@ -308,7 +330,28 @@ def test_situation_11_verify_defines_severity_as_derived(adapter_name, tmp_path)
     judged. Red at d04b484, where severity was named once in the
     finding fields and defined nowhere.
     """
-    cmd = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_STAGE": "verify"})
-    instruction = cmd[cmd.index("-p") + 1]
+    instruction = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_STAGE": "verify"})["instruction"]
     assert "severity" in instruction
     assert "derived rather than judged" in instruction
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_12_adapter_supplies_every_field_it_declares(adapter_name, tmp_path):
+    """Vendor independence (2026-09-09 ruling). conformance.json's
+    "reports" names the fields this adapter can supply with a real
+    value -- an adapter claiming a field and returning null for it is a
+    silent measurement gap, not a legitimate absence, and this fails
+    the suite instead of writing one. Dollars are never summed across
+    executors; absent is null, never zero or blank -- this situation is
+    what makes an adapter's null trustworthy as "not reported by this
+    executor" rather than "forgot to report it".
+    """
+    manifest = CONFORMANCE[adapter_name]
+    reports = manifest.get("reports", [])
+    run = run_situation(adapter_name, "done", tmp_path)
+    assert run.returncode == 0, run.stderr
+    report = json.loads(run.stdout.splitlines()[-1])
+    for field in reports:
+        assert report.get(field) is not None, (
+            f"{adapter_name} declares {field!r} in its reports but a done "
+            f"run's own report line carries none")

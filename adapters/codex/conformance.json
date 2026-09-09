@@ -1,0 +1,66 @@
+{
+  "dry_run_env": "ATTAVO_ADAPTER_DRY_RUN",
+  "response_env": "ATTAVO_ADAPTER_RESPONSE_FILE",
+  "tool_binary": "codex",
+  "reports": ["tokens"],
+  "success_script": "#!/bin/sh\ngit commit -q --allow-empty -m 'adapter commit'\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--output-last-message\" ] || [ \"$prev\" = \"-o\" ]; then\n    out=\"$arg\"\n  fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then\n  printf '{\"status\":\"done\",\"question\":null}' > \"$out\"\nfi\nprintf '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"reasoning_output_tokens\":0}}\\n'\n",
+  "situations": {
+    "done": {
+      "events": [
+        {"type": "thread.started", "thread_id": "conformance-done"},
+        {"type": "turn.started"},
+        {"type": "item.completed", "item": {"id": "item_0", "type": "agent_message", "text": "ok"}},
+        {"type": "turn.completed", "usage": {"input_tokens": 15272, "cached_input_tokens": 12160, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}}
+      ],
+      "final": {"status": "done", "question": null},
+      "exit_code": 0
+    },
+    "is_error": {
+      "events": [
+        {"type": "thread.started", "thread_id": "conformance-is-error"},
+        {"type": "turn.started"},
+        {"type": "error", "message": "Reconnecting... 5/5 (unexpected status 401 Unauthorized)"},
+        {"type": "turn.failed", "error": {"message": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header"}}
+      ],
+      "final": null,
+      "exit_code": 1
+    },
+    "no_structured_output": {
+      "events": [
+        {"type": "thread.started", "thread_id": "conformance-no-output"},
+        {"type": "turn.started"},
+        {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "reasoning_output_tokens": 0}}
+      ],
+      "final": null,
+      "exit_code": 0
+    },
+    "question_null": {
+      "events": [
+        {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "reasoning_output_tokens": 0}}
+      ],
+      "final": {"status": "question", "question": null},
+      "exit_code": 0
+    },
+    "question_empty": {
+      "events": [
+        {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "reasoning_output_tokens": 0}}
+      ],
+      "final": {"status": "question", "question": ""},
+      "exit_code": 0
+    },
+    "question_short": {
+      "events": [
+        {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "reasoning_output_tokens": 0}}
+      ],
+      "final": {"status": "question", "question": "placeholder"},
+      "exit_code": 0
+    },
+    "question_long": {
+      "events": [
+        {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "reasoning_output_tokens": 0}}
+      ],
+      "final": {"status": "question", "question": "The criteria do not say which of two conflicting rulings applies here."},
+      "exit_code": 0
+    }
+  }
+}
