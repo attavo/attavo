@@ -96,8 +96,9 @@ that build -- a re-approval after a build must force a re-run of what
 changed. With no N given it derives the item from the record paths
 HEAD's merge commit touched under paths.records/<N>/, not from a branch
 name, which a squash merge discards and which names a forge's convention
-the product does not know; zero items derived, or more than one, is a
-refusal naming what it found. It writes the next attestation-NN.json
+the product does not know; more than one item derived is a refusal
+naming what it found. Zero is not a defect -- not every merge is an item
+merge -- exit 0, nothing written. It writes the next attestation-NN.json
 under paths.records/N/, asserting that the item was specified, approved
 at a commit, built by one invocation, judged by another, and merged.
 attest never signs anything itself -- signed and signature default to
@@ -1305,15 +1306,18 @@ def cmd_record_only(argv: list[str]) -> int:
 
 # --- attest: the signed envelope over one item's whole traversal ---
 
-def derive_attest_item(root: Path, records_rel: str) -> tuple[str | None, str | None]:
-    """The item id from the merge commit's own first-parent diff -- record
+def derive_attest_items(root: Path, records_rel: str) -> tuple[set[str], str | None]:
+    """The item ids from the merge commit's own first-parent diff -- record
     paths under records_rel/<N>/, not a branch name, which a squash merge
     discards and which names a forge's convention the product does not
-    know. Returns (item_id, None) on exactly one, else (None, reason)."""
+    know. Returns (items, None), else (empty set, reason) only when the
+    diff itself could not be read -- zero items found is not an error
+    here (issue #58): not every merge is an item merge, and the caller
+    decides what zero, one, or more than one means."""
     try:
         changed = git(root, "diff", "--name-only", "HEAD^1", "HEAD").splitlines()
     except RuntimeError as exc:
-        return None, f"git: {exc}"
+        return set(), f"git: {exc}"
     prefix = records_rel.rstrip("/") + "/"
     items: set[str] = set()
     for p in changed:
@@ -1322,12 +1326,7 @@ def derive_attest_item(root: Path, records_rel: str) -> tuple[str | None, str | 
             item = rest.split("/", 1)[0]
             if item:
                 items.add(item)
-    if len(items) == 1:
-        return next(iter(items)), None
-    if not items:
-        return None, "no item derived from the merge commit's record paths"
-    return None, (f"{len(items)} items derived from the merge commit's record paths: "
-                  f"{', '.join(sorted(items))}")
+    return items, None
 
 
 def cmd_attest(argv: list[str]) -> int:
@@ -1340,10 +1339,24 @@ def cmd_attest(argv: list[str]) -> int:
     records_rel = m["paths"]["records"]
     item_id = argv[0] if argv else None
     if item_id is None:
-        item_id, reason = derive_attest_item(root, records_rel)
-        if item_id is None:
-            print(f"attavo attest: refused: {reason}", file=sys.stderr)
+        items, err = derive_attest_items(root, records_rel)
+        if err:
+            print(f"attavo attest: refused: {err}", file=sys.stderr)
             return 1
+        # Not every merge is an item merge -- a merge that carries no item
+        # at all is an ordinary fact, not a defect (issue #58); the
+        # attest template runs this on every push and has nothing to
+        # sign or commit when nothing was attested, and its existing
+        # `if:` guards already read this step's own exit code.
+        if not items:
+            print("attavo attest: no item derived from the merge commit's record paths; "
+                  "nothing to attest")
+            return 0
+        if len(items) > 1:
+            print(f"attavo attest: refused: {len(items)} items derived from the merge "
+                  f"commit's record paths: {', '.join(sorted(items))}", file=sys.stderr)
+            return 1
+        item_id = next(iter(items))
 
     records_dir = root / records_rel / item_id
     latest_spec = latest_record(records_dir, "spec")
