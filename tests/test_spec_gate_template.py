@@ -73,6 +73,19 @@ def test_template_pushes_on_refusal():
     assert "continue-on-error" not in gate_block
 
 
+def test_template_declares_merge_group_alongside_pull_request():
+    """Issue #62, acceptance row 6. The job's own if: is unchanged, so a
+    merge group -- with no attavo/N-* head_ref -- skips the job and
+    satisfies the required context there the same way an ordinary pull
+    request that isn't a work item's branch does (issue #12)."""
+    text = TEMPLATE.read_text()
+    lines = text.splitlines()
+    on_idx = next(i for i, l in enumerate(lines) if l.strip() == "on:")
+    on_body = "\n".join(lines[on_idx + 1: on_idx + 4])
+    assert "pull_request:" in on_body
+    assert "merge_group:" in on_body
+
+
 def test_job_guards_on_the_attavo_branch_prefix():
     """A pull_request event fires this workflow on every PR, not just ones
     from a work item's attavo/N-* branch. Without a branch guard, a PR from
