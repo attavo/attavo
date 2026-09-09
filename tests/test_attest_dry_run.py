@@ -10,6 +10,7 @@ invocation here failed as an unrecognized item id or subcommand argument.
 
 Run: python3 -m pytest tests -q
 """
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -111,9 +112,15 @@ def build_missing_verify_record(root: Path) -> None:
 
 
 def build_stale_verify_build_sha(root: Path) -> None:
+    """A second build record, minted by hand rather than a real re-run --
+    the fixture adapter's build is not idempotent against its own tree --
+    naming a sha the existing verify record does not."""
     git(root, "checkout", "-b", "attavo/1-x")
     traverse_item(root, "1")
-    assert run_attavo(root, "build", "1").returncode == 0
+    records_dir = root / "records" / "1"
+    build_01 = json.loads((records_dir / "build-01.json").read_text())
+    build_01["sha"] = "f" * 40
+    (records_dir / "build-02.json").write_text(json.dumps(build_01))
     commit_all(root, "attavo: second build record for #1")
     merge_into_main(root, "attavo/1-x")
 
@@ -178,7 +185,8 @@ def test_dry_run_does_not_read_ci_runs(tmp_path, monkeypatch):
     traverse_item(root, "1")
     merge_into_main(root, "attavo/1-x")
 
+    before = records_snapshot(root)
     monkeypatch.setenv("ATTAVO_CI_RUNS", "7")
     run = run_attavo(root, "attest", "--dry-run")
     assert run.returncode == 0, run.stderr
-    assert records_snapshot(root) == []
+    assert records_snapshot(root) == before
