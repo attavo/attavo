@@ -253,6 +253,48 @@ def last_commit_touching(root: Path, relpath: str) -> str | None:
 
 # --- record files: <stage>-NN.json, one per attempt, never overwritten ---
 
+SCHEMA_RECORDS_DIR = PRODUCT_ROOT / "schema" / "records"
+
+
+def stage_schema(stage: str) -> dict:
+    """schema/records/<stage>.schema.json -- this repository's own
+    declaration of that stage's record shape (issue #60). The only
+    artifact the outbound contract needs; there is no accessor for it
+    beyond reading the file."""
+    return json.loads((SCHEMA_RECORDS_DIR / f"{stage}.schema.json").read_text())
+
+
+def schema_id_version(schema: dict) -> int:
+    """The trailing integer of a schema's $id (".../records/build/2" -> 2)
+    -- the single place a record shape's version lives. write_record reads
+    this at call time rather than carrying its own copy, so the version it
+    stamps cannot drift from what the schema declares (issue #60)."""
+    return int(schema["$id"].rsplit("/", 1)[-1])
+
+
+class RecordItemMismatch(RuntimeError):
+    """A record's item field disagrees with the directory it was read
+    from (issue #60, acceptance 5) -- a misfiled or copied record, refused
+    rather than trusted."""
+
+
+def _load_record(path: Path, item_id: str) -> dict:
+    """The one place in this repository that turns a record file's bytes
+    into a dict (issue #60, acceptance 6). Defaults record_version to 1
+    when absent -- version 1 is every record written before this release
+    and is never migrated -- and fills item from the directory when
+    absent; refuses when a present item disagrees with it."""
+    data = json.loads(path.read_text())
+    data.setdefault("record_version", 1)
+    item = data.get("item")
+    if item is None:
+        data["item"] = item_id
+    elif item != item_id:
+        raise RecordItemMismatch(
+            f"{path}: item {item!r} disagrees with its directory {item_id!r}")
+    return data
+
+
 def parse_attempts(records_dir: Path, stage: str) -> dict[int, dict]:
     attempts: dict[int, dict] = {}
     if not records_dir.is_dir():
@@ -262,7 +304,7 @@ def parse_attempts(records_dir: Path, stage: str) -> dict[int, dict]:
         if not m or m.group(1) != stage:
             continue
         try:
-            attempts[int(m.group(2))] = json.loads(f.read_text())
+            attempts[int(m.group(2))] = _load_record(f, records_dir.name)
         except json.JSONDecodeError:
             continue
     return attempts
@@ -286,18 +328,31 @@ def latest_attempt_path(records_dir: Path, stage: str) -> Path | None:
     return records_dir / f"{stage}-{max(attempts):02d}.json"
 
 
-def write_record(records_dir: Path, stage: str, record: dict, m: dict) -> Path:
-    """Every record gains product_version (what ran, derived here) and
-    product_pin (what the tenant declared, copied verbatim from the
-    manifest, or null when the manifest carries no [attavo] table) --
-    recorded, never enforced (issue #49). A manifest missing the table
-    is an absent fact, not a crash: this is the one caller of write_record
-    that must not raise on a shape the manifest schema forbids but
-    tomllib.load happily returns."""
+def write_record(records_dir: Path, stage: str, record: dict, m: dict, item: str) -> Path:
+    """Every record gains record_version (this stage schema's own $id
+    version -- issue #60) and item (verbatim from the caller, matching the
+    record's directory segment), plus product_version (what ran, derived
+    here) and product_pin (what the tenant declared, copied verbatim from
+    the manifest, or null when the manifest carries no [attavo] table) --
+    the latter two recorded, never enforced (issue #49). A manifest
+    missing the table is an absent fact, not a crash: this is the one
+    caller of write_record that must not raise on a shape the manifest
+    schema forbids but tomllib.load happily returns.
+
+    Refuses (raises ValueError) a record carrying a key this stage's
+    schema does not declare -- the declared key set enforced with the
+    standard library, not a jsonschema import: bin/attavo is a single
+    script a tenant pins, and a runtime dependency changes installation."""
     records_dir.mkdir(parents=True, exist_ok=True)
     nn = next_attempt_number(records_dir, stage)
-    record = {**record, "product_version": product_version(),
+    schema = stage_schema(stage)
+    record = {**record, "record_version": schema_id_version(schema), "item": item,
+              "product_version": product_version(),
               "product_pin": (m.get("attavo") or {}).get("version")}
+    undeclared = set(record) - set(schema.get("properties", {}))
+    if undeclared:
+        raise ValueError(f"write_record: {stage} record carries key(s) its schema does not "
+                         f"declare: {', '.join(sorted(undeclared))}")
     path = records_dir / f"{stage}-{nn:02d}.json"
     path.write_text(json.dumps(record, indent=2) + "\n")
     return path
@@ -316,7 +371,7 @@ def load_records(records_dir: Path) -> dict[str, dict[str, dict]]:
                 continue
             stage, n = m.group(1), int(m.group(2))
             try:
-                data = json.loads(rec.read_text())
+                data = _load_record(rec, item_dir.name)
             except json.JSONDecodeError:
                 continue
             by_stage.setdefault(stage, {})[n] = data
@@ -544,7 +599,7 @@ def cmd_spec_gate(argv: list[str]) -> int:
                   "at": now_iso(), "status": "approved",
                   "approval_sha": latest_approval.get("sha") if latest_approval else None,
                   "criteria": [], "refusal": None}
-        write_record(records_dir, "spec", record, m)
+        write_record(records_dir, "spec", record, m, item_id)
         print("attavo spec-gate: approved (no criteria run)")
         return 0
 
@@ -609,7 +664,7 @@ def cmd_spec_gate(argv: list[str]) -> int:
               "spec_sha": spec_sha,
               "at": now_iso(), "status": status, "approval_sha": None,
               "criteria": results, "refusal": refusal}
-    write_record(records_dir, "spec", record, m)
+    write_record(records_dir, "spec", record, m, item_id)
 
     if refusal:
         print(f"attavo spec-gate: refused: {refusal}")
@@ -672,7 +727,7 @@ def cmd_approve(argv: list[str]) -> int:
 
     record = {"sha": git(root, "rev-parse", "HEAD").strip(), "spec_sha": spec_sha_now,
               "approved_by": by, "at": now_iso()}
-    write_record(records_dir, "approval", record, m)
+    write_record(records_dir, "approval", record, m, item_id)
     print(f"attavo approve: item {item_id} approved by {by}")
     return 0
 
@@ -1023,7 +1078,7 @@ def cmd_build(argv: list[str]) -> int:
         "refusal": refusal,
         "halted": halted,
     }
-    record_path = write_record(item_records_dir, "build", record, m)
+    record_path = write_record(item_records_dir, "build", record, m, item_id)
     record_path.with_suffix(".log").write_text("\n".join(transcripts))
 
     print(f"attavo build: {status_out} ({record_path.name})")
@@ -1125,7 +1180,7 @@ def cmd_verify(argv: list[str]) -> int:
             "wall_clock_s": round(time.monotonic() - started, 3),
             "status": "returned",
         }
-        record_path = write_record(item_records_dir, "verify", record, m)
+        record_path = write_record(item_records_dir, "verify", record, m, item_id)
         print(f"attavo verify: returned ({record_path.name}); the forge checks are not green")
         return 0
 
@@ -1220,7 +1275,7 @@ def cmd_verify(argv: list[str]) -> int:
         "wall_clock_s": round(time.monotonic() - started, 3),
         "status": status_out,
     }
-    record_path = write_record(item_records_dir, "verify", record, m)
+    record_path = write_record(item_records_dir, "verify", record, m, item_id)
     record_path.with_suffix(".log").write_text(transcript)
 
     print(f"attavo verify: {status_out} ({record_path.name})")
@@ -1391,7 +1446,6 @@ def cmd_attest(argv: list[str]) -> int:
     record = {
         "sha": head_sha,
         "merge_sha": head_sha,
-        "item": item_id,
         "spec": spec_path.stem if spec_path else None,
         "spec_sha": latest_spec.get("sha"),
         "approval": approval_path.stem if approval_path else None,
@@ -1422,7 +1476,7 @@ def cmd_attest(argv: list[str]) -> int:
         "signed": False,
         "signature": None,
     }
-    record_path = write_record(records_dir, "attestation", record, m)
+    record_path = write_record(records_dir, "attestation", record, m, item_id)
     print(f"attavo attest: item {item_id} attested ({record_path.name})")
     return 0
 

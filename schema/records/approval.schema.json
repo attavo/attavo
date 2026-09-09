@@ -1,11 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/approval/1",
+  "$id": "https://attavo.dev/schema/records/approval/2",
   "title": "attavo approve record (approval-NN.json)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["sha", "spec_sha", "approved_by", "at", "product_version", "product_pin"],
+  "required": ["record_version", "item", "sha", "spec_sha", "approved_by", "at", "product_version", "product_pin"],
   "properties": {
+    "record_version": {"type": "integer", "minimum": 1},
+    "item": {"type": "string", "minLength": 1},
     "sha": {"type": "string", "minLength": 1},
     "spec_sha": {"type": ["string", "null"]},
     "approved_by": {"type": "string", "minLength": 1},

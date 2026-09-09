@@ -5,6 +5,8 @@ records; extend it, don't duplicate it, as new record shapes land (issue
 
 Run: python3 -m pytest tests -q
 """
+import importlib.machinery
+import importlib.util
 import json
 import os
 import shutil
@@ -13,6 +15,7 @@ import sys
 from pathlib import Path
 
 import jsonschema
+import pytest
 
 from helpers import commit_all, make_tenant
 
@@ -28,6 +31,17 @@ def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess:
 
 def load_schema(stage: str) -> dict:
     return json.loads((SCHEMAS_DIR / f"{stage}.schema.json").read_text())
+
+
+def attavo_module():
+    """bin/attavo imported in-process, for the write_record/load_records
+    unit tests below that a CLI invocation cannot provoke (there is no
+    command-line path to a record carrying a key its schema forbids)."""
+    loader = importlib.machinery.SourceFileLoader("attavo_under_test", str(ATTAVO))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 def test_records_match_their_shapes(tmp_path):
@@ -96,6 +110,16 @@ def test_records_match_their_shapes(tmp_path):
         assert "product_version" in schema["required"], stage
         assert "product_pin" in schema["required"], stage
 
+    # issue #60, acceptance 1: every record write_record writes carries
+    # record_version -- equal to that stage schema's own $id version, the
+    # single place the version lives -- and item, matching the directory
+    # it was written under.
+    for path in records:
+        stage = path.stem.split("-")[0]
+        rec = json.loads(path.read_text())
+        assert rec["record_version"] == int(schemas[stage]["$id"].rsplit("/", 1)[-1]), stage
+        assert rec["item"] == "1", stage
+
 
 def test_records_carry_product_version_distinct_from_pin(tmp_path):
     """Issue #49: a record names both what ran (product_version, derived
@@ -140,10 +164,13 @@ def test_product_version_unknown_when_product_root_is_not_a_git_repo(tmp_path):
     placed under a fresh, non-git tmp_path reproduces PRODUCT_ROOT with no
     .git without needing an actual GitHub Actions run. Red today: the
     KeyError this reproduces is a RuntimeError from git(), uncaught, and
-    no record is written at all."""
+    no record is written at all. schema/ is copied alongside bin/, same as
+    the real action extraction: write_record reads schema/records/<stage>.schema.json
+    from PRODUCT_ROOT (issue #60), which the action ships beside bin/."""
     product_bin = tmp_path / "product" / "bin"
     product_bin.mkdir(parents=True)
     shutil.copy(ATTAVO, product_bin / "attavo")
+    shutil.copytree(ROOT / "schema", tmp_path / "product" / "schema")
 
     root = make_tenant(tmp_path, "build_valid", name="tenant")
 
@@ -203,3 +230,151 @@ def test_manifest_schema_describes_checks():
     with_checks = base_manifest()
     with_checks["checks"] = {"command": "python3 bin/factory-lane check --base origin/main"}
     jsonschema.validate(with_checks, schema)
+
+
+# --- issue #60: records declare their own record_version and item ---
+
+def test_write_record_refuses_a_key_its_schema_does_not_declare(tmp_path):
+    """Acceptance 2: write_record enforces the declared key set at write
+    time -- a record carrying a key its stage's schema does not list under
+    "properties" is refused, and nothing is written. Enforced with the
+    standard library (set difference against the schema's own properties),
+    not a jsonschema import into bin/attavo -- it is a single script a
+    tenant pins, and a runtime dependency changes installation."""
+    attavo = attavo_module()
+    schema = load_schema("spec")
+    record = {k: None for k in schema["properties"]
+             if k not in ("record_version", "item", "product_version", "product_pin")}
+    record["unexpected_key"] = "not in the schema"
+
+    records_dir = tmp_path / "records" / "1"
+    with pytest.raises(ValueError, match="unexpected_key"):
+        attavo.write_record(records_dir, "spec", record, {"attavo": {}}, "1")
+    assert list(records_dir.glob("spec-*.json")) == []
+
+
+def test_write_record_stamps_record_version_from_the_schemas_id(tmp_path):
+    """Acceptance/correction point 2: record_version is read from the
+    stage schema's own $id at call time rather than carried separately in
+    bin/attavo, so it cannot drift from what the schema declares. Point
+    write_record at a copy of the real build schema whose $id is bumped
+    past what ships today, and confirm the written record follows it."""
+    attavo = attavo_module()
+    schema_dir = tmp_path / "schema"
+    (schema_dir / "records").mkdir(parents=True)
+    build_schema = load_schema("build")
+    bumped = json.loads(json.dumps(build_schema))
+    stem, _, tail = bumped["$id"].rpartition("/")
+    bumped["$id"] = f"{stem}/{int(tail) + 1}"
+    (schema_dir / "records" / "build.schema.json").write_text(json.dumps(bumped))
+
+    real_schema_dir = attavo.SCHEMA_RECORDS_DIR
+    attavo.SCHEMA_RECORDS_DIR = schema_dir / "records"
+    try:
+        record = {k: None for k in build_schema["properties"]
+                 if k not in ("record_version", "item", "product_version", "product_pin")}
+        path = attavo.write_record(tmp_path / "records" / "1", "build", record,
+                                   {"attavo": {}}, "1")
+    finally:
+        attavo.SCHEMA_RECORDS_DIR = real_schema_dir
+
+    assert json.loads(path.read_text())["record_version"] == int(tail) + 1
+
+
+def _schema_shape(schema: dict) -> str:
+    props = {k: v for k, v in schema.get("properties", {}).items() if k != "record_version"}
+    required = sorted(k for k in schema.get("required", []) if k != "record_version")
+    return json.dumps({"properties": props, "required": required}, sort_keys=True)
+
+
+def schema_version_drift(old: dict, new: dict) -> str | None:
+    """None when the shape is unchanged, or changed alongside a bumped
+    $id. A message when the shape changed but $id's trailing integer
+    didn't -- a version nobody bumps is worse than none, because readers
+    trust it (issue #60, acceptance 3)."""
+    old_version = old["$id"].rsplit("/", 1)[-1]
+    new_version = new["$id"].rsplit("/", 1)[-1]
+    if _schema_shape(old) != _schema_shape(new) and old_version == new_version:
+        return f"schema/records shape changed but $id version is still {new_version}"
+    return None
+
+
+def test_schema_shape_change_without_a_version_bump_is_refused():
+    """Acceptance 3, run against a mutated schema fixture: drop-in a new
+    required field on the real, committed build schema without touching
+    its $id -- refused. The identical mutation with $id bumped alongside
+    it is not."""
+    base = load_schema("build")
+    mutated = json.loads(json.dumps(base))
+    mutated["properties"]["a_new_field"] = {"type": "string", "minLength": 1}
+    mutated["required"] = mutated["required"] + ["a_new_field"]
+    assert schema_version_drift(base, mutated) is not None
+
+    bumped = json.loads(json.dumps(mutated))
+    stem, _, tail = bumped["$id"].rpartition("/")
+    bumped["$id"] = f"{stem}/{int(tail) + 1}"
+    assert schema_version_drift(base, bumped) is None
+
+    # a change carrying no shape change at all -- e.g. a description edit
+    # -- never needs a version bump.
+    reworded = json.loads(json.dumps(base))
+    reworded["title"] = reworded["title"] + " (reworded)"
+    assert schema_version_drift(base, reworded) is None
+
+
+def test_load_records_defaults_a_version_1_record_and_fills_its_item(tmp_path):
+    """Acceptance 4: a record written before record_version and item
+    shipped -- tenant zero's real shape at 3648830, common keys across 49
+    records: ['at', 'sha'] and nothing else -- loads with record_version 1
+    and item filled from the directory it sits under. The disk copy is
+    never touched: version 1 is never migrated (issue #60, operator
+    ruling 2026-09-09: record_version is a label, never a trigger for
+    reading or upgrading an older record)."""
+    attavo = attavo_module()
+    records_dir = tmp_path / "records" / "1"
+    records_dir.mkdir(parents=True)
+    tenant_zero_shape = {"sha": "a" * 40, "at": "2026-01-01T00:00:00Z"}
+    (records_dir / "build-01.json").write_text(json.dumps(tenant_zero_shape))
+
+    items = attavo.load_records(tmp_path / "records")
+    rec = items["1"]["build"]
+    assert rec["record_version"] == 1
+    assert rec["item"] == "1"
+
+    on_disk = json.loads((records_dir / "build-01.json").read_text())
+    assert on_disk == tenant_zero_shape
+
+
+def test_load_records_refuses_an_item_that_disagrees_with_its_directory(tmp_path):
+    """Acceptance 5: a record whose item field names a different item
+    than the directory it was found in -- a misfiled or copied record --
+    is refused rather than trusted."""
+    attavo = attavo_module()
+    records_dir = tmp_path / "records" / "1"
+    records_dir.mkdir(parents=True)
+    (records_dir / "build-01.json").write_text(json.dumps(
+        {"sha": "a" * 40, "at": "2026-01-01T00:00:00Z", "item": "2"}))
+
+    with pytest.raises(attavo.RecordItemMismatch):
+        attavo.load_records(tmp_path / "records")
+
+
+def test_only_load_record_parses_record_file_content():
+    """Acceptance 6: _load_record is the one place in this repository
+    that turns a <stage>-NN.json record's bytes into a dict; parse_attempts
+    and load_records both read through it rather than calling json.loads
+    themselves. `git grep -n "json.loads(" bin/attavo` still finds three
+    other sites -- a schema file, an adapter's conformance.json, and an
+    adapter's own stdout report -- none of them a record."""
+    text = ATTAVO.read_text()
+    assert text.count("json.loads(") == 4, (
+        "a new json.loads( site was added; review it against issue #60 acceptance 6 "
+        "and update this count")
+    assert "data = json.loads(path.read_text())" in text
+
+    for fn in ("parse_attempts", "load_records"):
+        start = text.index(f"\ndef {fn}(")
+        end = text.index("\ndef ", start + 1)
+        body = text[start:end]
+        assert "json.loads(" not in body, f"{fn} should read through _load_record, not parse directly"
+        assert "_load_record(" in body
