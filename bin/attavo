@@ -43,11 +43,15 @@ one enforces.
 
 build refuses (exit 1, naming the cause, no record) unless the manifest
 declares [executor].build and [tests].select and [tests].run, and unless
-approval-status would print valid. It invokes the named adapter
-(adapters/<name>/run) with the spec, the corpus, and the branch, checks
-that every path it touched matches a spec claim, then runs the criteria,
-the tests [tests].select and [tests].run name for the touched paths, and
--- when the manifest declares [checks].command -- the tenant's own
+approval-status would print valid. It exports the executor's identity
+(issue #33) into the adapter's environment as GIT_AUTHOR_NAME/EMAIL and
+GIT_COMMITTER_NAME/EMAIL, set by the product and never the tenant's git
+config, then invokes the named adapter (adapters/<name>/run) with the
+spec, the corpus, and the branch. It refuses (status refused) a commit
+between start_sha and HEAD not authored by that identity, checks that
+every path touched matches a spec claim, then runs the criteria, the
+tests [tests].select and [tests].run name for the touched paths, and --
+when the manifest declares [checks].command -- the tenant's own
 whole-tree check, from the tenant root. pass requires every criterion,
 the test run, and the tenant's checks (if declared) to exit 0; any
 non-zero exit iterates, with the failure as feedback, up to a fixed
@@ -753,6 +757,30 @@ def matches_a_claim(path: str, claims: list[str]) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in claims)
 
 
+def executor_identity(adapter_name: str) -> dict:
+    """The executor's identity (issue #33): set by the product, never the
+    tenant's git config, so an executor commit is never indistinguishable
+    from an operator's own -- the specimen is attavo/code-factory@e22fa85.
+    A reserved, undeliverable domain (.invalid) so no mailbox is implied.
+    Distinct from the records app identity: the app says the product
+    pushed this, this says an invocation authored this -- different
+    facts, neither borrows the other's name."""
+    return {"name": f"attavo executor ({adapter_name})",
+            "email": f"executor+{adapter_name}@attavo.invalid"}
+
+
+def commits_since(root: Path, start_sha: str) -> list[dict]:
+    """(sha, name, email) for every commit after start_sha, oldest first."""
+    out = git(root, "log", "--format=%H\x1f%an\x1f%ae", f"{start_sha}..HEAD")
+    commits = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        sha, name, email = line.split("\x1f")
+        commits.append({"sha": sha, "name": name, "email": email})
+    return commits
+
+
 def split_adapter_stdout(stdout: str) -> tuple[str, dict | None]:
     """(transcript, payload): the adapter's last non-empty stdout line is
     its JSON report; everything before it is transcript. payload is None
@@ -819,6 +847,7 @@ def cmd_build(argv: list[str]) -> int:
     criteria_names = parsed["criteria"] if parsed else []
     adapter_config = merge_adapter_config(m, adapter_name, "build")
     checks_command = (m.get("checks") or {}).get("command")
+    identity = executor_identity(adapter_name)
 
     start_sha = git(root, "rev-parse", "HEAD").strip()
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
@@ -853,6 +882,10 @@ def cmd_build(argv: list[str]) -> int:
             env["ATTAVO_STAGE"] = "build"
             if checks_command:
                 env["ATTAVO_CHECKS_COMMAND"] = checks_command
+            env["GIT_AUTHOR_NAME"] = identity["name"]
+            env["GIT_AUTHOR_EMAIL"] = identity["email"]
+            env["GIT_COMMITTER_NAME"] = identity["name"]
+            env["GIT_COMMITTER_EMAIL"] = identity["email"]
 
             run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
                                  capture_output=True, text=True, check=False)
@@ -878,6 +911,14 @@ def cmd_build(argv: list[str]) -> int:
             if payload.get("status") == "question":
                 status_out = "halted"
                 halted = {"question": payload.get("question")}
+                break
+
+            foreign = next((c for c in commits_since(root, start_sha)
+                           if c["name"] != identity["name"] or c["email"] != identity["email"]),
+                          None)
+            if foreign:
+                status_out = "refused"
+                refusal = f"commit {foreign['sha']} not authored by the executor"
                 break
 
             touched = sorted(changed_paths(root, start_sha, records_rel))
@@ -942,6 +983,7 @@ def cmd_build(argv: list[str]) -> int:
         "at": now_iso(),
         "adapter": adapter_name,
         "adapter_config": adapter_config,
+        "executor_identity": identity,
         "adapter_version": adapter_version,
         "model": model,
         "model_version": model_version,
