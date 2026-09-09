@@ -16,6 +16,18 @@
 # this is the second of the two templates that call it, not a second copy
 # of the shell it replaced.
 #
+# Not every merge is an item merge (issue #58): `attavo attest` exits 0
+# and writes nothing when the merge commit names no item, and the
+# `attavo attest` step's own record-lookup line must survive that --
+# `run:` executes as `bash -e -o pipefail`, under which a bare `grep`
+# finding no match exits 1 and fails the step even though "wrote no
+# record" is the expected, successful outcome here. The grep is wrapped
+# to swallow only its own no-match exit (1), not a real error (any other
+# nonzero exit), and every step after it -- computing the subject digest,
+# signing, recording the signing outcome, committing and pushing --
+# additionally guards on steps.attest.outputs.record being non-empty, the
+# same guard shape already used for the record-only skip.
+#
 # The signing step is refusal-tolerant, not failure-tolerant: it carries
 # continue-on-error, and the step after it reads `steps.sign.outcome`
 # (unaffected by continue-on-error, unlike `conclusion`) and patches the
@@ -87,17 +99,17 @@ jobs:
         if: steps.touch.outputs.skip != 'true'
         run: |
           attavo attest
-          record="$(git status --porcelain | awk '{print $2}' | grep 'attestation-[0-9]*\.json$')"
+          record="$(git status --porcelain | awk '{print $2}' | { grep 'attestation-[0-9]*\.json$' || test $? = 1; })"
           echo "record=$record" >> "$GITHUB_OUTPUT"
 
       - name: Compute the merge commit's subject digest
         id: subject
-        if: steps.touch.outputs.skip != 'true'
+        if: steps.touch.outputs.skip != 'true' && steps.attest.outputs.record != ''
         run: echo "digest=sha256:$(printf '%s' "${{ github.sha }}" | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Sign the attestation record
         id: sign
-        if: steps.touch.outputs.skip != 'true'
+        if: steps.touch.outputs.skip != 'true' && steps.attest.outputs.record != ''
         continue-on-error: true
         uses: actions/attest@v2
         with:
@@ -107,7 +119,7 @@ jobs:
           predicate-file: ${{ steps.attest.outputs.record }}
 
       - name: Record the signing outcome
-        if: steps.touch.outputs.skip != 'true'
+        if: steps.touch.outputs.skip != 'true' && steps.attest.outputs.record != ''
         env:
           RECORD_PATH: ${{ steps.attest.outputs.record }}
           SIGN_OUTCOME: ${{ steps.sign.outcome }}
@@ -137,7 +149,7 @@ jobs:
           PY
 
       - name: Commit and push the attestation record
-        if: steps.touch.outputs.skip != 'true'
+        if: steps.touch.outputs.skip != 'true' && steps.attest.outputs.record != ''
         run: |
           git config user.name "${{ steps.bot.outputs.login }}"
           git config user.email "${{ steps.bot.outputs.email }}"

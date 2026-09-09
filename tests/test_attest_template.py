@@ -24,12 +24,18 @@ from pathlib import Path
 
 import jsonschema
 
-from helpers import extract_step_run
+from helpers import commit_all, extract_step_run, git, make_tenant, step_block
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "templates" / "workflows" / "attavo-attest.yml"
 SCHEMA = json.loads((ROOT / "schema" / "records" / "attestation.schema.json").read_text())
 STEP_NAME = "Record the signing outcome"
+DOWNSTREAM_STEPS = [
+    "Compute the merge commit's subject digest",
+    "Sign the attestation record",
+    "Record the signing outcome",
+    "Commit and push the attestation record",
+]
 
 
 def base_record() -> dict:
@@ -90,3 +96,62 @@ def test_patch_step_writes_signed_true_and_the_bundle_url_when_signing_succeeds(
 def test_predicate_type_is_the_ruled_url():
     text = TEMPLATE.read_text()
     assert "predicate-type: https://attavo.dev/attestation/v1" in text
+
+
+def zero_item_merge_repo(tmp_path: Path) -> Path:
+    """A merge to main naming no item at all -- the shape of tenant
+    zero's own PR #626, installing this very template."""
+    root = make_tenant(tmp_path, "build_valid")
+    git(root, "checkout", "-b", "chore/unrelated")
+    (root / "README-CHORE.md").write_text("nothing to do with any item\n")
+    commit_all(root, "chore: unrelated change")
+    git(root, "checkout", "main")
+    git(root, "merge", "--no-ff", "-m", "Merge branch 'chore/unrelated' into main",
+        "chore/unrelated")
+    return root
+
+
+def run_attest_step(root: Path) -> tuple[subprocess.CompletedProcess, str]:
+    """Runs the template's "attavo attest" step exactly as GitHub Actions
+    would -- bash -e -o pipefail, a real GITHUB_OUTPUT file, `attavo` on
+    PATH -- and returns (result, record_output)."""
+    script = extract_step_run(TEMPLATE.read_text(), "attavo attest")
+    output_file = root / "_github_output.txt"
+    output_file.write_text("")
+    env = dict(os.environ, GITHUB_OUTPUT=str(output_file),
+              PATH=f"{ROOT / 'bin'}:{os.environ.get('PATH', '')}")
+    run = subprocess.run(["bash", "-eo", "pipefail", "-c", script], cwd=str(root),
+                         env=env, capture_output=True, text=True, check=False)
+    record = ""
+    for line in output_file.read_text().splitlines():
+        if line.startswith("record="):
+            record = line[len("record="):]
+    return run, record
+
+
+def test_attest_step_survives_a_zero_item_merge_with_no_record(tmp_path):
+    """Issue #58's second half: attavo attest itself exits 0 and writes no
+    record on a zero-item merge (fixed already), but the template's own
+    "attavo attest" step runs as `bash -e -o pipefail`, and the grep that
+    looks for the record it just wrote exits 1 on no match -- exactly the
+    expected outcome here -- which -e turns into a failed step. Red
+    before this lane's second fix: the step itself exits non-zero."""
+    root = zero_item_merge_repo(tmp_path)
+
+    run, record = run_attest_step(root)
+    assert run.returncode == 0, run.stderr
+    assert record == ""
+
+
+def test_steps_after_attest_are_guarded_on_a_non_empty_record():
+    """The four steps after "attavo attest" -- computing the subject
+    digest, signing, recording the signing outcome, and committing and
+    pushing -- have nothing to sign or commit when attest wrote no
+    record, and must not run then, the same guard shape already used for
+    the record-only skip."""
+    text = TEMPLATE.read_text()
+    for name in DOWNSTREAM_STEPS:
+        block = step_block(text, f"- name: {name}")
+        if_line = next(l for l in block.splitlines() if l.strip().startswith("if:"))
+        assert "steps.attest.outputs.record" in if_line, name
+        assert "!= ''" in if_line, name
