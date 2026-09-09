@@ -127,7 +127,7 @@ def test_doctor_proof_two_holds_on_a_fixture_carrying_all_five_stages(tmp_path):
     assert p["holds"], p["reason"]
 
 
-def test_no_commit_lacks_a_record_via_attestation_merge_sha(tmp_path):
+def test_merge_sha_covers_the_merge_commit_for_proof_three(tmp_path):
     """Acceptance 6, issue #54: a merge commit is a real change, not a
     records-only one, so it must be named explicitly. An attestation
     record's merge_sha does that -- naming it only by merge_sha, not sha
