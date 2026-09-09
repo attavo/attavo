@@ -4,101 +4,53 @@ record commit itself triggers the gate again, which pushes another record,
 forever -- the loop from issue #9 (a pilot tenant's PR #595: two operator
 releases of held runs produced two more record commits).
 
-Rejection test, written and run red before the skip step existed: the
-template file didn't exist at all, so TEMPLATE.read_text() raised
-FileNotFoundError.
+The skip step's own decision logic -- whether HEAD, against its first
+parent, touches only paths.records -- moved into the product as `attavo
+record-only` (issue #19, Lane 4 of issue #54); the three shell-execution
+tests and the merge-commit test that used to run this step's bash directly
+now call that subcommand instead, in tests/test_record_only.py. What
+remains here is that the template's step is exactly the one-line wiring
+issue #19 describes, and the two behaviors issue #19 does not touch.
 
-This test extracts the literal `run:` shell out of the template file itself
-(tests/helpers.py:extract_step_run) and runs it against real commits, so it
-tracks the template's actual skip logic instead of a paraphrase of it.
+Deleted, this lane, verbatim from the template (the shell `attavo
+record-only` replaces):
+
+    records_rel="$(python3 -c "import tomllib; print(tomllib.load(open('attavo.toml','rb'))['paths']['records'])")"
+    skip=true
+    while IFS= read -r f; do
+      [ -z "$f" ] && continue
+      case "$f" in
+        "$records_rel"/*) ;;
+        *) skip=false ;;
+      esac
+    done <<< "$(git diff --name-only HEAD^1 HEAD)"
+    echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
 Run: python3 -m pytest tests -q
 """
-import os
-import subprocess
 from pathlib import Path
 
-from helpers import commit_all, extract_step_run, git, job_if_condition, make_tenant, step_block
+from helpers import job_if_condition, step_block
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "templates" / "workflows" / "attavo-spec-gate.yml"
-STEP_NAME = "Skip when the head commit only touches records"
 JOB_NAME = "spec-gate"
 
 
-def run_skip_step(root: Path) -> str:
-    """Run the template's skip step against root's HEAD commit exactly as
-    GitHub Actions would (a real GITHUB_OUTPUT file), and return the 'skip'
-    output it wrote.
-    """
-    script = extract_step_run(TEMPLATE.read_text(), STEP_NAME)
-    output_file = root / "_github_output.txt"
-    output_file.write_text("")
-    env = dict(os.environ, GITHUB_OUTPUT=str(output_file))
-    run = subprocess.run(["bash", "-eo", "pipefail", "-c", script], cwd=str(root),
-                         env=env, capture_output=True, text=True, check=False)
-    assert run.returncode == 0, run.stderr
-    for line in output_file.read_text().splitlines():
-        if line.startswith("skip="):
-            return line[len("skip="):]
-    raise AssertionError(f"step wrote no 'skip' output; stdout={run.stdout!r}")
+def test_skip_step_reads_record_only_exit_code():
+    """Issue #19: the template step becomes one run line reading `attavo
+    record-only`'s exit code, installed unconditionally before it runs
+    rather than only once the (no-longer-computed) skip is known."""
+    text = TEMPLATE.read_text()
 
+    install_block = step_block(text, "- uses: <owner>/attavo@<tag>")
+    assert "if:" not in install_block
 
-def test_skip_is_true_when_the_head_commit_only_touches_records(tmp_path):
-    root = make_tenant(tmp_path, "valid")
-    (root / "records" / "1").mkdir(parents=True)
-    (root / "records" / "1" / "spec-01.json").write_text("{}\n")
-    commit_all(root, "attavo: spec-gate record for #1")
-
-    assert run_skip_step(root) == "true"
-
-
-def test_skip_is_false_when_the_head_commit_touches_specs(tmp_path):
-    root = make_tenant(tmp_path, "valid")
-    (root / "specs" / "1" / "spec.md").write_text("# spec, amended\n")
-    commit_all(root, "spec: item 1")
-
-    assert run_skip_step(root) == "false"
-
-
-def test_skip_is_false_when_the_head_commit_touches_both_records_and_specs(tmp_path):
-    root = make_tenant(tmp_path, "valid")
-    (root / "records" / "1").mkdir(parents=True)
-    (root / "records" / "1" / "spec-01.json").write_text("{}\n")
-    (root / "specs" / "1" / "spec.md").write_text("# spec, amended\n")
-    commit_all(root, "spec + record")
-
-    assert run_skip_step(root) == "false"
-
-
-def test_skip_is_false_on_a_merge_commit_from_main(tmp_path):
-    """Issue #17. `git show --name-only --format= HEAD` on a merge commit
-    lists only paths that differ from *both* parents -- for a clean
-    update-from-main merge (no conflict, every changed path traces to
-    exactly one parent), that list is empty even though the merge brought
-    in a real, non-record change, so the old command reads no paths and
-    the step's `skip` default of `true` stands. `attavo/code-factory`
-    commit e6b5710 (PR #600's update-branch merge) hit exactly this: the
-    gate logged skip=true and wrote no spec-05.json.
-
-    The fixture branch's tip is a record commit; main moves on with an
-    unrelated file; merging main into the item branch reproduces the
-    clean-merge shape the old command was blind to.
-    """
-    root = make_tenant(tmp_path, "valid")
-    git(root, "checkout", "-b", "attavo/1-x")
-    (root / "records" / "1").mkdir(parents=True)
-    (root / "records" / "1" / "spec-01.json").write_text("{}\n")
-    commit_all(root, "attavo: spec-gate record for #1")
-
-    git(root, "checkout", "main")
-    (root / "on-main.txt").write_text("main moved on\n")
-    commit_all(root, "unrelated change on main")
-
-    git(root, "checkout", "attavo/1-x")
-    git(root, "merge", "--no-ff", "-m", "Merge branch 'main' into attavo/1-x", "main")
-
-    assert run_skip_step(root) == "false"
+    touch_block = step_block(text, "- name: Skip when the head commit only touches records")
+    assert "attavo record-only" in touch_block
+    assert "GITHUB_OUTPUT" in touch_block
+    assert "git diff" not in touch_block
+    assert "tomllib" not in touch_block
 
 
 def test_template_pushes_on_refusal():

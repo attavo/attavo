@@ -8,20 +8,23 @@
     attavo build [N]
     attavo verify [N]
     attavo file-findings [N]
+    attavo record-only
+    attavo attest [N]
 
 The doctor is the definition of done. It asserts three proofs against a
 tenant root and exits 1 until every proof holds:
 
   1. every-gate-rejects      every gate in the manifest's [gates] table,
-                             run against its rejection fixture, exits non-zero
+                             run against its rejection fixture, exits non-zero,
+                             and carries a non-empty retires
   2. one-item-every-stage    one work item under paths.records carries a
                              record for every stage: spec, approval, build,
                              verify, attestation
   3. no-commit-lacks-record  every commit on the default branch after the
                              manifest was introduced is named by a record's
-                             sha or commits list, or itself writes under
-                             paths.records (a record is committed with the
-                             code it describes)
+                             sha, merge_sha, or commits list, or itself
+                             writes under paths.records (a record is
+                             committed with the code it describes)
 
 Nothing in doctor is a gate. The doctor reads; it never writes and it never
 blocks a merge by itself. It is what CI runs to say whether the product
@@ -79,6 +82,29 @@ latest verify record via [forge].file_issue_command, and refuses (exit
 1, nothing filed) a record carrying a finding with no retires. See the
 verify contract in the project's Phase 2 issue for the full rules both
 enforce.
+
+record-only exits 0 when HEAD, against its first parent, touches only
+paths.records; 1 otherwise; 2 with no manifest. Core logic about a git
+checkout, not a forge's shell -- a workflow template's push-and-retrigger
+guard is one line reading this exit code instead of carrying its own
+copy of the check.
+
+attest refuses (exit 1, no record) unless the latest spec, approval,
+build, and verify records for an item all exist and chain: the build's
+approval_sha names the latest approval, and the verify's build_sha names
+that build -- a re-approval after a build must force a re-run of what
+changed. With no N given it derives the item from the record paths
+HEAD's merge commit touched under paths.records/<N>/, not from a branch
+name, which a squash merge discards and which names a forge's convention
+the product does not know; zero items derived, or more than one, is a
+refusal naming what it found. It writes the next attestation-NN.json
+under paths.records/N/, asserting that the item was specified, approved
+at a commit, built by one invocation, judged by another, and merged.
+attest never signs anything itself -- signed and signature default to
+false and null; a forge-specific template signs after this record is
+written and patches those two fields before committing it. See the
+attestation contract in the project's Phase 2, Lane 4 issue for the full
+rules it enforces.
 """
 from __future__ import annotations
 
@@ -155,9 +181,9 @@ def product_version() -> str:
          tagged release reports its tag, a checkout reports its commit,
          a dirty tree says so.
       3. "unknown", when PRODUCT_ROOT is not a git repository at all --
-         the case for a GitHub Actions tarball checkout under _actions/,
-         which is exactly when (1) is expected to already have supplied
-         the answer.
+         the case for a forge that extracts this action from a tarball
+         rather than a git checkout, which is exactly when (1) is
+         expected to already have supplied the answer.
 
     Distinct from the tenant's product_pin -- an operator running a
     checkout, which is how every build and verify have actually been run
@@ -307,6 +333,11 @@ def proof_every_gate_rejects(root: Path, m: dict | None) -> Proof:
     if not gates:
         return p.fail("[gates] is empty; a gate that has rejected nothing does not exist")
     fixtures = root / m.get("paths", {}).get("rejections", "")
+    # Proposal, not yet ruled on (issue #54): a gate that retires nothing
+    # only adds, so proof one reports it here rather than waiting on the
+    # schema alone -- read_manifest never validates against the manifest
+    # schema at runtime, so a schema requirement is not an enforced one.
+    no_retires = [name for name, gate in sorted(gates.items()) if not gate.get("retires")]
     missing, accepted = [], []
     for name, gate in sorted(gates.items()):
         fixture = fixtures / name
@@ -325,6 +356,8 @@ def proof_every_gate_rejects(root: Path, m: dict | None) -> Proof:
         return p.fail(f"gate(s) with no rejection fixture: {', '.join(missing)}")
     if accepted:
         return p.fail(f"gate(s) that accepted their rejection fixture: {', '.join(accepted)}")
+    if no_retires:
+        return p.fail(f"gate(s) with no retires: {', '.join(no_retires)}")
     return p.hold(f"{len(gates)} gate(s) rejected their fixture")
 
 
@@ -363,6 +396,13 @@ def proof_no_commit_lacks_record(root: Path, m: dict | None) -> Proof:
             sha = rec.get("sha")
             if isinstance(sha, str):
                 named.add(sha)
+            # An attestation record's merge_sha names the merge commit
+            # itself (issue #54) -- the merge is a real change, not a
+            # records-only commit, so it must be named explicitly rather
+            # than counted as covered by accident.
+            merge_sha = rec.get("merge_sha")
+            if isinstance(merge_sha, str):
+                named.add(merge_sha)
             for c in rec.get("commits", []) or []:
                 if isinstance(c, str):
                     named.add(c)
@@ -1240,6 +1280,140 @@ def cmd_file_findings(argv: list[str]) -> int:
     return 0
 
 
+# --- record-only: whether HEAD, against its first parent, touches only
+# paths.records. Core logic about a git checkout, not a forge's shell
+# (issue #19); a workflow template's push-and-retrigger guard is one line
+# calling this instead of carrying its own copy. ---
+
+def cmd_record_only(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo record-only: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+    records_rel = m["paths"]["records"]
+    try:
+        changed = git(root, "diff", "--name-only", "HEAD^1", "HEAD").splitlines()
+    except RuntimeError as exc:
+        print(f"attavo record-only: refused: {exc}", file=sys.stderr)
+        return 2
+    prefix = records_rel.rstrip("/") + "/"
+    only_records = all(p == records_rel or p.startswith(prefix) for p in changed if p)
+    print("attavo record-only: yes" if only_records else "attavo record-only: no")
+    return 0 if only_records else 1
+
+
+# --- attest: the signed envelope over one item's whole traversal ---
+
+def derive_attest_item(root: Path, records_rel: str) -> tuple[str | None, str | None]:
+    """The item id from the merge commit's own first-parent diff -- record
+    paths under records_rel/<N>/, not a branch name, which a squash merge
+    discards and which names a forge's convention the product does not
+    know. Returns (item_id, None) on exactly one, else (None, reason)."""
+    try:
+        changed = git(root, "diff", "--name-only", "HEAD^1", "HEAD").splitlines()
+    except RuntimeError as exc:
+        return None, f"git: {exc}"
+    prefix = records_rel.rstrip("/") + "/"
+    items: set[str] = set()
+    for p in changed:
+        if p.startswith(prefix):
+            rest = p[len(prefix):]
+            item = rest.split("/", 1)[0]
+            if item:
+                items.add(item)
+    if len(items) == 1:
+        return next(iter(items)), None
+    if not items:
+        return None, "no item derived from the merge commit's record paths"
+    return None, (f"{len(items)} items derived from the merge commit's record paths: "
+                  f"{', '.join(sorted(items))}")
+
+
+def cmd_attest(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo attest: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    records_rel = m["paths"]["records"]
+    item_id = argv[0] if argv else None
+    if item_id is None:
+        item_id, reason = derive_attest_item(root, records_rel)
+        if item_id is None:
+            print(f"attavo attest: refused: {reason}", file=sys.stderr)
+            return 1
+
+    records_dir = root / records_rel / item_id
+    latest_spec = latest_record(records_dir, "spec")
+    latest_approval = latest_record(records_dir, "approval")
+    latest_build = latest_record(records_dir, "build")
+    latest_verify = latest_record(records_dir, "verify")
+    for stage, rec in (("spec", latest_spec), ("approval", latest_approval),
+                       ("build", latest_build), ("verify", latest_verify)):
+        if rec is None:
+            print(f"attavo attest: refused: no {stage} record for item {item_id}", file=sys.stderr)
+            return 1
+
+    # A re-approval after a build must force a re-run of what changed --
+    # this is the only place a script asserts it. build's approval_sha is
+    # bound at build time; a later approval invalidates that build's
+    # claim to be built against the tenant's current ruling.
+    if latest_build.get("approval_sha") != latest_approval.get("sha"):
+        print("attavo attest: refused: build's approval_sha does not name the latest "
+              "approval; a re-approval after the build must force a re-run", file=sys.stderr)
+        return 1
+    if latest_verify.get("build_sha") != latest_build.get("sha"):
+        print("attavo attest: refused: verify's build_sha does not name the latest build",
+              file=sys.stderr)
+        return 1
+
+    head_sha = git(root, "rev-parse", "HEAD").strip()
+    spec_path = latest_attempt_path(records_dir, "spec")
+    approval_path = latest_attempt_path(records_dir, "approval")
+    build_path = latest_attempt_path(records_dir, "build")
+    verify_path = latest_attempt_path(records_dir, "verify")
+
+    record = {
+        "sha": head_sha,
+        "merge_sha": head_sha,
+        "item": item_id,
+        "spec": spec_path.stem if spec_path else None,
+        "spec_sha": latest_spec.get("sha"),
+        "approval": approval_path.stem if approval_path else None,
+        "approval_sha": latest_approval.get("sha"),
+        "build": build_path.stem if build_path else None,
+        "build_sha": latest_build.get("sha"),
+        "verify": verify_path.stem if verify_path else None,
+        "verify_sha": latest_verify.get("sha"),
+        "at": now_iso(),
+        # Neither is populated by anything today -- no ruling or amendment
+        # log exists yet for either to read from. Carried as empty rather
+        # than omitted, since the schema names them.
+        "interventions": [],
+        "acts": [],
+        "tokens_by_stage": {"build": latest_build.get("tokens"), "verify": latest_verify.get("tokens")},
+        # Never summed across stages -- the 2026-09-09 ruling on reporting
+        # across vendors: a stage's executor may report no cost at all.
+        "cost_by_stage_usd": {"build": latest_build.get("cost_usd"), "verify": latest_verify.get("cost_usd")},
+        "wall_clock_by_stage_s": {"build": latest_build.get("wall_clock_s"),
+                                  "verify": latest_verify.get("wall_clock_s")},
+        # The product does not count a forge's own CI runs; a template
+        # that wants this reported sets ATTAVO_CI_RUNS from its own read.
+        "ci_runs": int(os.environ.get("ATTAVO_CI_RUNS") or 0),
+        # attavo attest never talks to a signing service itself (the
+        # product names no vendor); a forge-specific template step signs
+        # after this record is written and patches these two fields
+        # before committing it.
+        "signed": False,
+        "signature": None,
+    }
+    record_path = write_record(records_dir, "attestation", record, m)
+    print(f"attavo attest: item {item_id} attested ({record_path.name})")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__.strip())
@@ -1258,9 +1432,13 @@ def main(argv: list[str]) -> int:
         return cmd_verify(argv[1:])
     if argv[0] == "file-findings":
         return cmd_file_findings(argv[1:])
+    if argv[0] == "record-only":
+        return cmd_record_only(argv[1:])
+    if argv[0] == "attest":
+        return cmd_attest(argv[1:])
     print(f"attavo: unknown subcommand {argv[0]!r}; only doctor, spec-gate, approve, "
-          f"approval-status, build, verify, file-findings exist at this commit",
-          file=sys.stderr)
+          f"approval-status, build, verify, file-findings, record-only, attest exist "
+          f"at this commit", file=sys.stderr)
     return 2
 
 
