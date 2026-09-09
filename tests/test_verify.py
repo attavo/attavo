@@ -106,6 +106,65 @@ def test_verify_returns_when_the_forge_is_red(tmp_path):
     assert not (root / "records" / "1" / "verify-01.log").exists()
 
 
+def test_verify_treats_an_empty_forge_read_as_not_green(tmp_path):
+    """Issue #44, rejection test 1. A [forge].checks_command that prints
+    nothing and exits 0 is not green -- a commit the forge has no record
+    of is unread, not passing (all() over an empty conclusions list is
+    True, which is why this has to be spelled out). Red at 0b2b869,
+    where an empty read wrote status: "pass" and called the adapter.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, "true")  # prints nothing, exits 0
+    approve_item(root)
+    assert run_attavo(root, "build", "1").returncode == 0
+
+    run = run_attavo(root, "verify", "1")
+    assert run.returncode == 0
+
+    rec = latest_verify(root)
+    assert rec["status"] == "returned"
+    assert rec["adapter"] is None
+    assert rec["forge_checks"]["conclusions"] == []
+    # no adapter was ever invoked -- no transcript log for this attempt
+    assert not (root / "records" / "1" / "verify-01.log").exists()
+
+
+def test_verify_reads_the_forge_on_the_branch_head_not_the_build_sha(tmp_path):
+    """Issue #44, rejection test 2. The forge attaches checks to a pull
+    request's head, not to the executor's own commit -- that commit
+    stops being the head the moment a later commit lands on top of it.
+    verify must read the forge on the branch head; build_sha and
+    forge_checks["sha"] are kept as two separate fields rather than one
+    sha serving two purposes. Red at 0b2b869, where they were equal by
+    construction (both the build record's own sha).
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    # echoes the sha it is given back as a (bogus) conclusion, so the
+    # test can see exactly which sha verify queried the forge on.
+    add_forge(root, "echo ci")
+    approve_item(root)
+    assert run_attavo(root, "build", "1").returncode == 0
+
+    build_rec = json.loads(sorted((root / "records" / "1").glob("build-*.json"))[-1].read_text())
+    build_sha = build_rec["sha"]
+
+    # a later commit lands on top of the build's own commit before
+    # verify runs -- the shape a record push (or any later push) leaves.
+    (root / "after-build.txt").write_text("later\n")
+    commit_all(root, "a later commit, as a record push would leave behind")
+    head_sha = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+    assert head_sha != build_sha
+
+    run = run_attavo(root, "verify", "1")
+    assert run.returncode == 0
+
+    rec = latest_verify(root)
+    assert rec["build_sha"] == build_sha
+    assert rec["forge_checks"]["sha"] == head_sha
+    assert rec["forge_checks"]["sha"] != rec["build_sha"]
+
+
 def test_verify_merges_stage_config(tmp_path):
     """Acceptance 6. [executor.<adapter>.verify] shadows
     [executor.<adapter>] for verify alone; build sees the parent,
