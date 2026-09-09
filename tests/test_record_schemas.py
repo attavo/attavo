@@ -6,6 +6,8 @@ records; extend it, don't duplicate it, as new record shapes land (issue
 Run: python3 -m pytest tests -q
 """
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -79,6 +81,72 @@ def test_records_match_their_shapes(tmp_path):
     for path in records:
         stage = path.stem.split("-")[0]
         jsonschema.validate(json.loads(path.read_text()), schemas[stage])
+
+    # issue #49: product_version and product_pin are not optional extras --
+    # every record shape requires them, the same as any other field.
+    for stage, schema in schemas.items():
+        assert "product_version" in schema["required"], stage
+        assert "product_pin" in schema["required"], stage
+
+
+def test_records_carry_product_version_distinct_from_pin(tmp_path):
+    """Issue #49: a record names both what ran (product_version, derived
+    from the running checkout via git describe) and what the tenant
+    declared (product_pin, copied verbatim from the manifest). The
+    build_valid fixture pins v0.2.1; this checkout is not on that tag, so
+    every record type written against it must carry both fields and they
+    must differ -- the mismatch is a recorded fact, not an error nothing
+    here refuses on."""
+    root = make_tenant(tmp_path, "build_valid")
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text()
+                    + '\n[executor.fixture]\ny = 2\n'
+                    + '\n[checks]\ncommand = "true"\n'
+                    + """\n[forge]\nchecks_command = "printf 'ci success\\n'"\n""")
+    commit_all(root, "configure the fixture adapter, the tenant's checks, and the forge read")
+
+    assert run_attavo(root, "spec-gate", "1").returncode == 0
+    assert run_attavo(root, "approve", "1", "--by", "alice").returncode == 0
+    assert run_attavo(root, "build", "1").returncode == 0
+    assert run_attavo(root, "verify", "1").returncode == 0
+
+    running_version = subprocess.run(
+        ["git", "describe", "--tags", "--always", "--dirty"],
+        cwd=str(ROOT), capture_output=True, text=True, check=True).stdout.strip()
+
+    records = sorted((root / "records" / "1").glob("*.json"))
+    assert {p.stem.split("-")[0] for p in records} == {"spec", "approval", "build", "verify"}
+    for path in records:
+        rec = json.loads(path.read_text())
+        assert rec["product_pin"] == "v0.2.1"
+        assert rec["product_version"] == running_version
+        assert rec["product_version"] != rec["product_pin"]
+
+
+def test_product_version_unknown_when_product_root_is_not_a_git_repo(tmp_path):
+    """Issue #49 follow-up: GitHub Actions extracts an action into
+    _actions/ from a tarball, not a git checkout -- PRODUCT_ROOT there has
+    no .git, so `git describe` fails and, unguarded, raises inside
+    write_record: the one function that must never fail, since it runs
+    after the work it records already happened. A copy of bin/attavo
+    placed under a fresh, non-git tmp_path reproduces PRODUCT_ROOT with no
+    .git without needing an actual GitHub Actions run. Red today: the
+    KeyError this reproduces is a RuntimeError from git(), uncaught, and
+    no record is written at all."""
+    product_bin = tmp_path / "product" / "bin"
+    product_bin.mkdir(parents=True)
+    shutil.copy(ATTAVO, product_bin / "attavo")
+
+    root = make_tenant(tmp_path, "build_valid", name="tenant")
+
+    env = dict(os.environ)
+    env.pop("ATTAVO_PRODUCT_VERSION", None)
+    run = subprocess.run([sys.executable, str(product_bin / "attavo"), "spec-gate", "1"],
+                        cwd=str(root), env=env, capture_output=True, text=True, check=False)
+    assert run.returncode == 0, run.stderr
+
+    rec = json.loads((root / "records" / "1" / "spec-01.json").read_text())
+    assert rec["product_version"] == "unknown"
 
 
 def test_manifest_schema_accepts_open_executor_config():
