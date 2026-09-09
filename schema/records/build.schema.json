@@ -6,10 +6,10 @@
   "additionalProperties": false,
   "required": [
     "sha", "start_sha", "spec_sha", "approval_sha", "at", "adapter",
-    "adapter_config", "executor_identity", "adapter_version", "model",
-    "model_version", "iterations", "criteria", "selected_tests", "checks",
-    "tokens", "cost_usd", "wall_clock_s", "status", "refusal", "halted",
-    "product_version", "product_pin"
+    "adapter_config", "executor_identity", "reports", "adapter_version",
+    "model", "model_version", "iterations", "criteria", "selected_tests",
+    "checks", "tokens", "cost_usd", "wall_clock_s", "status", "refusal",
+    "halted", "product_version", "product_pin"
   ],
   "properties": {
     "sha": {"type": "string", "minLength": 1},
@@ -31,6 +31,11 @@
         "name": {"type": "string", "minLength": 1},
         "email": {"type": "string", "minLength": 1}
       }
+    },
+    "reports": {
+      "type": "array",
+      "description": "Field names adapters/<name>/conformance.json declares this adapter can supply with a real value (vendor independence, 2026-09-09 ruling) -- [] when the adapter declares no conformance.json. Dollars are never summed across adapters; a field absent here renders as not reported by this executor, never zero or blank.",
+      "items": {"type": "string", "minLength": 1}
     },
     "adapter_version": {"type": ["string", "null"]},
     "model": {"type": ["string", "null"]},

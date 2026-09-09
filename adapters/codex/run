@@ -1,0 +1,361 @@
+#!/usr/bin/env python3
+"""adapters/codex/run -- see README.md (this directory) for the two
+configuration keys, and ../README.md for the shared adapter contract.
+
+The capability read (issue #41, recorded on the issue 2026-09-08 against
+codex-cli 0.153.4): `codex exec review --output-schema <FILE>` ignores
+the schema entirely -- confirmed live against a real planted-defect
+diff, its `-o` output is always free-text prose, never JSON, whatever
+schema is named. This adapter therefore never invokes `codex exec
+review`; both stages feed their own instruction to plain `codex exec -`
+on stdin (confirmed live: this path does honor --output-schema, and
+`-p` is codex's `--profile`, not a prompt flag, so stdin is the only
+channel and it is a positional `-`, not a flag).
+
+Two channels, not one. `--json` prints events to stdout as JSONL
+(thread.started, turn.started, item.*, and a terminal turn.completed or
+turn.failed carrying usage) -- read for the model's own account of
+usage and for the terminal event; codex's own exit code is 1 on
+turn.failed, 0 on turn.completed, read directly, so this adapter reads
+the terminal event for the reason, not for the verdict. The structured
+answer comes from `--output-schema <FILE>` plus `--output-last-message
+<FILE>`, written as one JSON object once the turn completes -- that is
+where findings and tests_named come from; parsing them out of the event
+stream would be the wrong shape.
+
+No model id appears anywhere codex reports -- not the event stream, not
+`codex doctor`, not any config file (confirmed live 2026-09-08; there is
+no ~/.codex/config.toml on this machine at all). [executor.codex].model
+is therefore required, not optional: this adapter refuses before ever
+invoking codex if it is absent, and reports back exactly the id it was
+given, never one derived from output.
+
+auth mirrors claude-code's auth = "subscription": the operator's own
+machine is logged in via a ChatGPT plan, and an OPENAI_API_KEY left in
+the environment would silently switch codex to API billing on a run
+meant for the plan. [executor.codex].auth names the mode this
+invocation is trusted to run under, checked against OPENAI_API_KEY
+alone (deterministic and testable without a live `codex doctor` call,
+which a canned-response or faked-tool_binary test situation cannot
+answer honestly anyway) -- this adapter refuses rather than silently
+falling back when they disagree, because a wrong credential here is a
+bill, not just a wrong answer. cost_usd is therefore always null on
+this adapter (no dollar figure appears anywhere under plan auth, and
+none is invented for API auth either): a codex record carrying a
+non-null cost would be evidence the wrong credential was used, a
+finding about the credential, not a measurement.
+
+Not exercised live by the test suite (judgment is measured, not
+tested); its argument construction is checked by ATTAVO_ADAPTER_DRY_RUN
+(prints {"argv", "instruction", "schema"} instead of running -- argv
+alone would carry no instruction, since it goes in on stdin), and its
+response handling is checked by ATTAVO_ADAPTER_RESPONSE_FILE, which
+feeds a canned {"events": [...JSONL objects...], "final": {...the
+output-file's parsed content, or null...}, "exit_code": N} instead of
+invoking codex -- codex's own canned-response hook, since codex itself
+has none (issue #41).
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+STATUS_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["status", "question"],
+    "properties": {
+        "status": {"type": "string", "enum": ["done", "question"]},
+        "question": {"type": ["string", "null"]},
+    },
+}
+
+VERIFY_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["findings", "tests_named"],
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["title", "specimen", "retires", "rejection_test", "severity"],
+                "properties": {
+                    "title": {"type": "string", "minLength": 1},
+                    "specimen": {"type": "string", "minLength": 1},
+                    "retires": {"type": "string", "minLength": 1},
+                    "rejection_test": {"type": "string", "minLength": 1},
+                    "severity": {"type": "string", "minLength": 1},
+                },
+            },
+        },
+        "tests_named": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    },
+}
+
+
+def read_text(path_env: str) -> str:
+    path = os.environ.get(path_env)
+    if not path:
+        return ""
+    p = Path(path)
+    return p.read_text() if p.is_file() else ""
+
+
+def spec_sections() -> list[str]:
+    """The spec's Problem, Claims, and Criteria sections verbatim -- the
+    same contract adapters/claude-code/run reads, since what a verifier
+    must be told is a product fact, not a tool-specific one."""
+    spec_dir = Path(os.environ["ATTAVO_SPEC_DIR"])
+    lines = (spec_dir / "spec.md").read_text().splitlines()
+    idx = [i for i, l in enumerate(lines) if l.startswith("## ")]
+    headings = {lines[i].strip(): i for i in idx}
+    bounds = sorted(idx) + [len(lines)]
+
+    def section(heading: str) -> str:
+        start = headings[heading]
+        end = bounds[bounds.index(start) + 1] if start in bounds else len(lines)
+        return "\n".join(lines[start:end]).strip()
+
+    return [section("## Problem"), section("## Claims"), section("## Criteria")]
+
+
+def build_instruction() -> str:
+    parts = list(spec_sections())
+
+    rulings = read_text("ATTAVO_RULINGS")
+    if rulings.strip():
+        parts.append("## Rulings\n\n" + rulings.strip())
+
+    feedback = read_text("ATTAVO_FEEDBACK")
+    if feedback.strip():
+        parts.append("## Feedback from the previous attempt\n\n" + feedback.strip())
+
+    parts.append(
+        "commit your work on the current branch; if you cannot proceed "
+        "without a decision that changes the criteria, do not guess: "
+        "answer with status question")
+
+    checks_command = os.environ.get("ATTAVO_CHECKS_COMMAND")
+    if checks_command:
+        parts.append(
+            f"after you commit, the tenant's checks (`{checks_command}`) are run "
+            "for you and any failure is returned to you on the next iteration; "
+            "run only what you need while editing")
+
+    return "\n\n".join(parts)
+
+
+def verify_instruction() -> str:
+    parts = list(spec_sections())
+
+    diff = read_text("ATTAVO_DIFF")
+    parts.append("## Diff since the approved spec\n\n" + (diff.strip() or "(the diff is empty)"))
+
+    build_record = read_text("ATTAVO_BUILD_RECORD")
+    if build_record.strip():
+        parts.append("## The build record\n\n" + build_record.strip())
+
+    parts.append(
+        "you are verifying a completed build, not building: make no edits, "
+        "write no files, commit nothing. Read the diff above against the "
+        "criteria and name what the criteria do not assert but the diff "
+        "should still be judged on, and name the tests that would assert "
+        "it if they existed. A spec whose approval commit does not "
+        "describe the working tree the build produced is itself a "
+        "finding: the diff is judged against what was approved, and a "
+        "divergence between them is reportable rather than assumed "
+        "away. Report each as a finding: title, specimen (the file or "
+        "commit the finding is about), retires (what having this "
+        "finding on record replaces or closes -- every finding must "
+        "carry one, or it is refused unfiled), rejection_test (the test "
+        "that would catch a regression of it), and severity. Severity "
+        "is derived rather than judged: the version, counter, "
+        "condition, or state change that flips a finding from harmless "
+        "to blocking; an adjective is not a severity. An empty "
+        "findings list means you looked and found nothing to report, not "
+        "that you did not look.")
+    return "\n\n".join(parts)
+
+
+def load_config() -> dict:
+    raw = os.environ.get("ATTAVO_ADAPTER_CONFIG")
+    return json.loads(raw) if raw else {}
+
+
+def build_argv(schema_path: Path, output_path: Path, config: dict, stage: str) -> list[str]:
+    # verify is mechanically read-only, not just instructed to be: the
+    # sandbox enforces "make no edits, write no files, commit nothing"
+    # rather than trusting the instruction alone.
+    sandbox = "workspace-write" if stage == "build" else "read-only"
+    return ["codex", "exec", "-",
+           "--model", config["model"],
+           "--sandbox", sandbox,
+           "--output-schema", str(schema_path),
+           "--output-last-message", str(output_path),
+           "--json",
+           "--ignore-user-config", "--ignore-rules"]
+
+
+def check_auth(config: dict) -> str | None:
+    """None if the declared auth mode and OPENAI_API_KEY's presence
+    agree; else the mismatch, refused before codex is ever invoked."""
+    auth = config.get("auth", "subscription")
+    has_key = bool(os.environ.get("OPENAI_API_KEY"))
+    if auth == "subscription" and has_key:
+        return ("auth is \"subscription\" but OPENAI_API_KEY is set in the "
+                "environment -- codex would silently bill the API account "
+                "instead of running under the plan")
+    if auth == "api" and not has_key:
+        return "auth is \"api\" but OPENAI_API_KEY is not set in the environment"
+    return None
+
+
+def parse_events(stdout: str) -> list[dict]:
+    """One JSON object per JSONL line; a tracing line (e.g. "ERROR
+    codex_api::...") is not JSON and is skipped, not an error -- codex
+    writes both to the same stream under --json."""
+    events = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            continue
+    return events
+
+
+def terminal_event(events: list[dict]) -> dict | None:
+    for e in events:
+        if e.get("type") in ("turn.completed", "turn.failed"):
+            return e
+    return None
+
+
+def invoke(instruction: str, schema: dict, config: dict,
+          stage: str) -> tuple[str, list[dict], dict | None, int]:
+    """(raw transcript text, parsed events, the output file's parsed
+    content or None, exit code) -- from a canned ATTAVO_ADAPTER_RESPONSE_FILE
+    when set, else a real `codex exec -` invocation."""
+    response_file = os.environ.get("ATTAVO_ADAPTER_RESPONSE_FILE")
+    if response_file:
+        canned = json.loads(Path(response_file).read_text())
+        events = canned.get("events") or []
+        final = canned.get("final")
+        exit_code = canned.get("exit_code", 0)
+        raw = "\n".join(json.dumps(e) for e in events)
+        return raw, events, final, exit_code
+
+    with tempfile.TemporaryDirectory() as tmp:
+        schema_path = Path(tmp) / "schema.json"
+        schema_path.write_text(json.dumps(schema))
+        output_path = Path(tmp) / "output.json"
+
+        argv = build_argv(schema_path, output_path, config, stage)
+        run = subprocess.run(argv, input=instruction, capture_output=True,
+                             text=True, check=False)
+        raw = run.stdout
+        if run.returncode != 0 and run.stderr.strip():
+            raw = (raw + "\n" if raw else "") + run.stderr.rstrip("\n")
+
+        final = None
+        if output_path.is_file():
+            try:
+                final = json.loads(output_path.read_text())
+            except ValueError:
+                final = None
+        return raw, parse_events(run.stdout), final, run.returncode
+
+
+def adapter_version() -> str:
+    try:
+        out = subprocess.run(["codex", "--version"], capture_output=True,
+                             text=True, check=False)
+    except OSError:
+        return ""
+    return out.stdout.strip()
+
+
+MIN_QUESTION_CHARS = 40
+
+
+def main() -> int:
+    config = load_config()
+    stage = os.environ.get("ATTAVO_STAGE", "build")
+    verifying = stage == "verify"
+    instruction = verify_instruction() if verifying else build_instruction()
+    schema = VERIFY_SCHEMA if verifying else STATUS_SCHEMA
+
+    model = config.get("model")
+    if not model:
+        sys.stderr.write(
+            "adapters/codex/run: refused: [executor.codex].model is "
+            "required -- no model id appears anywhere codex itself "
+            "reports (the event stream, codex doctor, or any config file)\n")
+        return 1
+
+    if os.environ.get("ATTAVO_ADAPTER_DRY_RUN"):
+        argv = build_argv(Path("<schema.json>"), Path("<output.json>"), config, stage)
+        print(json.dumps({"argv": argv, "instruction": instruction, "schema": schema}))
+        return 0
+
+    if not os.environ.get("ATTAVO_ADAPTER_RESPONSE_FILE"):
+        auth_error = check_auth(config)
+        if auth_error:
+            sys.stderr.write(f"adapters/codex/run: refused: {auth_error}\n")
+            return 1
+
+    raw, events, final, exit_code = invoke(instruction, schema, config, stage)
+    # keep the evidence: both channels, not just the fields below, are
+    # the transcript build-NN.log saves -- a halt otherwise cannot be
+    # explained after the fact.
+    print(raw.rstrip("\n") if raw.strip() else "(codex produced no output)")
+
+    if exit_code != 0:
+        return exit_code
+
+    # An absent or unparseable output file is a failure whether this is
+    # a build or a verify -- the same class as claude-code's absent
+    # structured_output.
+    if final is None:
+        return 1
+
+    term = terminal_event(events)
+    usage = (term or {}).get("usage") or {}
+    common = {
+        "model": model,
+        "model_version": None,
+        "adapter_version": adapter_version(),
+        "tokens": {
+            "input": usage.get("input_tokens", 0) or 0,
+            "output": usage.get("output_tokens", 0) or 0,
+        },
+        "cost_usd": None,
+    }
+
+    if verifying:
+        line = {**common,
+               "findings": final.get("findings"),
+               "tests_named": final.get("tests_named")}
+        print(json.dumps(line))
+        return 0
+
+    status = final.get("status", "done")
+    question = final.get("question")
+    if status == "question" and (not question or len(question) < MIN_QUESTION_CHARS):
+        return 1
+
+    line = {**common, "status": status, "question": question}
+    print(json.dumps(line))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -46,7 +46,11 @@ GIT_COMMITTER_NAME/EMAIL, set by the product and never the tenant's git
 config, then invokes the named adapter (adapters/<name>/run) with the
 spec, the corpus, and the branch. It refuses (status refused) a commit
 between start_sha and HEAD not authored by that identity, checks that
-every path touched matches a spec claim, then runs the criteria, the
+every path touched matches a spec claim, records the adapter's own
+declared "reports" -- the fields adapters/<name>/conformance.json says
+it can supply with a real value (issue #41), so a field it claims and
+never supplies is a defect the conformance suite catches rather than a
+silent null -- then runs the criteria, the
 tests [tests].select and [tests].run name for the touched paths, and --
 when the manifest declares [checks].command -- the tenant's own
 whole-tree check, from the tenant root. pass requires every criterion,
@@ -67,7 +71,7 @@ adapter, because a judge is never spent on a tree the forge already
 called red. With the forge green, verify calls the adapter named by
 [executor].verify (defaulting to [executor].build) with the diff since
 the build's approval, the spec, and the build record, and records its
-findings. [executor.<adapter>.<stage>] shadows [executor.<adapter>] for
+findings and its declared "reports" (issue #41). [executor.<adapter>.<stage>] shadows [executor.<adapter>] for
 build or verify alone; both merge parent then stage before setting
 ATTAVO_ADAPTER_CONFIG, and the record's adapter_config is the merged
 result. file-findings opens one tenant issue per finding in the item's
@@ -705,6 +709,24 @@ def resolve_adapter(root: Path, name: str) -> Path | None:
     return None
 
 
+def adapter_reports(adapter_path: Path) -> list[str]:
+    """Field names adapters/<name>/conformance.json declares this adapter
+    can supply with a real value -- vendor independence (2026-09-09
+    ruling): the record carries the declaration, so an adapter claiming
+    a field and returning null for it fails the conformance suite
+    instead of writing a silent, uncomparable null. [] when the
+    resolved adapter (a tenant override included) declares no
+    conformance.json at all -- an absent declaration, not a refusal."""
+    manifest_path = adapter_path.parent / "conformance.json"
+    if not manifest_path.is_file():
+        return []
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError:
+        return []
+    return manifest.get("reports", [])
+
+
 def changed_paths(root: Path, start_sha: str, records_rel: str) -> list[str]:
     """Paths changed between start_sha and HEAD, other than paths.records --
     the records directory is where build itself writes, not a claim."""
@@ -808,6 +830,7 @@ def cmd_build(argv: list[str]) -> int:
     adapter_config = merge_adapter_config(m, adapter_name, "build")
     checks_command = (m.get("checks") or {}).get("command")
     identity = executor_identity(adapter_name)
+    reports = adapter_reports(adapter_path)
 
     start_sha = git(root, "rev-parse", "HEAD").strip()
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
@@ -944,6 +967,7 @@ def cmd_build(argv: list[str]) -> int:
         "adapter": adapter_name,
         "adapter_config": adapter_config,
         "executor_identity": identity,
+        "reports": reports,
         "adapter_version": adapter_version,
         "model": model,
         "model_version": model_version,
@@ -1050,6 +1074,7 @@ def cmd_verify(argv: list[str]) -> int:
             "at": now_iso(),
             "adapter": None, "adapter_config": {}, "adapter_version": None,
             "model": None, "model_version": None,
+            "reports": [],
             "forge_checks": forge_checks,
             "findings": None,
             "tests_named": [],
@@ -1074,6 +1099,7 @@ def cmd_verify(argv: list[str]) -> int:
         return 1
 
     adapter_config = merge_adapter_config(m, adapter_name, "verify")
+    reports = adapter_reports(adapter_path)
     approval_sha = latest_build.get("approval_sha")
     spec_dir = root / specs_rel / item_id
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
@@ -1142,6 +1168,7 @@ def cmd_verify(argv: list[str]) -> int:
         "adapter_version": adapter_version_out,
         "model": model,
         "model_version": model_version,
+        "reports": reports,
         "forge_checks": forge_checks,
         "findings": findings,
         "tests_named": tests_named,

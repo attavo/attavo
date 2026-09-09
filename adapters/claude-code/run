@@ -226,12 +226,18 @@ def main() -> int:
     config = load_config()
     verifying = os.environ.get("ATTAVO_STAGE") == "verify"
     if verifying:
-        cmd = build_command(verify_instruction(), config, VERIFY_SCHEMA)
+        instruction, schema = verify_instruction(), VERIFY_SCHEMA
     else:
-        cmd = build_command(build_instruction(), config, STATUS_SCHEMA)
+        instruction, schema = build_instruction(), STATUS_SCHEMA
+    cmd = build_command(instruction, config, schema)
 
     if os.environ.get("ATTAVO_ADAPTER_DRY_RUN"):
-        print(json.dumps(cmd))
+        # {"argv", "instruction", "schema"}, not a bare argv list: the
+        # instruction lives in argv's own "-p" value here, but a second
+        # adapter (issue #41) can deliver it on stdin instead, where
+        # argv carries no instruction at all -- the envelope is what
+        # stays adapter-agnostic for tests/test_executor_conformance.py.
+        print(json.dumps({"argv": cmd, "instruction": instruction, "schema": schema}))
         return 0
 
     response_file = os.environ.get("ATTAVO_ADAPTER_RESPONSE_FILE")
