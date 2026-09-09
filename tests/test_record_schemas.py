@@ -281,22 +281,23 @@ def test_write_record_stamps_record_version_from_the_schemas_id(tmp_path):
     assert json.loads(path.read_text())["record_version"] == int(tail) + 1
 
 
-def _schema_shape(schema: dict) -> str:
-    props = {k: v for k, v in schema.get("properties", {}).items() if k != "record_version"}
-    required = sorted(k for k in schema.get("required", []) if k != "record_version")
-    return json.dumps({"properties": props, "required": required}, sort_keys=True)
+def _load_check_record_schema_version():
+    """scripts/check_record_schema_version.py -- schema_version_drift's
+    one home. CI's schema-version job (.github/workflows/ci.yml, on
+    pull_request only) imports the same module to run it against this
+    repository's real schema files at the merge base and at HEAD; a
+    merge-base read behaves differently inside pytest than in the
+    workflow, so that comparison lives outside this suite. This test is
+    the helper's own rejection test, run here against a mutated copy of a
+    real schema rather than the merge base."""
+    path = ROOT / "scripts" / "check_record_schema_version.py"
+    spec = importlib.util.spec_from_file_location("check_record_schema_version", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def schema_version_drift(old: dict, new: dict) -> str | None:
-    """None when the shape is unchanged, or changed alongside a bumped
-    $id. A message when the shape changed but $id's trailing integer
-    didn't -- a version nobody bumps is worse than none, because readers
-    trust it (issue #60, acceptance 3)."""
-    old_version = old["$id"].rsplit("/", 1)[-1]
-    new_version = new["$id"].rsplit("/", 1)[-1]
-    if _schema_shape(old) != _schema_shape(new) and old_version == new_version:
-        return f"schema/records shape changed but $id version is still {new_version}"
-    return None
+schema_version_drift = _load_check_record_schema_version().schema_version_drift
 
 
 def test_schema_shape_change_without_a_version_bump_is_refused():
