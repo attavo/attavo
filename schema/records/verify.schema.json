@@ -8,7 +8,8 @@
     "sha", "build_sha", "build_record", "approval_sha", "at", "adapter",
     "adapter_config", "adapter_version", "model", "model_version",
     "forge_checks", "findings", "tests_named", "commits", "mutation",
-    "weak_stub", "stub_ratio", "tokens", "cost_usd", "wall_clock_s", "status"
+    "weak_stub", "stub_ratio", "tokens", "cost_usd", "wall_clock_s", "status",
+    "product_version", "product_pin"
   ],
   "properties": {
     "sha": {"type": "string", "minLength": 1},
@@ -93,6 +94,8 @@
     },
     "cost_usd": {"type": ["number", "null"]},
     "wall_clock_s": {"type": "number", "minimum": 0},
-    "status": {"type": "string", "enum": ["pass", "returned", "failed"]}
+    "status": {"type": "string", "enum": ["pass", "returned", "failed"]},
+    "product_version": {"type": "string", "minLength": 1},
+    "product_pin": {"type": ["string", "null"]}
   }
 }

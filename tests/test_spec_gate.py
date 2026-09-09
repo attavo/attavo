@@ -40,6 +40,10 @@ def test_spec_gate_refuses_prose_criterion(tmp_path):
     rec = latest_record(root, "1", "spec")
     assert rec["status"] == "refused"
     assert "missing.sh" in rec["refusal"]
+    # issue #49: this fixture's manifest carries no [attavo] table at all --
+    # product_pin is the absent fact, null, not a crash reading it.
+    assert rec["product_pin"] is None
+    assert rec["product_version"]
 
 
 def test_spec_gate_refuses_criterion_passing_on_tree(tmp_path):

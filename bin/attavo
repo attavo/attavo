@@ -134,6 +134,16 @@ def git(root: Path, *args: str) -> str:
     return out.stdout
 
 
+def product_version() -> str:
+    """What the running program is, from PRODUCT_ROOT rather than the
+    tenant's checkout: a tagged release reports its tag, a checkout
+    reports its commit, and a dirty tree says so. Distinct from the
+    tenant's product_pin -- an operator running a checkout, which is how
+    every build and verify have actually been run so far, bypasses the
+    pin entirely (issue #49)."""
+    return git(PRODUCT_ROOT, "describe", "--tags", "--always", "--dirty").strip()
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -222,9 +232,18 @@ def latest_attempt_path(records_dir: Path, stage: str) -> Path | None:
     return records_dir / f"{stage}-{max(attempts):02d}.json"
 
 
-def write_record(records_dir: Path, stage: str, record: dict) -> Path:
+def write_record(records_dir: Path, stage: str, record: dict, m: dict) -> Path:
+    """Every record gains product_version (what ran, derived here) and
+    product_pin (what the tenant declared, copied verbatim from the
+    manifest, or null when the manifest carries no [attavo] table) --
+    recorded, never enforced (issue #49). A manifest missing the table
+    is an absent fact, not a crash: this is the one caller of write_record
+    that must not raise on a shape the manifest schema forbids but
+    tomllib.load happily returns."""
     records_dir.mkdir(parents=True, exist_ok=True)
     nn = next_attempt_number(records_dir, stage)
+    record = {**record, "product_version": product_version(),
+              "product_pin": (m.get("attavo") or {}).get("version")}
     path = records_dir / f"{stage}-{nn:02d}.json"
     path.write_text(json.dumps(record, indent=2) + "\n")
     return path
@@ -457,7 +476,7 @@ def cmd_spec_gate(argv: list[str]) -> int:
                   "at": now_iso(), "status": "approved",
                   "approval_sha": latest_approval.get("sha") if latest_approval else None,
                   "criteria": [], "refusal": None}
-        write_record(records_dir, "spec", record)
+        write_record(records_dir, "spec", record, m)
         print("attavo spec-gate: approved (no criteria run)")
         return 0
 
@@ -522,7 +541,7 @@ def cmd_spec_gate(argv: list[str]) -> int:
               "spec_sha": spec_sha,
               "at": now_iso(), "status": status, "approval_sha": None,
               "criteria": results, "refusal": refusal}
-    write_record(records_dir, "spec", record)
+    write_record(records_dir, "spec", record, m)
 
     if refusal:
         print(f"attavo spec-gate: refused: {refusal}")
@@ -585,7 +604,7 @@ def cmd_approve(argv: list[str]) -> int:
 
     record = {"sha": git(root, "rev-parse", "HEAD").strip(), "spec_sha": spec_sha_now,
               "approved_by": by, "at": now_iso()}
-    write_record(records_dir, "approval", record)
+    write_record(records_dir, "approval", record, m)
     print(f"attavo approve: item {item_id} approved by {by}")
     return 0
 
@@ -878,7 +897,7 @@ def cmd_build(argv: list[str]) -> int:
         "refusal": refusal,
         "halted": halted,
     }
-    record_path = write_record(item_records_dir, "build", record)
+    record_path = write_record(item_records_dir, "build", record, m)
     record_path.with_suffix(".log").write_text("\n".join(transcripts))
 
     print(f"attavo build: {status_out} ({record_path.name})")
@@ -979,7 +998,7 @@ def cmd_verify(argv: list[str]) -> int:
             "wall_clock_s": round(time.monotonic() - started, 3),
             "status": "returned",
         }
-        record_path = write_record(item_records_dir, "verify", record)
+        record_path = write_record(item_records_dir, "verify", record, m)
         print(f"attavo verify: returned ({record_path.name}); the forge checks are not green")
         return 0
 
@@ -1072,7 +1091,7 @@ def cmd_verify(argv: list[str]) -> int:
         "wall_clock_s": round(time.monotonic() - started, 3),
         "status": status_out,
     }
-    record_path = write_record(item_records_dir, "verify", record)
+    record_path = write_record(item_records_dir, "verify", record, m)
     record_path.with_suffix(".log").write_text(transcript)
 
     print(f"attavo verify: {status_out} ({record_path.name})")
