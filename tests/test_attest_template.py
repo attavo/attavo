@@ -40,6 +40,7 @@ DOWNSTREAM_STEPS = [
 
 def base_record() -> dict:
     return {
+        "record_version": 2,
         "sha": "a" * 40, "merge_sha": "a" * 40, "item": "1",
         "spec": "spec-01", "spec_sha": "b" * 40,
         "approval": "approval-01", "approval_sha": "c" * 40,

@@ -1,17 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/build/1",
+  "$id": "https://attavo.dev/schema/records/build/2",
   "title": "attavo build record (build-NN.json)",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "sha", "start_sha", "spec_sha", "approval_sha", "at", "adapter",
+    "record_version", "item", "sha", "start_sha", "spec_sha", "approval_sha", "at", "adapter",
     "adapter_config", "executor_identity", "reports", "adapter_version",
     "model", "model_version", "iterations", "criteria", "selected_tests",
     "checks", "tokens", "cost_usd", "wall_clock_s", "status", "refusal",
     "halted", "product_version", "product_pin"
   ],
   "properties": {
+    "record_version": {"type": "integer", "minimum": 1},
+    "item": {"type": "string", "minLength": 1},
     "sha": {"type": "string", "minLength": 1},
     "start_sha": {"type": "string", "minLength": 1},
     "spec_sha": {"type": ["string", "null"]},

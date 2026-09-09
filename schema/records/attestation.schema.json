@@ -1,16 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/attestation/1",
+  "$id": "https://attavo.dev/schema/records/attestation/2",
   "title": "attavo attest record (attestation-NN.json)",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "sha", "merge_sha", "item", "spec", "spec_sha", "approval", "approval_sha",
+    "record_version", "sha", "merge_sha", "item", "spec", "spec_sha", "approval", "approval_sha",
     "build", "build_sha", "verify", "verify_sha", "at", "interventions", "acts",
     "tokens_by_stage", "cost_by_stage_usd", "wall_clock_by_stage_s", "ci_runs",
     "signed", "signature", "product_version", "product_pin"
   ],
   "properties": {
+    "record_version": {"type": "integer", "minimum": 1},
     "sha": {"type": "string", "minLength": 1},
     "merge_sha": {"type": "string", "minLength": 1},
     "item": {"type": "string", "minLength": 1},
