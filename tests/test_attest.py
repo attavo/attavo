@@ -116,17 +116,25 @@ def test_attest_refuses_a_build_whose_approval_sha_is_not_the_latest_approval(tm
     assert "approval_sha" in run.stderr
 
 
-def test_attest_refuses_when_the_merge_commit_names_zero_items(tmp_path):
-    """Acceptance 3a."""
+def test_attest_exits_0_and_writes_nothing_when_the_merge_commit_names_zero_items(tmp_path):
+    """Issue #58: not every merge is an item merge -- tenant zero's own
+    installing merge touches .github/workflows/, attavo.toml, and bin/,
+    none of it under paths.records, and that is an ordinary Tuesday, not
+    a defect. attest exits 0 and writes no record rather than refusing."""
     root = make_tenant(tmp_path, "build_valid")
     git(root, "checkout", "-b", "chore/unrelated")
     (root / "README-CHORE.md").write_text("nothing to do with any item\n")
     commit_all(root, "chore: unrelated change")
     merge_into_main(root, "chore/unrelated")
 
+    records_dir = root / "records"
+    before = sorted(records_dir.rglob("*")) if records_dir.is_dir() else []
+
     run = run_attavo(root, "attest")
-    assert run.returncode == 1
-    assert "no item derived" in run.stderr
+    assert run.returncode == 0, run.stderr
+
+    after = sorted(records_dir.rglob("*")) if records_dir.is_dir() else []
+    assert after == before, "the records directory changed"
 
 
 def test_attest_refuses_when_the_merge_commit_names_two_items(tmp_path):
