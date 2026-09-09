@@ -9,7 +9,7 @@
     attavo verify [N]
     attavo file-findings [N]
     attavo record-only
-    attavo attest [--dry-run] [N]
+    attavo attest [--dry-run [--partial]] [N]
 
 The doctor is the definition of done. It asserts three proofs against a
 tenant root and exits 1 until every proof holds:
@@ -107,7 +107,14 @@ written and patches those two fields before committing it. --dry-run runs
 the same derivation and the same three assertions, on the same code path,
 and writes nothing -- meant for a pull request or merge group, before the
 merge that attest itself demands, so an incoherent chain refuses while a
-re-run is still possible. See the attestation contract in the project's
+re-run is still possible. --dry-run --partial (issue #67) is for the pull
+request alone, where the record a complete chain would need is the output
+of a later stage that is itself waiting on this check: a missing later
+record is "not yet" (exit 0, naming the item and the stages present and
+absent) rather than a refusal, while the two chain assertions -- build's
+approval_sha names the latest approval, verify's build_sha names the
+latest build -- still run over whatever records exist. --partial has no
+effect without --dry-run. See the attestation contract in the project's
 Phase 2, Lane 4 issue for the full rules it enforces.
 """
 from __future__ import annotations
@@ -1387,39 +1394,63 @@ def derive_attest_items(root: Path, records_rel: str) -> tuple[set[str], str | N
     return items, None
 
 
-def check_attest_chain(records_dir: Path, item_id: str) -> tuple[dict, dict, dict, dict] | None:
+NOT_YET = object()
+
+
+def check_attest_chain(records_dir: Path, item_id: str, partial: bool = False):
     """The three assertions attavo attest and attavo attest --dry-run both
     refuse on: the latest spec, approval, build, and verify records for
     item_id all exist, build's approval_sha names the latest approval --
     a re-approval after a build must force a re-run of what changed -- and
     verify's build_sha names that build. Prints the refusal both modes
     print and returns None on any of them; returns the four latest records
-    (spec, approval, build, verify) when the chain holds."""
+    (spec, approval, build, verify) when the chain holds.
+
+    partial (issue #67) is for a pull request, where a later stage's
+    record cannot exist yet because the stage that would produce it is
+    itself waiting on this check. Under partial, a missing record is not
+    a refusal -- the two chain assertions still run over whatever records
+    exist, and NOT_YET is returned, with the item and the stages present
+    and absent named on stdout, when a stage is still missing once those
+    assertions hold."""
     latest_spec = latest_record(records_dir, "spec")
     latest_approval = latest_record(records_dir, "approval")
     latest_build = latest_record(records_dir, "build")
     latest_verify = latest_record(records_dir, "verify")
-    for stage, rec in (("spec", latest_spec), ("approval", latest_approval),
-                       ("build", latest_build), ("verify", latest_verify)):
-        if rec is None:
-            print(f"attavo attest: refused: no {stage} record for item {item_id}", file=sys.stderr)
+    stages = (("spec", latest_spec), ("approval", latest_approval),
+              ("build", latest_build), ("verify", latest_verify))
+
+    if not partial:
+        for stage, rec in stages:
+            if rec is None:
+                print(f"attavo attest: refused: no {stage} record for item {item_id}", file=sys.stderr)
+                return None
+
+    if latest_approval is not None and latest_build is not None:
+        if latest_build.get("approval_sha") != latest_approval.get("sha"):
+            print("attavo attest: refused: build's approval_sha does not name the latest "
+                  "approval; a re-approval after the build must force a re-run", file=sys.stderr)
+            return None
+    if latest_build is not None and latest_verify is not None:
+        if latest_verify.get("build_sha") != latest_build.get("sha"):
+            print("attavo attest: refused: verify's build_sha does not name the latest build",
+                  file=sys.stderr)
             return None
 
-    if latest_build.get("approval_sha") != latest_approval.get("sha"):
-        print("attavo attest: refused: build's approval_sha does not name the latest "
-              "approval; a re-approval after the build must force a re-run", file=sys.stderr)
-        return None
-    if latest_verify.get("build_sha") != latest_build.get("sha"):
-        print("attavo attest: refused: verify's build_sha does not name the latest build",
-              file=sys.stderr)
-        return None
+    missing = [stage for stage, rec in stages if rec is None]
+    if partial and missing:
+        present = [stage for stage, rec in stages if rec is not None]
+        print(f"attavo attest --dry-run --partial: item {item_id} not yet "
+              f"(present: {', '.join(present) or 'none'}; absent: {', '.join(missing)})")
+        return NOT_YET
 
     return latest_spec, latest_approval, latest_build, latest_verify
 
 
 def cmd_attest(argv: list[str]) -> int:
     dry_run = "--dry-run" in argv
-    argv = [a for a in argv if a != "--dry-run"]
+    partial = "--partial" in argv
+    argv = [a for a in argv if a not in ("--dry-run", "--partial")]
 
     root = Path(".").resolve()
     m = read_manifest(root)
@@ -1450,9 +1481,11 @@ def cmd_attest(argv: list[str]) -> int:
         item_id = next(iter(items))
 
     records_dir = root / records_rel / item_id
-    chain = check_attest_chain(records_dir, item_id)
+    chain = check_attest_chain(records_dir, item_id, partial=partial and dry_run)
     if chain is None:
         return 1
+    if chain is NOT_YET:
+        return 0
     latest_spec, latest_approval, latest_build, latest_verify = chain
 
     spec_path = latest_attempt_path(records_dir, "spec")
