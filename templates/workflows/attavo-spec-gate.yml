@@ -6,9 +6,11 @@
 # pushes the resulting spec-NN.json -- the push is what binds the record to
 # the commit it graded. That push is itself a commit on the branch, so
 # without the skip step below it would retrigger this same workflow, which
-# would push another record, forever (issue #9). The skip step checks
-# whether the *triggering* commit touched anything outside paths.records;
-# a record-only commit (the gate's own push) skips every step after it.
+# would push another record, forever (issue #9). The skip step reads
+# `attavo record-only`'s exit code -- whether the *triggering* commit
+# touched anything outside paths.records, decided once in the product
+# rather than in this template's own shell (issue #19); a record-only
+# commit (the gate's own push) skips every step after it.
 #
 # The job only runs on a work item's attavo/N-* branch: this event fires on
 # every pull_request, and a PR from any other branch has no item id for the
@@ -68,22 +70,11 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
+      - uses: <owner>/attavo@<tag>
+
       - name: Skip when the head commit only touches records
         id: touch
-        run: |
-          records_rel="$(python3 -c "import tomllib; print(tomllib.load(open('attavo.toml','rb'))['paths']['records'])")"
-          skip=true
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            case "$f" in
-              "$records_rel"/*) ;;
-              *) skip=false ;;
-            esac
-          done <<< "$(git diff --name-only HEAD^1 HEAD)"
-          echo "skip=$skip" >> "$GITHUB_OUTPUT"
-
-      - uses: <owner>/attavo@<tag>
-        if: steps.touch.outputs.skip != 'true'
+        run: attavo record-only && echo skip=true >> "$GITHUB_OUTPUT" || echo skip=false >> "$GITHUB_OUTPUT"
 
       - name: attavo spec-gate
         if: steps.touch.outputs.skip != 'true'

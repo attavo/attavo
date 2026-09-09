@@ -103,6 +103,77 @@ def test_doctor_proof_two_counts_three_of_five_stages_still_red(tmp_path):
     assert "build" not in p["reason"]
 
 
+def test_doctor_proof_two_holds_on_a_fixture_carrying_all_five_stages(tmp_path):
+    """Acceptance 5, issue #54: proof two is already generic over STAGES --
+    what was missing was a record type named attestation ever existing.
+    A fixture with one record per stage, attestation included, is enough
+    to prove the mechanism; it goes green on tenant zero in the lane that
+    follows this one."""
+    root = tmp_path / "five_stages"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "spec-01.json").write_text(json.dumps({"status": "pass"}))
+    (records / "approval-01.json").write_text(json.dumps({"approved_by": "alice"}))
+    (records / "build-01.json").write_text(json.dumps({"status": "pass"}))
+    (records / "verify-01.json").write_text(json.dumps({"status": "pass"}))
+    (records / "attestation-01.json").write_text(json.dumps({"item": "1"}))
+    commit_all(root, "spec, approval, build, verify, and attestation records")
+
+    p = run_doctor(root)["one-item-every-stage"]
+    assert p["holds"], p["reason"]
+
+
+def test_no_commit_lacks_a_record_via_attestation_merge_sha(tmp_path):
+    """Acceptance 6, issue #54: a merge commit is a real change, not a
+    records-only one, so it must be named explicitly. An attestation
+    record's merge_sha does that -- naming it only by merge_sha, not sha
+    or commits, isolates the new code path from the two that already
+    existed."""
+    root = tmp_path / "merge_sha"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    (root / "src.txt").write_text("code\n")
+    commit_all(root, "a real change, not yet named by any record")
+    merge_sha = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                               capture_output=True, text=True, check=True).stdout.strip()
+
+    p = run_doctor(root)["no-commit-lacks-record"]
+    assert not p["holds"]
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "attestation-01.json").write_text(json.dumps({"merge_sha": merge_sha}))
+    commit_all(root, "attestation record naming the merge commit")
+
+    p = run_doctor(root)["no-commit-lacks-record"]
+    assert p["holds"], p["reason"]
+
+
+def test_doctor_proof_one_refuses_a_gate_with_empty_retires(tmp_path):
+    """Residual, issue #54 -- proposed, not yet ruled on: a gate that
+    retires nothing only adds. The manifest schema has required
+    [gates.<name>].retires to be non-empty since Phase 1, but read_manifest
+    never validates against that schema, so nothing enforced it at
+    runtime until this proof read it directly."""
+    root = tmp_path / "empty_retires"
+    root.mkdir()
+    (root / "attavo.toml").write_text(
+        '[paths]\nrejections = "rejections"\n\n'
+        '[gates.spec]\ncommand = "false"\nretires = []\n')
+    (root / "rejections" / "spec").mkdir(parents=True)
+    init_repo(root, "install")
+
+    p = run_doctor(root)["every-gate-rejects"]
+    assert not p["holds"]
+    assert "retires" in p["reason"] and "spec" in p["reason"]
+
+
 def test_doctor_proof_one_runs_the_gate_without_an_item_argument(tmp_path):
     """Issue #7, and its regression test. [gates.spec].command is a bare
     `attavo spec-gate`, no item argument, and its rejections/spec/ fixture
