@@ -6,6 +6,8 @@ records; extend it, don't duplicate it, as new record shapes land (issue
 Run: python3 -m pytest tests -q
 """
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -119,6 +121,32 @@ def test_records_carry_product_version_distinct_from_pin(tmp_path):
         assert rec["product_pin"] == "v0.2.1"
         assert rec["product_version"] == running_version
         assert rec["product_version"] != rec["product_pin"]
+
+
+def test_product_version_unknown_when_product_root_is_not_a_git_repo(tmp_path):
+    """Issue #49 follow-up: GitHub Actions extracts an action into
+    _actions/ from a tarball, not a git checkout -- PRODUCT_ROOT there has
+    no .git, so `git describe` fails and, unguarded, raises inside
+    write_record: the one function that must never fail, since it runs
+    after the work it records already happened. A copy of bin/attavo
+    placed under a fresh, non-git tmp_path reproduces PRODUCT_ROOT with no
+    .git without needing an actual GitHub Actions run. Red today: the
+    KeyError this reproduces is a RuntimeError from git(), uncaught, and
+    no record is written at all."""
+    product_bin = tmp_path / "product" / "bin"
+    product_bin.mkdir(parents=True)
+    shutil.copy(ATTAVO, product_bin / "attavo")
+
+    root = make_tenant(tmp_path, "build_valid", name="tenant")
+
+    env = dict(os.environ)
+    env.pop("ATTAVO_PRODUCT_VERSION", None)
+    run = subprocess.run([sys.executable, str(product_bin / "attavo"), "spec-gate", "1"],
+                        cwd=str(root), env=env, capture_output=True, text=True, check=False)
+    assert run.returncode == 0, run.stderr
+
+    rec = json.loads((root / "records" / "1" / "spec-01.json").read_text())
+    assert rec["product_version"] == "unknown"
 
 
 def test_manifest_schema_accepts_open_executor_config():

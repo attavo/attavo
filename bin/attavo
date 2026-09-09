@@ -135,13 +135,32 @@ def git(root: Path, *args: str) -> str:
 
 
 def product_version() -> str:
-    """What the running program is, from PRODUCT_ROOT rather than the
-    tenant's checkout: a tagged release reports its tag, a checkout
-    reports its commit, and a dirty tree says so. Distinct from the
-    tenant's product_pin -- an operator running a checkout, which is how
-    every build and verify have actually been run so far, bypasses the
-    pin entirely (issue #49)."""
-    return git(PRODUCT_ROOT, "describe", "--tags", "--always", "--dirty").strip()
+    """What the running program is. Three fallbacks, in order, and never an
+    exception -- this runs inside write_record, after the work it
+    describes already happened, and a raise here would lose the record
+    for an invocation that already ran:
+
+      1. ATTAVO_PRODUCT_VERSION, when the environment sets it. The forge
+         action sets this from its own ref (action.yml, not here -- this
+         function stays forge-agnostic).
+      2. git describe --tags --always --dirty against PRODUCT_ROOT: a
+         tagged release reports its tag, a checkout reports its commit,
+         a dirty tree says so.
+      3. "unknown", when PRODUCT_ROOT is not a git repository at all --
+         the case for a GitHub Actions tarball checkout under _actions/,
+         which is exactly when (1) is expected to already have supplied
+         the answer.
+
+    Distinct from the tenant's product_pin -- an operator running a
+    checkout, which is how every build and verify have actually been run
+    so far, bypasses the pin entirely (issue #49)."""
+    env = os.environ.get("ATTAVO_PRODUCT_VERSION")
+    if env:
+        return env
+    try:
+        return git(PRODUCT_ROOT, "describe", "--tags", "--always", "--dirty").strip()
+    except RuntimeError:
+        return "unknown"
 
 
 def now_iso() -> str:
