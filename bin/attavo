@@ -154,18 +154,21 @@ class Proof:
         self.title = title
         self.holds = False
         self.reason = ""
+        self.extra: dict = {}
 
-    def fail(self, reason: str) -> "Proof":
+    def fail(self, reason: str, **extra) -> "Proof":
         self.holds, self.reason = False, reason
+        self.extra.update(extra)
         return self
 
-    def hold(self, reason: str) -> "Proof":
+    def hold(self, reason: str, **extra) -> "Proof":
         self.holds, self.reason = True, reason
+        self.extra.update(extra)
         return self
 
     def as_dict(self) -> dict:
         return {"proof": self.key, "title": self.title,
-                "holds": self.holds, "reason": self.reason}
+                "holds": self.holds, "reason": self.reason, **self.extra}
 
 
 def read_manifest(root: Path) -> dict | None:
@@ -483,6 +486,15 @@ def proof_one_item_every_stage(root: Path, m: dict | None) -> Proof:
     return p.fail(f"no item carries every stage; item {best[0]} lacks {', '.join(lacking)}")
 
 
+def touches_boundary(root: Path, sha: str, boundary_paths: list[str]) -> bool:
+    """Whether sha's first-parent diff touches a path [spec.boundary].paths
+    declares governed -- an ordinary merge that does is a boundary
+    evasion (issue #72): the tenant carried a governed change around the
+    path the manifest itself names."""
+    diff = git(root, "diff", "--name-only", f"{sha}^1", sha).splitlines()
+    return any(fnmatch.fnmatch(path, pattern) for path in diff for pattern in boundary_paths)
+
+
 def proof_no_commit_lacks_record(root: Path, m: dict | None) -> Proof:
     p = Proof("no-commit-lacks-record", "no commit lacks a record")
     if m is None:
@@ -495,7 +507,11 @@ def proof_no_commit_lacks_record(root: Path, m: dict | None) -> Proof:
     if not install:
         return p.fail(f"{MANIFEST} is not committed; the tenant has no record boundary")
     commits = git(root, "rev-list", f"{install[0]}..HEAD", "--first-parent").split()
-    records_dir = root / m.get("paths", {}).get("records", "")
+    if not commits:
+        return p.fail(f"no commit after the install commit {install[0][:12]}; nothing has been recorded")
+
+    records_rel = m.get("paths", {}).get("records", "")
+    records_dir = root / records_rel
     named: set[str] = set()
     for stages in load_records(records_dir).values():
         for rec in stages.values():
@@ -505,16 +521,37 @@ def proof_no_commit_lacks_record(root: Path, m: dict | None) -> Proof:
             for c in rec.get("commits", []) or []:
                 if isinstance(c, str):
                     named.add(c)
-    records_rel = m.get("paths", {}).get("records", "")
     record_commits = set(git(root, "rev-list", f"{install[0]}..HEAD", "--first-parent",
                              "--", records_rel).split()) if records_rel else set()
-    unrecorded = [c for c in commits if c not in named and c not in record_commits]
-    if not commits:
-        return p.fail(f"no commit after the install commit {install[0][:12]}; nothing has been recorded")
+    merges = set(git(root, "rev-list", f"{install[0]}..HEAD", "--first-parent",
+                     "--merges").split())
+    boundary_paths = ((m.get("spec") or {}).get("boundary") or {}).get("paths") or []
+
+    # Every first-parent commit since install is exactly one of three
+    # (issue #72): recorded (a record names it, or its diff touches
+    # paths.records), ordinary (a merge that doesn't), or unrecorded
+    # (anything else -- on a protected main with a queue, a non-merge
+    # commit is the only way a change arrives without the forge).
+    recorded, ordinary, unrecorded = [], [], []
+    boundary_evasions = 0
+    for c in commits:
+        if c in named or c in record_commits:
+            recorded.append(c)
+        elif c in merges:
+            ordinary.append(c)
+            if boundary_paths and touches_boundary(root, c, boundary_paths):
+                boundary_evasions += 1
+        else:
+            unrecorded.append(c)
+
+    counts = f"{len(recorded)} recorded, {len(ordinary)} ordinary, {len(unrecorded)} unrecorded"
+    evasions = boundary_evasions if boundary_paths else "n/a"
+    extra = {"recorded": len(recorded), "ordinary": len(ordinary),
+             "unrecorded": len(unrecorded), "boundary_evasions": evasions}
     if unrecorded:
-        return p.fail(f"{len(unrecorded)} of {len(commits)} commit(s) since install lack a record; "
-                      f"first: {unrecorded[-1][:12]}")
-    return p.hold(f"{len(commits)} commit(s) since install, every one named by a record")
+        return p.fail(f"{unrecorded[-1][:12]} lacks a record; {counts}; boundary evasions: {evasions}",
+                      **extra)
+    return p.hold(f"{counts}; boundary evasions: {evasions}", **extra)
 
 
 def doctor(root: Path) -> list[Proof]:
