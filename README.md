@@ -7,7 +7,7 @@ Software teams are about to run more agents than engineers, and every one of tho
 `bin/attavo doctor <tenant-root>` is the definition of done. It asserts three proofs and exits non-zero until all three hold:
 
 1. Every gate named in the tenant's manifest rejects the fixture it must reject.
-2. One work item has traversed every stage: spec, approval, build, verify, attestation.
+2. One work item has traversed every stage — spec, approval, build, verify — all four introduced by one merge commit.
 3. No commit on the tenant's default branch lacks a record.
 
 `tests/test_doctor.py` holds the three proofs as tests. They fail against this repository, which has no manifest, and that is expected: this repository is the product, not a tenant. A phase is done when its proof holds, never when its work is finished.
@@ -33,7 +33,7 @@ All three run from the tenant root; `N` is read from the branch (`attavo/N-*`) w
 - `schema/records/` — the shape of each stage's record.
 - `adapters/` — the adapter contract (`adapters/README.md`) and two adapters: `claude-code` and `fixture`.
 - `action.yml` — pins Attavo at a tag and puts `attavo` on `PATH`.
-- `templates/workflows/` — workflows a tenant copies into its own repository; nothing here is vendored or run by this one.
+- `templates/workflows/` — three workflows a tenant copies into its own repository (spec-gate, approve, coherence); nothing here is vendored or run by this one. The coherence job mints and signs the attestation on the merge group, against the commit that lands — no attestation record is ever written to the tree; the signed statement lives in the forge's attestation store.
 - `tests/` — the doctor's proofs and the spec and build contracts' rejection tests, with their fixtures under `tests/fixtures/`.
 
 This repository contains no tenant name, path, or command string.
