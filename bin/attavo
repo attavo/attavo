@@ -9,7 +9,7 @@
     attavo verify [N]
     attavo file-findings [N]
     attavo record-only
-    attavo attest [--dry-run [--partial]] [N]
+    attavo attest [--partial] [N]
 
 The doctor is the definition of done. It asserts three proofs against a
 tenant root and exits 1 until every proof holds:
@@ -18,13 +18,15 @@ tenant root and exits 1 until every proof holds:
                              run against its rejection fixture, exits non-zero,
                              and carries a non-empty retires
   2. one-item-every-stage    one work item under paths.records carries a
-                             record for every stage: spec, approval, build,
-                             verify, attestation
+                             record for every stage -- spec, approval,
+                             build, verify -- all four introduced by one
+                             merge commit reachable from HEAD
   3. no-commit-lacks-record  every commit on the default branch after the
                              manifest was introduced is named by a record's
-                             sha, merge_sha, or commits list, or itself
-                             writes under paths.records (a record is
-                             committed with the code it describes)
+                             sha or commits list, or itself writes under
+                             paths.records (a record is committed with the
+                             code it describes; an item's merge commit
+                             carries its own record paths this way)
 
 Nothing in doctor is a gate. The doctor reads; it never writes and it never
 blocks a merge by itself. It is what CI runs to say whether the product
@@ -89,33 +91,36 @@ checkout, not a forge's shell -- a workflow template's push-and-retrigger
 guard is one line reading this exit code instead of carrying its own
 copy of the check.
 
-attest refuses (exit 1, no record) unless the latest spec, approval,
-build, and verify records for an item all exist and chain: the build's
-approval_sha names the latest approval, and the verify's build_sha names
-that build -- a re-approval after a build must force a re-run of what
-changed. With no N given it derives the item from the record paths
-HEAD's merge commit touched under paths.records/<N>/, not from a branch
-name, which a squash merge discards and which names a forge's convention
-the product does not know; more than one item derived is a refusal
-naming what it found. Zero is not a defect -- not every merge is an item
-merge -- exit 0, nothing written. It writes the next attestation-NN.json
-under paths.records/N/, asserting that the item was specified, approved
-at a commit, built by one invocation, judged by another, and merged.
-attest never signs anything itself -- signed and signature default to
-false and null; a forge-specific template signs after this record is
-written and patches those two fields before committing it. --dry-run runs
-the same derivation and the same three assertions, on the same code path,
-and writes nothing -- meant for a pull request or merge group, before the
-merge that attest itself demands, so an incoherent chain refuses while a
-re-run is still possible. --dry-run --partial (issue #67) is for the pull
-request alone, where the record a complete chain would need is the output
-of a later stage that is itself waiting on this check: a missing later
-record is "not yet" (exit 0, naming the item and the stages present and
-absent) rather than a refusal, while the two chain assertions -- build's
+attest refuses (exit 1) unless the latest spec, approval, build, and
+verify records for an item all exist and chain: the build's approval_sha
+names the latest approval, and the verify's build_sha names that build --
+a re-approval after a build must force a re-run of what changed. With no
+N given it derives the item from the record paths HEAD's merge commit
+touched under paths.records/<N>/, not from a branch name, which a squash
+merge discards and which names a forge's convention the product does not
+know; more than one item derived is a refusal naming what it found. Zero
+is not a defect -- not every merge is an item merge -- exit 0, nothing
+printed but a line saying so.
+
+attest never writes. On a coherent chain it prints the attestation
+statement -- validating against schema/attestation.schema.json -- to
+stdout as JSON and exits 0: the item, its four records and their shas,
+and the commit the statement was computed at (sha and merge_sha are the
+same commit here; on the merge group that commit is the one that lands).
+The four stage records already under paths.records are the evidence for
+that statement; a forge-specific template signs the printed JSON,
+unmodified, as the predicate, against the commit that lands, on the merge
+group -- and the signed bundle in the forge's attestation store is the
+seal over it. attest itself never signs anything and never talks to a
+signing service. --partial (issue #67) is for a pull request, where the
+record a complete chain would need is the output of a later stage that is
+itself waiting on this check: a missing later record is "not yet" (exit
+0, naming the item and the stages present and absent, no statement
+printed) rather than a refusal, while the two chain assertions -- build's
 approval_sha names the latest approval, verify's build_sha names the
-latest build -- still run over whatever records exist. --partial has no
-effect without --dry-run. See the attestation contract in the project's
-Phase 2, Lane 4 issue for the full rules it enforces.
+latest build -- still run over whatever records exist. merge_group and a
+push to main still demand the whole chain. See issue #69's lane for the
+full rules it enforces.
 """
 from __future__ import annotations
 
@@ -134,7 +139,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MANIFEST = "attavo.toml"
-STAGES = ("spec", "approval", "build", "verify", "attestation")
+STAGES = ("spec", "approval", "build", "verify")
 CRITERION_TIMEOUT = 120
 RECORD_RE = re.compile(r"^([a-z]+)-([0-9]{2,})\.json$")
 BUILD_ITERATION_BUDGET = 3
@@ -427,17 +432,52 @@ def proof_every_gate_rejects(root: Path, m: dict | None) -> Proof:
     return p.hold(f"{len(gates)} gate(s) rejected their fixture")
 
 
+def merge_introducing_records(root: Path, records_rel: str, item: str,
+                              stages: tuple[str, ...]) -> str | None:
+    """The merge commit reachable from HEAD whose first-parent diff
+    introduces a record for every one of stages, under
+    records_rel/item/ -- the same derivation attest itself uses
+    (derive_attest_items), read here so proof two requires an item's
+    stage records to have arrived by an actual merge, not merely to sit
+    in the tree (issue #69, acceptance row 4)."""
+    try:
+        merges = git(root, "log", "--merges", "--format=%H", "HEAD").split()
+    except RuntimeError:
+        return None
+    prefix = f"{records_rel.rstrip('/')}/{item}/"
+    for sha in merges:
+        try:
+            diff = git(root, "diff", "--name-only", f"{sha}^1", sha).splitlines()
+        except RuntimeError:
+            continue
+        found: set[str] = set()
+        for p in diff:
+            if p.startswith(prefix):
+                m = RECORD_RE.match(Path(p).name)
+                if m:
+                    found.add(m.group(1))
+        if all(s in found for s in stages):
+            return sha
+    return None
+
+
 def proof_one_item_every_stage(root: Path, m: dict | None) -> Proof:
     p = Proof("one-item-every-stage", "one item has traversed every stage")
     if m is None:
         return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
-    records_dir = root / m.get("paths", {}).get("records", "")
+    records_rel = m.get("paths", {}).get("records", "")
+    records_dir = root / records_rel
     items = load_records(records_dir)
     if not items:
         return p.fail(f"no work item under {records_dir.relative_to(root)}")
-    for item, stages in items.items():
-        if all(s in stages for s in STAGES):
-            return p.hold(f"item {item} carries {', '.join(STAGES)}")
+    complete = [item for item, stages in items.items() if all(s in stages for s in STAGES)]
+    for item in complete:
+        merge_sha = merge_introducing_records(root, records_rel, item, STAGES)
+        if merge_sha:
+            return p.hold(f"item {item} carries {', '.join(STAGES)}, merged at {merge_sha[:12]}")
+    if complete:
+        return p.fail(f"item(s) {', '.join(sorted(complete))} carry every stage but no merge "
+                      f"commit's first-parent diff introduces all of them")
     best = max(items.items(), key=lambda kv: len(kv[1]))
     lacking = [s for s in STAGES if s not in best[1]]
     return p.fail(f"no item carries every stage; item {best[0]} lacks {', '.join(lacking)}")
@@ -462,13 +502,6 @@ def proof_no_commit_lacks_record(root: Path, m: dict | None) -> Proof:
             sha = rec.get("sha")
             if isinstance(sha, str):
                 named.add(sha)
-            # An attestation record's merge_sha names the merge commit
-            # itself (issue #54) -- the merge is a real change, not a
-            # records-only commit, so it must be named explicitly rather
-            # than counted as covered by accident.
-            merge_sha = rec.get("merge_sha")
-            if isinstance(merge_sha, str):
-                named.add(merge_sha)
             for c in rec.get("commits", []) or []:
                 if isinstance(c, str):
                     named.add(c)
@@ -1398,13 +1431,13 @@ NOT_YET = object()
 
 
 def check_attest_chain(records_dir: Path, item_id: str, partial: bool = False):
-    """The three assertions attavo attest and attavo attest --dry-run both
-    refuse on: the latest spec, approval, build, and verify records for
-    item_id all exist, build's approval_sha names the latest approval --
-    a re-approval after a build must force a re-run of what changed -- and
-    verify's build_sha names that build. Prints the refusal both modes
-    print and returns None on any of them; returns the four latest records
-    (spec, approval, build, verify) when the chain holds.
+    """The three assertions attavo attest refuses on: the latest spec,
+    approval, build, and verify records for item_id all exist, build's
+    approval_sha names the latest approval -- a re-approval after a build
+    must force a re-run of what changed -- and verify's build_sha names
+    that build. Prints the refusal attest prints and returns None on any
+    of them; returns the four latest records (spec, approval, build,
+    verify) when the chain holds.
 
     partial (issue #67) is for a pull request, where a later stage's
     record cannot exist yet because the stage that would produce it is
@@ -1440,7 +1473,7 @@ def check_attest_chain(records_dir: Path, item_id: str, partial: bool = False):
     missing = [stage for stage, rec in stages if rec is None]
     if partial and missing:
         present = [stage for stage, rec in stages if rec is not None]
-        print(f"attavo attest --dry-run --partial: item {item_id} not yet "
+        print(f"attavo attest --partial: item {item_id} not yet "
               f"(present: {', '.join(present) or 'none'}; absent: {', '.join(missing)})")
         return NOT_YET
 
@@ -1448,9 +1481,12 @@ def check_attest_chain(records_dir: Path, item_id: str, partial: bool = False):
 
 
 def cmd_attest(argv: list[str]) -> int:
-    dry_run = "--dry-run" in argv
     partial = "--partial" in argv
-    argv = [a for a in argv if a not in ("--dry-run", "--partial")]
+    positional = [a for a in argv if not a.startswith("--")]
+    unknown = [a for a in argv if a.startswith("--") and a != "--partial"]
+    if unknown:
+        print(f"attavo attest: unknown argument {unknown[0]!r}", file=sys.stderr)
+        return 2
 
     root = Path(".").resolve()
     m = read_manifest(root)
@@ -1459,7 +1495,7 @@ def cmd_attest(argv: list[str]) -> int:
         return 2
 
     records_rel = m["paths"]["records"]
-    item_id = argv[0] if argv else None
+    item_id = positional[0] if positional else None
     if item_id is None:
         items, err = derive_attest_items(root, records_rel)
         if err:
@@ -1481,7 +1517,7 @@ def cmd_attest(argv: list[str]) -> int:
         item_id = next(iter(items))
 
     records_dir = root / records_rel / item_id
-    chain = check_attest_chain(records_dir, item_id, partial=partial and dry_run)
+    chain = check_attest_chain(records_dir, item_id, partial=partial)
     if chain is None:
         return 1
     if chain is NOT_YET:
@@ -1493,16 +1529,18 @@ def cmd_attest(argv: list[str]) -> int:
     build_path = latest_attempt_path(records_dir, "build")
     verify_path = latest_attempt_path(records_dir, "verify")
 
-    if dry_run:
-        print(f"attavo attest --dry-run: item {item_id} coherent "
-              f"({spec_path.name}, {approval_path.name}, {build_path.name}, {verify_path.name})")
-        return 0
-
+    # sha and merge_sha are the same commit here -- the one this statement
+    # was computed at. On the merge group that commit is the one main will
+    # hold; kept as two fields because a forge-specific template signs
+    # this statement against "the commit that lands", naming it merge_sha
+    # is what makes that unambiguous to a reader who has never seen attest
+    # run anywhere but the merge group.
     head_sha = git(root, "rev-parse", "HEAD").strip()
 
-    record = {
+    statement = {
         "sha": head_sha,
         "merge_sha": head_sha,
+        "item": item_id,
         "spec": spec_path.stem if spec_path else None,
         "spec_sha": latest_spec.get("sha"),
         "approval": approval_path.stem if approval_path else None,
@@ -1526,15 +1564,10 @@ def cmd_attest(argv: list[str]) -> int:
         # The product does not count a forge's own CI runs; a template
         # that wants this reported sets ATTAVO_CI_RUNS from its own read.
         "ci_runs": int(os.environ.get("ATTAVO_CI_RUNS") or 0),
-        # attavo attest never talks to a signing service itself (the
-        # product names no vendor); a forge-specific template step signs
-        # after this record is written and patches these two fields
-        # before committing it.
-        "signed": False,
-        "signature": None,
+        "product_version": product_version(),
+        "product_pin": (m.get("attavo") or {}).get("version"),
     }
-    record_path = write_record(records_dir, "attestation", record, m, item_id)
-    print(f"attavo attest: item {item_id} attested ({record_path.name})")
+    print(json.dumps(statement, indent=2))
     return 0
 
 
