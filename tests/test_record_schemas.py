@@ -87,19 +87,23 @@ def test_records_match_their_shapes(tmp_path):
     assert spec_03["status"] == "built"
     assert spec_03["criteria"][0]["on_stub"] == 0
 
-    # issue #54: an explicit item id bypasses attest's merge-commit
-    # derivation -- the chain this fixture already built (build-01 against
-    # approval-01, verify-01 against build-01) is exactly what attest
-    # checks, so no merge commit is needed to prove the record's shape.
-    assert run_attavo(root, "attest", "1").returncode == 0
+    # Issue #69: attest never writes -- it prints a statement instead. An
+    # explicit item id bypasses its merge-commit derivation -- the chain
+    # this fixture already built (build-01 against approval-01, verify-01
+    # against build-01) is exactly what attest checks, so no merge commit
+    # is needed to prove the statement's shape.
+    attest = run_attavo(root, "attest", "1")
+    assert attest.returncode == 0, attest.stdout + attest.stderr
+    statement = json.loads(attest.stdout)
+    jsonschema.validate(statement,
+                        json.loads((ROOT / "schema" / "attestation.schema.json").read_text()))
 
     schemas = {"spec": load_schema("spec"), "approval": load_schema("approval"),
-              "build": load_schema("build"), "verify": load_schema("verify"),
-              "attestation": load_schema("attestation")}
+              "build": load_schema("build"), "verify": load_schema("verify")}
 
     records = sorted((root / "records" / "1").glob("*.json"))
     assert ({p.stem.split("-")[0] for p in records}
-           == {"spec", "approval", "build", "verify", "attestation"})
+           == {"spec", "approval", "build", "verify"})
     for path in records:
         stage = path.stem.split("-")[0]
         jsonschema.validate(json.loads(path.read_text()), schemas[stage])
