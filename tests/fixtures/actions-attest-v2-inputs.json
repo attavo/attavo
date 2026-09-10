@@ -1,0 +1,8 @@
+{
+  "inputs": [
+    "subject-path", "subject-digest", "subject-name", "subject-checksums",
+    "predicate-type", "predicate", "predicate-path", "push-to-registry",
+    "show-summary", "github-token"
+  ],
+  "source": "actions/attest@v2's own warning on tenant zero's attest workflow run against a655df1 (issue #70): \"Unexpected input(s) 'predicate-file', valid inputs are [...]\""
+}

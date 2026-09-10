@@ -79,11 +79,10 @@ def test_record_loader_uses_highest_attempt_number(tmp_path):
     assert p["holds"], p["reason"]
 
 
-def test_doctor_proof_two_counts_three_of_five_stages_still_red(tmp_path):
+def test_doctor_proof_two_counts_three_of_four_stages_still_red(tmp_path):
     """Acceptance 8. A work item carrying spec, approval, and build records
-    -- the three stages this lane can produce -- is three of the five
-    STAGES proof two names; verify and attestation don't exist yet, so the
-    proof stays red and names exactly those two as lacking.
+    is three of the four STAGES proof two names; verify doesn't exist
+    yet, so the proof stays red and names exactly that one as lacking.
     """
     root = tmp_path / "three_stages"
     root.mkdir()
@@ -99,17 +98,44 @@ def test_doctor_proof_two_counts_three_of_five_stages_still_red(tmp_path):
 
     p = run_doctor(root)["one-item-every-stage"]
     assert not p["holds"]
-    assert "verify" in p["reason"] and "attestation" in p["reason"]
+    assert "verify" in p["reason"]
     assert "build" not in p["reason"]
 
 
-def test_doctor_proof_two_holds_on_a_fixture_carrying_all_five_stages(tmp_path):
-    """Acceptance 5, issue #54: proof two is already generic over STAGES --
-    what was missing was a record type named attestation ever existing.
-    A fixture with one record per stage, attestation included, is enough
-    to prove the mechanism; it goes green on tenant zero in the lane that
-    follows this one."""
-    root = tmp_path / "five_stages"
+def test_doctor_proof_two_holds_on_a_fixture_carrying_all_four_stages_merged(tmp_path):
+    """Acceptance row 4, issue #69: attestation is retired as a record
+    type -- STAGES is four stages, not five -- and proof two now also
+    requires the four records to have reached HEAD by an actual merge
+    commit, whose first-parent diff introduces all four, the same
+    derivation attest itself uses. A fixture with one record per stage,
+    landed on a branch and merged --no-ff, is enough to prove the
+    mechanism."""
+    root = tmp_path / "four_stages_merged"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    subprocess.run(["git", "-C", str(root), "checkout", "-b", "attavo/1-x"], check=True)
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "spec-01.json").write_text(json.dumps({"status": "pass"}))
+    (records / "approval-01.json").write_text(json.dumps({"approved_by": "alice"}))
+    (records / "build-01.json").write_text(json.dumps({"status": "pass"}))
+    (records / "verify-01.json").write_text(json.dumps({"status": "pass"}))
+    commit_all(root, "spec, approval, build, and verify records")
+    subprocess.run(["git", "-C", str(root), "checkout", "main"], check=True)
+    subprocess.run(["git", "-C", str(root), "merge", "--no-ff", "-m",
+                    "Merge branch 'attavo/1-x'", "attavo/1-x"], check=True)
+
+    p = run_doctor(root)["one-item-every-stage"]
+    assert p["holds"], p["reason"]
+
+
+def test_doctor_proof_two_fails_when_four_stage_records_are_never_merged(tmp_path):
+    """Acceptance row 4's other half, issue #69: the same four records,
+    committed straight to main with no merge at all -- proof two fails,
+    naming the missing merge rather than a lacking stage."""
+    root = tmp_path / "four_stages_unmerged"
     root.mkdir()
     (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
     init_repo(root, "install")
@@ -120,39 +146,40 @@ def test_doctor_proof_two_holds_on_a_fixture_carrying_all_five_stages(tmp_path):
     (records / "approval-01.json").write_text(json.dumps({"approved_by": "alice"}))
     (records / "build-01.json").write_text(json.dumps({"status": "pass"}))
     (records / "verify-01.json").write_text(json.dumps({"status": "pass"}))
-    (records / "attestation-01.json").write_text(json.dumps({"item": "1"}))
-    commit_all(root, "spec, approval, build, verify, and attestation records")
+    commit_all(root, "spec, approval, build, and verify records, committed directly")
 
     p = run_doctor(root)["one-item-every-stage"]
-    assert p["holds"], p["reason"]
+    assert not p["holds"]
+    assert "merge" in p["reason"]
 
 
-def test_merge_sha_covers_the_merge_commit_for_proof_three(tmp_path):
-    """Acceptance 6, issue #54: a merge commit is a real change, not a
-    records-only one, so it must be named explicitly. An attestation
-    record's merge_sha does that -- naming it only by merge_sha, not sha
-    or commits, isolates the new code path from the two that already
-    existed."""
-    root = tmp_path / "merge_sha"
+def test_proof_three_holds_on_an_item_merge_with_no_attestation_record(tmp_path):
+    """Acceptance row 5, issue #69: an item's merge commit carries its
+    record paths in its own first-parent diff, so it is a record commit
+    by the rule that already exists -- no merge_sha field is needed, and
+    there is no attestation record at all now that attest never writes
+    (replaces test_merge_sha_covers_the_merge_commit_for_proof_three,
+    deleted alongside the merge_sha special case it exercised)."""
+    root = tmp_path / "item_merge"
     root.mkdir()
     (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
     init_repo(root, "install")
 
-    (root / "src.txt").write_text("code\n")
-    commit_all(root, "a real change, not yet named by any record")
-    merge_sha = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
-                               capture_output=True, text=True, check=True).stdout.strip()
-
-    p = run_doctor(root)["no-commit-lacks-record"]
-    assert not p["holds"]
-
+    subprocess.run(["git", "-C", str(root), "checkout", "-b", "attavo/1-x"], check=True)
     records = root / "records" / "1"
     records.mkdir(parents=True)
-    (records / "attestation-01.json").write_text(json.dumps({"merge_sha": merge_sha}))
-    commit_all(root, "attestation record naming the merge commit")
+    (records / "spec-01.json").write_text(json.dumps({"status": "pass"}))
+    (records / "approval-01.json").write_text(json.dumps({"approved_by": "alice"}))
+    (records / "build-01.json").write_text(json.dumps({"status": "pass"}))
+    (records / "verify-01.json").write_text(json.dumps({"status": "pass"}))
+    commit_all(root, "spec, approval, build, and verify records for item 1")
+    subprocess.run(["git", "-C", str(root), "checkout", "main"], check=True)
+    subprocess.run(["git", "-C", str(root), "merge", "--no-ff", "-m",
+                    "Merge branch 'attavo/1-x'", "attavo/1-x"], check=True)
 
     p = run_doctor(root)["no-commit-lacks-record"]
     assert p["holds"], p["reason"]
+    assert not (records / "attestation-01.json").exists()
 
 
 def test_doctor_proof_one_refuses_a_gate_with_empty_retires(tmp_path):
