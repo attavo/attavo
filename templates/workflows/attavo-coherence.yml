@@ -20,14 +20,22 @@
 # the latest build. merge_group and a push to main still demand the whole
 # chain -- nothing runs after either that could still supply a record
 # found missing there. attest's stdout -- the statement, or a not-yet or
-# zero-item line -- is captured to a plain file; the not-yet and
-# zero-item lines are not JSON, which is exactly what makes that file a
-# non-statement for the steps below to skip signing.
+# zero-item line -- is captured to a plain file, and the attest step
+# itself reads whether that file parses as a JSON object into its own
+# `statement` output: a python3 -c json.load check, its exit status read
+# into the output, never a grep -- a grep would say yes for any line that
+# merely looks like JSON, which a not-yet line's stage names could. The
+# not-yet and zero-item lines are prose, not JSON, and a merge group can
+# carry no item exactly as easily as a pull request can; without this
+# check the steps below would hand actions/attest that prose the moment
+# the pin lane's own installing merge -- which touches no item -- reached
+# the queue.
 #
 # Only on merge_group -- github.sha there resolves to the commit that
 # will actually land on main, not the merge queue's own temporary ref --
-# two further steps run: a sha256 digest of that commit's own sha text
-# (deterministic and reproducible from the sha alone), and
+# and only when attest's own output says the captured file is a
+# statement, two further steps run: a sha256 digest of that commit's own
+# sha text (deterministic and reproducible from the sha alone), and
 # actions/attest@v2, signing attest's printed statement as the predicate,
 # https://attavo.dev/attestation/v1, over that digest. Signing here
 # replaces the post-merge attest workflow this product shipped before
@@ -87,16 +95,22 @@ jobs:
 
       - name: attavo attest
         id: attest
-        run: attavo attest ${{ github.event_name == 'pull_request' && '--partial' || '' }} > "$RUNNER_TEMP/attestation.json"
+        run: |
+          attavo attest ${{ github.event_name == 'pull_request' && '--partial' || '' }} > "$RUNNER_TEMP/attestation.json"
+          if python3 -c "import json,sys; sys.exit(0 if isinstance(json.load(open(sys.argv[1])), dict) else 1)" "$RUNNER_TEMP/attestation.json"; then
+            echo "statement=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "statement=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Compute the merge commit's subject digest
         id: subject
-        if: github.event_name == 'merge_group'
+        if: github.event_name == 'merge_group' && steps.attest.outputs.statement == 'true'
         run: echo "digest=sha256:$(printf '%s' "${{ github.sha }}" | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Sign the attestation record
         id: sign
-        if: github.event_name == 'merge_group'
+        if: github.event_name == 'merge_group' && steps.attest.outputs.statement == 'true'
         uses: actions/attest@v2
         with:
           subject-name: ${{ github.sha }}

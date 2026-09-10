@@ -132,7 +132,11 @@ def test_attest_refuses_a_build_whose_approval_sha_is_not_the_latest_approval(tm
 
 
 def test_attest_exits_0_and_writes_nothing_when_the_merge_commit_names_zero_items(tmp_path):
-    """Issue #58: not every merge is an item merge."""
+    """Issue #58: not every merge is an item merge. The coherence
+    template's signing steps rely on stdout not being JSON here -- a
+    merge group can carry no item exactly as easily as a pull request
+    can -- so this is asserted directly, not just inferred from the
+    printed line's wording."""
     root = make_tenant(tmp_path, "build_valid")
     git(root, "checkout", "-b", "chore/unrelated")
     (root / "README-CHORE.md").write_text("nothing to do with any item\n")
@@ -143,6 +147,8 @@ def test_attest_exits_0_and_writes_nothing_when_the_merge_commit_names_zero_item
     run = run_attavo(root, "attest")
     assert run.returncode == 0, run.stderr
     assert records_snapshot(root) == before
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(run.stdout)
 
 
 def test_attest_refuses_when_the_merge_commit_names_two_items(tmp_path):
