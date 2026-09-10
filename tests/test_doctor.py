@@ -182,6 +182,116 @@ def test_proof_three_holds_on_an_item_merge_with_no_attestation_record(tmp_path)
     assert not (records / "attestation-01.json").exists()
 
 
+def _three_way_fixture(tmp_path: Path, name: str, *, boundary_paths: list[str] | None,
+                       ordinary_touches: str, include_direct_commit: bool) -> Path:
+    """A tenant history carrying one commit of each of proof three's three
+    kinds (issue #72): an item merge (recorded, by the records-path rule
+    proof two's fixtures already exercise), a --no-ff merge touching only
+    `ordinary_touches` (ordinary), and, when asked, one commit made
+    straight to main naming no record (unrecorded -- on a protected main
+    with a queue, the only way a change arrives without the forge).
+    """
+    root = tmp_path / name
+    root.mkdir()
+    manifest = '[paths]\nrecords = "records"\n'
+    if boundary_paths is not None:
+        patterns = ", ".join(f'"{path}"' for path in boundary_paths)
+        manifest += f'\n[spec.boundary]\npaths = [{patterns}]\n'
+    (root / "attavo.toml").write_text(manifest)
+    init_repo(root, "install")
+
+    subprocess.run(["git", "-C", str(root), "checkout", "-b", "attavo/1-x"], check=True)
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "spec-01.json").write_text(json.dumps({"status": "pass"}))
+    commit_all(root, "spec record for item 1")
+    subprocess.run(["git", "-C", str(root), "checkout", "main"], check=True)
+    subprocess.run(["git", "-C", str(root), "merge", "--no-ff", "-m",
+                    "Merge branch 'attavo/1-x'", "attavo/1-x"], check=True)
+
+    subprocess.run(["git", "-C", str(root), "checkout", "-b", "ordinary-change"], check=True)
+    touched = root / ordinary_touches
+    touched.parent.mkdir(parents=True, exist_ok=True)
+    touched.write_text("v2\n")
+    commit_all(root, "an ordinary change")
+    subprocess.run(["git", "-C", str(root), "checkout", "main"], check=True)
+    subprocess.run(["git", "-C", str(root), "merge", "--no-ff", "-m",
+                    "Merge branch 'ordinary-change'", "ordinary-change"], check=True)
+
+    if include_direct_commit:
+        (root / "direct.txt").write_text("direct\n")
+        commit_all(root, "a change committed straight to main")
+
+    return root
+
+
+def test_proof_three_fails_naming_the_direct_commit_with_the_three_counts(tmp_path):
+    """Acceptance row 1, issue #72. The three-way fixture with its direct
+    commit included: proof three fails, naming the direct commit and
+    reporting all three counts in the reason."""
+    root = _three_way_fixture(tmp_path, "direct_commit", boundary_paths=["boundary/**"],
+                              ordinary_touches="pins/version.txt", include_direct_commit=True)
+    direct_sha = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                                capture_output=True, text=True, check=True).stdout.strip()
+
+    p = run_doctor(root)["no-commit-lacks-record"]
+    assert not p["holds"]
+    assert "1 recorded, 1 ordinary, 1 unrecorded" in p["reason"]
+    assert direct_sha[:12] in p["reason"]
+
+
+def test_proof_three_holds_with_zero_unrecorded_once_the_direct_commit_is_gone(tmp_path):
+    """Acceptance row 2, issue #72. The same fixture with the direct commit
+    removed: proof three holds, reporting `0 unrecorded`."""
+    root = _three_way_fixture(tmp_path, "no_direct_commit", boundary_paths=["boundary/**"],
+                              ordinary_touches="pins/version.txt", include_direct_commit=False)
+
+    p = run_doctor(root)["no-commit-lacks-record"]
+    assert p["holds"], p["reason"]
+    assert "1 recorded, 1 ordinary, 0 unrecorded" in p["reason"]
+
+
+def test_proof_three_reports_boundary_evasions_and_still_holds(tmp_path):
+    """Acceptance row 3, issue #72. The ordinary merge touches a path
+    inside [spec.boundary].paths: the reason carries `boundary evasions:
+    1`, and the proof still holds -- evasions are reported, never
+    refused."""
+    root = _three_way_fixture(tmp_path, "boundary_evasion", boundary_paths=["boundary/**"],
+                              ordinary_touches="boundary/thing.txt", include_direct_commit=False)
+
+    p = run_doctor(root)["no-commit-lacks-record"]
+    assert p["holds"], p["reason"]
+    assert "boundary evasions: 1" in p["reason"]
+
+
+def test_proof_three_reports_boundary_evasions_as_not_available_with_no_boundary_paths(tmp_path):
+    """Acceptance row 4, issue #72. A tenant declaring no [spec.boundary]
+    paths at all: evasions are reported as `n/a`, not `0` -- an absent
+    read is not the same measurement as zero evasions found."""
+    root = _three_way_fixture(tmp_path, "no_boundary", boundary_paths=None,
+                              ordinary_touches="pins/version.txt", include_direct_commit=False)
+
+    p = run_doctor(root)["no-commit-lacks-record"]
+    assert p["holds"], p["reason"]
+    assert "boundary evasions: n/a" in p["reason"]
+    assert p["boundary_evasions"] == "n/a"
+
+
+def test_proof_three_json_carries_the_path_ratio_fields(tmp_path):
+    """Acceptance row 5, issue #72. `attavo doctor --json` carries
+    `recorded`, `ordinary`, `unrecorded`, and `boundary_evasions` on
+    proof three's own entry -- the path-ratio primitive Phase 4 names,
+    produced now because a decision depends on it."""
+    root = _three_way_fixture(tmp_path, "json_fields", boundary_paths=["boundary/**"],
+                              ordinary_touches="pins/version.txt", include_direct_commit=False)
+
+    p = run_doctor(root)["no-commit-lacks-record"]
+    assert p["recorded"] == 1
+    assert p["ordinary"] == 1
+    assert p["unrecorded"] == 0
+    assert p["boundary_evasions"] == 0
+
+
 def test_doctor_proof_one_refuses_a_gate_with_empty_retires(tmp_path):
     """Residual, issue #54 -- proposed, not yet ruled on: a gate that
     retires nothing only adds. The manifest schema has required
