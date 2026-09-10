@@ -93,6 +93,26 @@ def step_block(yaml_text: str, marker: str) -> str:
     return "\n".join(lines[start:end])
 
 
+def with_keys(step_text: str) -> list[str]:
+    """The top-level keys of a step's `with:` mapping, from a step_block's
+    text. Reads the literal file rather than reimplementing YAML parsing,
+    same as job_if_condition, step_block, and extract_step_run.
+    """
+    lines = step_text.splitlines()
+    start = next(i for i, l in enumerate(lines) if l.strip() == "with:")
+    with_indent = len(lines[start]) - len(lines[start].lstrip(" "))
+    keys = []
+    for line in lines[start + 1:]:
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent <= with_indent:
+            break
+        if ":" in line.strip():
+            keys.append(line.strip().split(":", 1)[0].strip())
+    return keys
+
+
 def extract_step_run(yaml_text: str, step_name: str) -> str:
     """Pull a workflow step's `run:` command out of template YAML text as-is,
     so a test exercises the literal shell the step will run rather than a

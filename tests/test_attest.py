@@ -1,24 +1,34 @@
-"""attavo attest: refuse unless the latest spec, approval, build, and verify
-records for an item all exist and chain, derive the item from the merge
-commit's own record paths rather than a branch name, and write
-attestation-NN.json. Issue #54, Lane 4 section 1.
+"""attavo attest: refuse unless the latest spec, approval, build, and
+verify records for an item all exist and chain, derive the item from the
+merge commit's own record paths rather than a branch name, and print the
+attestation statement to stdout. Never writes -- the four stage records
+are the evidence; a forge-specific template signs the printed statement
+on the merge group (issue #69, section "The lane").
+
+Merges tests/test_attest_dry_run.py into this file (issue #69, change 5):
+attest itself is now always a read, so there is nothing left for a
+--dry-run mode to do differently.
 
 Regression tests, written and run red first: on `main` before this lane
-there was no `attest` subcommand, so every one of these failed with
-"unknown subcommand".
+`attavo attest` wrote an attestation-NN.json record and accepted
+--dry-run; every test here that expects nothing written, a printed
+statement, or --dry-run refused fails against that shape.
 
 Run: python3 -m pytest tests -q
 """
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
+
+import jsonschema
+import pytest
 
 from helpers import commit_all, git, init_repo, make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
+STATEMENT_SCHEMA = json.loads((ROOT / "schema" / "attestation.schema.json").read_text())
 
 
 def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess:
@@ -53,14 +63,15 @@ def merge_into_main(root: Path, branch: str) -> None:
     git(root, "merge", "--no-ff", "-m", f"Merge branch '{branch}' into main", branch)
 
 
-def latest_attestation(root: Path, item: str = "1") -> dict:
-    files = sorted((root / "records" / item).glob("attestation-*.json"))
-    assert files, f"no attestation record for item {item}"
-    return json.loads(files[-1].read_text())
+def records_snapshot(root: Path) -> list:
+    records_dir = root / "records"
+    return sorted(records_dir.rglob("*")) if records_dir.is_dir() else []
 
 
-def test_attest_succeeds_on_a_full_chain_derived_from_a_branch_named_nothing_like_the_item(tmp_path):
-    """Acceptance 4: the merge commit carries no attavo/N-* branch
+# --- row 1: a coherent chain prints a valid statement and writes nothing ---
+
+def test_attest_prints_a_valid_statement_on_a_coherent_chain_and_writes_nothing(tmp_path):
+    """Acceptance row 1: the merge commit carries no attavo/N-* branch
     information at all -- 'improve-thing' names nothing about item 1 --
     proving the derivation reads record paths, not the branch name."""
     root = make_tenant(tmp_path, "build_valid")
@@ -69,19 +80,23 @@ def test_attest_succeeds_on_a_full_chain_derived_from_a_branch_named_nothing_lik
     traverse_item(root, "1")
     merge_into_main(root, "improve-thing")
 
+    before = records_snapshot(root)
     run = run_attavo(root, "attest")
     assert run.returncode == 0, run.stdout + run.stderr
 
-    rec = latest_attestation(root)
-    assert rec["item"] == "1"
-    assert rec["sha"] == rec["merge_sha"]
-    assert rec["signed"] is False
-    assert rec["signature"] is None
-    assert rec["cost_by_stage_usd"].keys() == {"build", "verify"}
+    statement = json.loads(run.stdout)
+    jsonschema.validate(statement, STATEMENT_SCHEMA)
+    assert statement["item"] == "1"
+    assert statement["sha"] == statement["merge_sha"]
+    assert statement["cost_by_stage_usd"].keys() == {"build", "verify"}
 
+    assert records_snapshot(root) == before
+    assert git(root, "status", "--porcelain") == ""
+
+
+# --- row 2: every refusal and the --partial not-yet path, same as before ---
 
 def test_attest_refuses_a_chain_with_a_missing_verify_record(tmp_path):
-    """Acceptance 1."""
     root = make_tenant(tmp_path, "build_valid")
     configure_forge(root)
     git(root, "checkout", "-b", "attavo/1-x")
@@ -93,20 +108,20 @@ def test_attest_refuses_a_chain_with_a_missing_verify_record(tmp_path):
     commit_all(root, "attavo: build record for #1")
     merge_into_main(root, "attavo/1-x")
 
+    before = records_snapshot(root)
     run = run_attavo(root, "attest")
     assert run.returncode == 1
     assert "verify" in run.stderr
-    assert not list((root / "records" / "1").glob("attestation-*.json"))
+    assert records_snapshot(root) == before
 
 
 def test_attest_refuses_a_build_whose_approval_sha_is_not_the_latest_approval(tmp_path):
-    """Acceptance 2: a re-approval after the build must force a re-run."""
+    """A re-approval after the build must force a re-run."""
     root = make_tenant(tmp_path, "build_valid")
     configure_forge(root)
     git(root, "checkout", "-b", "attavo/1-x")
     traverse_item(root, "1")
 
-    # a second approval, with nothing rebuilt after it
     assert run_attavo(root, "approve", "1", "--by", "alice").returncode == 0
     commit_all(root, "attavo: second approval record for #1")
     merge_into_main(root, "attavo/1-x")
@@ -117,28 +132,26 @@ def test_attest_refuses_a_build_whose_approval_sha_is_not_the_latest_approval(tm
 
 
 def test_attest_exits_0_and_writes_nothing_when_the_merge_commit_names_zero_items(tmp_path):
-    """Issue #58: not every merge is an item merge -- tenant zero's own
-    installing merge touches .github/workflows/, attavo.toml, and bin/,
-    none of it under paths.records, and that is an ordinary Tuesday, not
-    a defect. attest exits 0 and writes no record rather than refusing."""
+    """Issue #58: not every merge is an item merge. The coherence
+    template's signing steps rely on stdout not being JSON here -- a
+    merge group can carry no item exactly as easily as a pull request
+    can -- so this is asserted directly, not just inferred from the
+    printed line's wording."""
     root = make_tenant(tmp_path, "build_valid")
     git(root, "checkout", "-b", "chore/unrelated")
     (root / "README-CHORE.md").write_text("nothing to do with any item\n")
     commit_all(root, "chore: unrelated change")
     merge_into_main(root, "chore/unrelated")
 
-    records_dir = root / "records"
-    before = sorted(records_dir.rglob("*")) if records_dir.is_dir() else []
-
+    before = records_snapshot(root)
     run = run_attavo(root, "attest")
     assert run.returncode == 0, run.stderr
-
-    after = sorted(records_dir.rglob("*")) if records_dir.is_dir() else []
-    assert after == before, "the records directory changed"
+    assert records_snapshot(root) == before
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(run.stdout)
 
 
 def test_attest_refuses_when_the_merge_commit_names_two_items(tmp_path):
-    """Acceptance 3b."""
     root = make_tenant(tmp_path, "build_valid")
     git(root, "checkout", "-b", "multi")
     (root / "records" / "1").mkdir(parents=True)
@@ -161,3 +174,162 @@ def test_attest_exits_2_with_no_manifest(tmp_path):
 
     run = run_attavo(root, "attest")
     assert run.returncode == 2
+
+
+def build_missing_verify_record(root: Path) -> None:
+    git(root, "checkout", "-b", "attavo/1-x")
+    assert run_attavo(root, "spec-gate", "1").returncode == 0
+    commit_all(root, "attavo: spec-gate record for #1")
+    assert run_attavo(root, "approve", "1", "--by", "alice").returncode == 0
+    commit_all(root, "attavo: approval record for #1")
+    assert run_attavo(root, "build", "1").returncode == 0
+    commit_all(root, "attavo: build record for #1")
+    merge_into_main(root, "attavo/1-x")
+
+
+def build_stale_verify_build_sha(root: Path) -> None:
+    """A second build record, minted by hand rather than a real re-run --
+    the fixture adapter's build is not idempotent against its own tree --
+    naming a sha the existing verify record does not."""
+    git(root, "checkout", "-b", "attavo/1-x")
+    traverse_item(root, "1")
+    records_dir = root / "records" / "1"
+    build_01 = json.loads((records_dir / "build-01.json").read_text())
+    build_01["sha"] = "f" * 40
+    (records_dir / "build-02.json").write_text(json.dumps(build_01))
+    commit_all(root, "attavo: second build record for #1")
+    merge_into_main(root, "attavo/1-x")
+
+
+def build_two_items(root: Path) -> None:
+    git(root, "checkout", "-b", "multi")
+    (root / "records" / "1").mkdir(parents=True)
+    (root / "records" / "1" / "spec-01.json").write_text("{}\n")
+    (root / "records" / "2").mkdir(parents=True)
+    (root / "records" / "2" / "spec-01.json").write_text("{}\n")
+    commit_all(root, "two items' records in one commit")
+    merge_into_main(root, "multi")
+
+
+def build_missing_verify_after_reapproval(root: Path) -> None:
+    """Spec, approval, build present, then a second approval after the
+    build -- the shape that broke the chain in issue #62 -- verify
+    absent."""
+    git(root, "checkout", "-b", "attavo/1-x")
+    assert run_attavo(root, "spec-gate", "1").returncode == 0
+    commit_all(root, "attavo: spec-gate record for #1")
+    assert run_attavo(root, "approve", "1", "--by", "alice").returncode == 0
+    commit_all(root, "attavo: approval record for #1")
+    assert run_attavo(root, "build", "1").returncode == 0
+    commit_all(root, "attavo: build record for #1")
+    assert run_attavo(root, "approve", "1", "--by", "alice").returncode == 0
+    commit_all(root, "attavo: second approval record for #1")
+    merge_into_main(root, "attavo/1-x")
+
+
+OTHER_REFUSALS = [
+    pytest.param(build_stale_verify_build_sha, "build_sha", id="verify-build-sha-stale"),
+    pytest.param(build_two_items, None, id="two-items"),
+]
+
+
+@pytest.mark.parametrize("build, needle", OTHER_REFUSALS)
+def test_attest_refusals_are_unaffected_by_partial(tmp_path, build, needle):
+    """--partial only forgives a *missing* record; every other refusal --
+    a stale build_sha or approval_sha, or two items in the merge diff --
+    is identical with or without it."""
+    root = make_tenant(tmp_path, "build_valid")
+    configure_forge(root)
+    build(root)
+
+    plain = run_attavo(root, "attest")
+    partial = run_attavo(root, "attest", "--partial")
+
+    assert plain.returncode == partial.returncode
+    assert plain.stderr == partial.stderr
+    if needle:
+        assert needle in plain.stderr
+
+
+def test_partial_exits_0_naming_verify_absent_and_writes_nothing(tmp_path):
+    """spec, approval, build present, verify absent, on a no-fast-forward
+    merge -- attest --partial exits 0, names the item and the stages
+    present and absent, and writes nothing."""
+    root = make_tenant(tmp_path, "build_valid")
+    configure_forge(root)
+    build_missing_verify_record(root)
+
+    before = records_snapshot(root)
+    run = run_attavo(root, "attest", "--partial")
+
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "1" in run.stdout
+    assert "verify" in run.stdout
+    assert records_snapshot(root) == before
+    assert git(root, "status", "--porcelain") == ""
+
+
+def test_partial_still_refuses_a_stale_approval_sha(tmp_path):
+    """The same fixture with a re-approval after the build -- --partial
+    does not bypass the approval_sha chain assertion."""
+    root = make_tenant(tmp_path, "build_valid")
+    configure_forge(root)
+    build_missing_verify_after_reapproval(root)
+
+    run = run_attavo(root, "attest", "--partial")
+
+    assert run.returncode == 1
+    assert "approval_sha" in run.stderr
+
+
+def test_without_partial_the_missing_verify_fixture_still_refuses(tmp_path):
+    root = make_tenant(tmp_path, "build_valid")
+    configure_forge(root)
+    build_missing_verify_record(root)
+
+    run = run_attavo(root, "attest")
+
+    assert run.returncode == 1
+    assert "no verify record" in run.stderr
+
+
+def test_partial_still_refuses_a_stale_build_sha_on_verify(tmp_path):
+    root = make_tenant(tmp_path, "build_valid")
+    configure_forge(root)
+    build_stale_verify_build_sha(root)
+
+    run = run_attavo(root, "attest", "--partial")
+
+    assert run.returncode == 1
+    assert "build_sha" in run.stderr
+
+
+def test_partial_does_not_read_ci_runs(tmp_path, monkeypatch):
+    """A not-yet exit prints no statement, so ATTAVO_CI_RUNS -- read only
+    while building one -- must not affect it."""
+    root = make_tenant(tmp_path, "build_valid")
+    configure_forge(root)
+    build_missing_verify_record(root)
+
+    before = records_snapshot(root)
+    monkeypatch.setenv("ATTAVO_CI_RUNS", "7")
+    run = run_attavo(root, "attest", "--partial")
+    assert run.returncode == 0, run.stderr
+    assert records_snapshot(root) == before
+
+
+# --- row 3: --dry-run no longer exists ---
+
+def test_dash_dash_dry_run_is_refused_as_an_unknown_argument(tmp_path):
+    root = make_tenant(tmp_path, "build_valid")
+    configure_forge(root)
+    git(root, "checkout", "-b", "attavo/1-x")
+    traverse_item(root, "1")
+    merge_into_main(root, "attavo/1-x")
+
+    before = records_snapshot(root)
+    run = run_attavo(root, "attest", "--dry-run")
+
+    assert run.returncode == 2
+    assert "--dry-run" in run.stderr
+    assert records_snapshot(root) == before
