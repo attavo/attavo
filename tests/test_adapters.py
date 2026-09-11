@@ -7,8 +7,8 @@ tested, so no real model is ever in this loop.
 
 Issue #24: [executor.<adapter>] is an open configuration table, passed
 through as ATTAVO_ADAPTER_CONFIG and copied verbatim into build-NN.json as
-adapter_config. claude-code reads auth, model, allowed_tools,
-setting_sources, and permission_mode from it; ATTAVO_MODEL is retired.
+adapter_config. claude-code reads auth, model, setting_sources, and
+permission_mode from it; ATTAVO_MODEL is retired.
 
 Issue #30: the tenant's checks are part of done. build exports
 ATTAVO_CHECKS_COMMAND when the manifest declares [checks]; the
@@ -38,6 +38,25 @@ recorded nothing about the failure. The adapter now prints claude's
 stdout and stderr as transcript before exiting with claude's own code.
 Specimen: attavo/code-factory build-11.json, a "failed" record with a
 0-byte log after a 14-minute run.
+
+Issue #78: the boundary is the tool's own sandbox, confirmed live against
+`claude 2.1.268`, not a curated allowed_tools list judged per
+sub-command. Every invocation now carries `--settings` with a `sandbox`
+object; `--allowedTools` is fixed per stage (`Read,Edit,Write,Bash` for
+build, `Read,Bash` for verify) instead of reading `[executor.claude-code]
+.allowed_tools`, which is retired -- a manifest still declaring it is
+refused by name.
+
+Issue #77: `model` is the requested model verbatim when one was passed,
+never picked out of `modelUsage` by token count (a lightweight helper
+model's few thousand uncached tokens used to outrank a primary model
+whose weight was almost entirely cached reads); `model_version` is the
+`modelUsage` key whose `canonicalModel` matches the requested model.
+`tokens.input` adds `cache_read_input_tokens` and
+`cache_creation_input_tokens` to `usage.input_tokens` -- omitting them
+undercounted a cache-heavy iteration by orders of magnitude (specimen:
+`attest/records/649/build-01.json`, `tokens.input: 88` against 3.1
+million tokens the log itself showed read from cache).
 
 Issue #40: this file is claude-code-specific by construction (every test
 invokes CLAUDE_CODE_RUN directly), so it is not where a general executor
@@ -110,14 +129,15 @@ def run_with_response(tmp_path: Path, response: dict,
 
 def test_claude_code_api_mode_is_default(tmp_path):
     """Acceptance 3. With no [executor.claude-code] table at all, the
-    command line is unchanged from v0.3.0."""
+    command line is unchanged from v0.3.0, apart from issue #78's
+    --settings and its narrowed --allowedTools."""
     cmd = dry_run(tmp_path)
 
     assert "--bare" in cmd
     assert cmd[cmd.index("--output-format") + 1] == "json"
     assert "--json-schema" in cmd
     assert cmd[cmd.index("--permission-mode") + 1] == "acceptEdits"
-    assert cmd[cmd.index("--allowedTools") + 1] == "Read,Edit,Write,Bash(git *),Bash(python3 *)"
+    assert cmd[cmd.index("--allowedTools") + 1] == "Read,Edit,Write,Bash"
     assert "--model" not in cmd
     assert "--setting-sources" not in cmd
     assert "--strict-mcp-config" not in cmd
@@ -135,6 +155,57 @@ def test_claude_code_subscription_mode(tmp_path):
     assert "--bare" not in cmd
     assert cmd[cmd.index("--setting-sources") + 1] == "user"
     assert "--strict-mcp-config" in cmd
+
+
+def test_claude_code_build_sandbox_settings(tmp_path):
+    """Issue #78, rejection test 2. --settings carries a sandbox object
+    with the sandbox enabled and the unsandboxed fallback forbidden;
+    --allowedTools names only the tool families the sandbox does not
+    itself govern (Edit, Write) plus Bash itself, never a curated
+    Bash(...) prefix list. Confirmed live against `claude 2.1.268`
+    (issue #78): this settings shape refuses a write outside the working
+    directory and an outbound connection.
+    """
+    cmd = dry_run(tmp_path)
+    settings = json.loads(cmd[cmd.index("--settings") + 1])
+
+    assert settings["sandbox"]["enabled"] is True
+    assert settings["sandbox"]["allowUnsandboxedCommands"] is False
+    assert settings["sandbox"]["network"]["allowedDomains"] == []
+    allowed_tools = cmd[cmd.index("--allowedTools") + 1]
+    assert allowed_tools == "Read,Edit,Write,Bash"
+    assert not any(t.startswith("Bash(") for t in allowed_tools.split(","))
+
+
+def test_claude_code_verify_sandbox_settings(tmp_path):
+    """Issue #78, rejection test 3. verify's --settings additionally
+    denies writes to the working directory itself -- mechanically
+    read-only, not just instructed to be -- and --allowedTools omits
+    Edit and Write, which the sandbox does not govern. Confirmed live
+    (issue #78): a bare `denyWrite: true` did not stop a write inside
+    the directory; a list naming the directory did.
+    """
+    cmd = dry_run(tmp_path, extra_env={"ATTAVO_STAGE": "verify"})
+    settings = json.loads(cmd[cmd.index("--settings") + 1])
+
+    assert settings["sandbox"]["enabled"] is True
+    assert settings["sandbox"]["network"]["allowedDomains"] == []
+    assert settings["sandbox"]["filesystem"]["denyWrite"] == [str(Path.cwd())]
+    assert cmd[cmd.index("--allowedTools") + 1] == "Read,Bash"
+
+
+def test_claude_code_refuses_the_retired_allowed_tools_key(tmp_path):
+    """Issue #78, rejection test 4. allowed_tools is retired, not
+    ignored: a manifest that still declares
+    [executor.claude-code].allowed_tools is refused by name rather than
+    silently accepted or silently dropped, on either stage.
+    """
+    env = base_env(tmp_path)
+    env["ATTAVO_ADAPTER_CONFIG"] = json.dumps({"allowed_tools": ["Read"]})
+    run = subprocess.run([str(CLAUDE_CODE_RUN)], capture_output=True, text=True,
+                         check=False, env=env)
+    assert run.returncode == 1
+    assert "allowed_tools" in run.stderr
 
 
 def test_claude_code_model_from_config(tmp_path):
@@ -219,4 +290,115 @@ def test_claude_code_adapter_fails_without_a_model_id(tmp_path):
     assert run.returncode == 1
     assert "model" in run.stderr
     assert run.stdout == json.dumps(response) + "\n"
+
+
+def test_claude_code_requested_model_wins_over_a_dominant_helper_key(tmp_path):
+    """Issue #77, rejection test (model requested). Specimen:
+    attest/records/649/build-01.json -- a helper model's few thousand
+    uncached tokens used to outrank the primary model's hundreds of
+    thousands of cached ones, recording model: claude-haiku-4-5-20251001
+    when --model claude-sonnet-5 was passed. model is now the requested
+    value verbatim; model_version is the modelUsage key whose
+    canonicalModel matches it -- the dated id the tool actually ran.
+    """
+    response = {
+        "is_error": False,
+        "structured_output": {"status": "done", "question": None},
+        "usage": {"input_tokens": 16, "output_tokens": 2672,
+                  "cache_read_input_tokens": 306949, "cache_creation_input_tokens": 21636},
+        "total_cost_usd": 0.17,
+        "modelUsage": {
+            "claude-haiku-4-5-20251001": {
+                "inputTokens": 4042, "outputTokens": 14,
+                "canonicalModel": "claude-haiku-4-5"},
+            "claude-sonnet-5": {
+                "inputTokens": 16, "outputTokens": 2672,
+                "cacheReadInputTokens": 306949, "cacheCreationInputTokens": 21636,
+                "canonicalModel": "claude-sonnet-5"},
+        },
+    }
+    run = run_with_response(tmp_path, response,
+                            extra_env={"ATTAVO_ADAPTER_CONFIG": json.dumps({"model": "claude-sonnet-5"})})
+    assert run.returncode == 0, run.stderr
+    line = json.loads(run.stdout.splitlines()[-1])
+    assert line["model"] == "claude-sonnet-5"
+    assert line["model_version"] == "claude-sonnet-5"
+
+
+def test_claude_code_unrequested_model_counts_cached_tokens_too(tmp_path):
+    """Issue #77, rejection test (model not requested). The modelUsage
+    key wins on inputTokens + cacheReadInputTokens +
+    cacheCreationInputTokens + outputTokens, not on inputTokens +
+    outputTokens alone -- otherwise a helper model's few thousand
+    uncached tokens outranks a primary model whose real weight is almost
+    entirely cached, the same distortion as when a model is requested.
+    """
+    response = {
+        "is_error": False,
+        "structured_output": {"status": "done", "question": None},
+        "usage": {"input_tokens": 4058, "output_tokens": 2686,
+                  "cache_read_input_tokens": 306949, "cache_creation_input_tokens": 21636},
+        "modelUsage": {
+            "claude-haiku-4-5-20251001": {
+                "inputTokens": 4042, "outputTokens": 14,
+                "canonicalModel": "claude-haiku-4-5"},
+            "claude-sonnet-5": {
+                "inputTokens": 16, "outputTokens": 2672,
+                "cacheReadInputTokens": 306949, "cacheCreationInputTokens": 21636,
+                "canonicalModel": "claude-sonnet-5"},
+        },
+    }
+    run = run_with_response(tmp_path, response)
+    assert run.returncode == 0, run.stderr
+    line = json.loads(run.stdout.splitlines()[-1])
+    assert line["model"] == "claude-sonnet-5"
+    assert line["model_version"] == "claude-sonnet-5"
+
+
+def test_claude_code_requested_model_with_no_matching_usage_key(tmp_path):
+    """Issue #77. A requested model that matches no modelUsage
+    canonicalModel still records verbatim as model, with model_version
+    left null rather than guessed -- the mismatch is reported on stderr,
+    not swallowed.
+    """
+    response = {
+        "is_error": False,
+        "structured_output": {"status": "done", "question": None},
+        "usage": {"input_tokens": 5, "output_tokens": 9},
+        "modelUsage": {
+            "claude-haiku-4-5-20251001": {
+                "inputTokens": 5, "outputTokens": 9,
+                "canonicalModel": "claude-haiku-4-5"},
+        },
+    }
+    run = run_with_response(tmp_path, response,
+                            extra_env={"ATTAVO_ADAPTER_CONFIG": json.dumps({"model": "claude-sonnet-5"})})
+    assert run.returncode == 0, run.stderr
+    line = json.loads(run.stdout.splitlines()[-1])
+    assert line["model"] == "claude-sonnet-5"
+    assert line["model_version"] is None
+    assert "claude-sonnet-5" in run.stderr
+
+
+def test_claude_code_tokens_input_includes_cached_tokens(tmp_path):
+    """Issue #77, rejection test. usage.input_tokens alone undercounts a
+    cache-heavy iteration by orders of magnitude (specimen:
+    attest/records/649/build-01.json, tokens.input: 88 against 3.1
+    million tokens the log itself showed read from cache); tokens.input
+    must add cache_read_input_tokens and cache_creation_input_tokens.
+    """
+    response = {
+        "is_error": False,
+        "structured_output": {"status": "done", "question": None},
+        "usage": {"input_tokens": 16, "output_tokens": 9,
+                  "cache_read_input_tokens": 100, "cache_creation_input_tokens": 5},
+        "modelUsage": {
+            "claude-sonnet-5": {"inputTokens": 16, "outputTokens": 9,
+                               "canonicalModel": "claude-sonnet-5"},
+        },
+    }
+    run = run_with_response(tmp_path, response)
+    assert run.returncode == 0, run.stderr
+    line = json.loads(run.stdout.splitlines()[-1])
+    assert line["tokens"]["input"] == 16 + 100 + 5
 
