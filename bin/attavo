@@ -1355,9 +1355,31 @@ def cmd_verify(argv: list[str]) -> int:
     spec_dir = root / specs_rel / item_id
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
 
+    # The item's own work since approval, not everything merged onto the
+    # branch since then (issue #52): a three-dot diff against approval_sha
+    # itself is not enough, since approval_sha is already an ancestor of
+    # HEAD in the normal flow and merge-base(approval_sha, HEAD) is just
+    # approval_sha again -- verified empirically, see the issue comment.
+    # Diffing from the merge-base of HEAD and the remote's default branch
+    # instead excludes content that arrived by merging that branch in,
+    # because that content is already present on both sides of the merge
+    # base. refs/remotes/origin/HEAD is what names the default branch
+    # without hard-coding "main"; when it is not set, there is nothing
+    # to diff against and this refuses rather than guess.
+    diff_text = ""
+    if approval_sha:
+        symref = subprocess.run(
+            ["git", "-C", str(root), "symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
+            capture_output=True, text=True, check=False)
+        if symref.returncode != 0:
+            print("attavo verify: refused: refs/remotes/origin/HEAD is not set; "
+                  "run `git remote set-head origin -a`")
+            return 1
+        diff_base = git(root, "merge-base", symref.stdout.strip(), "HEAD").strip()
+        diff_text = git(root, "diff", diff_base, "HEAD")
+
     with tempfile.TemporaryDirectory() as tmp:
         diff_path = Path(tmp) / "diff.patch"
-        diff_text = git(root, "diff", approval_sha, "HEAD") if approval_sha else ""
         diff_path.write_text(diff_text)
 
         env = dict(os.environ)

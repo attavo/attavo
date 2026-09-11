@@ -11,6 +11,9 @@ cat "${ATTAVO_FEEDBACK:-/dev/null}" 2>/dev/null || true
 echo "--- end feedback ---"
 
 if [ "${ATTAVO_STAGE:-build}" = "verify" ]; then
+  echo "--- ATTAVO_DIFF ---"
+  cat "${ATTAVO_DIFF:-/dev/null}" 2>/dev/null || true
+  echo "--- end diff ---"
   if [ -n "${ATTAVO_FIXTURE_COMMIT_DURING_VERIFY:-}" ]; then
     # a verifier that commits anyway (issue #46) -- for the rejection
     # test only; a real adapter must never do this.

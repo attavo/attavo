@@ -25,6 +25,13 @@ def init_repo(root: Path, message: str = "initial") -> None:
     git(root, "config", "user.name", "Attavo Test")
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", message)
+    # attavo verify reads refs/remotes/origin/HEAD to diff the item's own
+    # work against (issue #52); a real checkout always has this once
+    # cloned, so fixtures fake it here rather than making every test set
+    # up its own origin remote.
+    sha = git(root, "rev-parse", "HEAD").strip()
+    git(root, "update-ref", "refs/remotes/origin/main", sha)
+    git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 
 
 def commit_all(root: Path, message: str) -> None:

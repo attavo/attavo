@@ -14,7 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from helpers import commit_all, make_tenant
+from helpers import commit_all, git, make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
@@ -48,6 +48,20 @@ def latest_verify(root: Path, item: str = "1") -> dict:
     files = sorted((root / "records" / item).glob("verify-*.json"))
     assert files, f"no verify record for item {item}"
     return json.loads(files[-1].read_text())
+
+
+def latest_verify_log(root: Path, item: str = "1") -> str:
+    files = sorted((root / "records" / item).glob("verify-*.json"))
+    assert files, f"no verify record for item {item}"
+    return files[-1].with_suffix(".log").read_text()
+
+
+def diff_block(log_text: str) -> str:
+    """The text the fixture adapter echoed back from ATTAVO_DIFF, between
+    the markers adapters/fixture/run prints for ATTAVO_STAGE=verify."""
+    start = log_text.index("--- ATTAVO_DIFF ---\n") + len("--- ATTAVO_DIFF ---\n")
+    end = log_text.index("--- end diff ---")
+    return log_text[start:end]
 
 
 def test_verify_refuses_without_a_build_record(tmp_path):
@@ -273,3 +287,138 @@ def test_verify_records_a_silently_failing_adapter_without_being_refused(tmp_pat
     log = (root / "records" / "1" / "verify-01.log").read_text()
     assert log.strip() != ""
     assert "1" in log  # the exit status, so the record explains itself
+
+
+# --- issue #52: the diff handed to the adapter is the item's own work,
+# not everything merged onto the branch since approval ---
+#
+# The issue's own proposed fix -- a three-dot diff against approval_sha,
+# i.e. `git diff $(git merge-base approval_sha HEAD) HEAD` -- turns out
+# not to change anything: approval_sha is already an ancestor of HEAD in
+# the normal flow (build's commits are children of it, and merging main
+# into the item branch keeps it reachable via the first-parent chain), so
+# merge-base(approval_sha, HEAD) is approval_sha again and A...B reduces
+# to the same A..B already computed today. Confirmed with two raw `git
+# diff` runs before writing test 1 below; posted to issue #52 as a
+# comment. The fix actually applied here diffs from the merge-base of
+# HEAD and refs/remotes/origin/HEAD instead -- the default branch's own
+# tip is not, in general, an ancestor of HEAD once the item branch has
+# taken merges from it, so that merge-base does move, and content already
+# identical on both sides of it (whatever main contributed) drops out of
+# the diff.
+
+
+def test_verify_diff_excludes_content_merged_from_the_default_branch(tmp_path):
+    """Issue #52, rejection test 1. A commit lands on the fixture's main
+    and is merged into the item branch; then one change is made on the
+    item branch itself (the build). The diff at ATTAVO_DIFF names only
+    that second change. Red before this fix: it names both, since the
+    two-dot diff against approval_sha cannot tell main's own content
+    apart from the item's.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    approve_item(root)  # approval_sha == the tenant's initial commit
+
+    fork = git(root, "rev-parse", "HEAD").strip()
+    git(root, "checkout", "-q", "-b", "sim-main", fork)
+    (root / "mainfile.txt").write_text("from main\n")
+    commit_all(root, "a commit on the fixture's main")
+    main_tip = git(root, "rev-parse", "HEAD").strip()
+    git(root, "update-ref", "refs/remotes/origin/main", main_tip)
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "-q", "--no-ff", "sim-main", "-m", "merge main")
+
+    assert run_attavo(root, "build", "1").returncode == 0  # the item's own change
+
+    run = run_attavo(root, "verify", "1")
+    assert run.returncode == 0
+
+    diff = diff_block(latest_verify_log(root))
+    assert "built.txt" in diff
+    assert "mainfile.txt" not in diff
+
+
+def test_verify_diff_matches_the_old_two_dot_diff_without_a_merge(tmp_path):
+    """Issue #52, rejection test 2. With no merge from the default
+    branch, the new diff must not regress to something narrower or
+    broader than before: it comes out byte-identical to the old
+    ``git diff approval_sha HEAD``.
+
+    The branch's first commit after the base (refs/remotes/origin/main,
+    pinned here to the tenant's state right before approval) is an empty
+    marker standing in for "approved, nothing built yet" -- its tree is
+    therefore identical to the base's, so the new diff's base
+    (merge-base(origin/HEAD, HEAD)) and the old diff's base
+    (approval_sha) name trees with the same content, and the two diffs,
+    though computed from different commits, come out identical byte for
+    byte.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+
+    base = git(root, "rev-parse", "HEAD").strip()
+    git(root, "update-ref", "refs/remotes/origin/main", base)
+
+    git(root, "commit", "--allow-empty", "-q", "-m", "approved: item 1")
+    approve_item(root)
+    assert run_attavo(root, "build", "1").returncode == 0
+
+    build_rec = json.loads(sorted((root / "records" / "1").glob("build-*.json"))[-1].read_text())
+    approval_sha = build_rec["approval_sha"]
+    head = git(root, "rev-parse", "HEAD").strip()
+    old_diff = git(root, "diff", approval_sha, head)
+
+    run = run_attavo(root, "verify", "1")
+    assert run.returncode == 0
+    assert diff_block(latest_verify_log(root)) == old_diff
+
+
+def test_verify_refuses_without_an_origin_head(tmp_path):
+    """Issue #52, rejection test 3. With no refs/remotes/origin/HEAD to
+    diff against, cmd_verify refuses by name -- telling the operator to
+    run `git remote set-head origin -a` -- rather than guessing, and
+    writes no verify record at all. Red before this fix: there was
+    nothing to refuse on, since refs/remotes/origin/HEAD was never
+    consulted.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    approve_item(root)
+    assert run_attavo(root, "build", "1").returncode == 0
+
+    # helpers.init_repo fakes refs/remotes/origin/HEAD for every other
+    # test in this file; undo that here to exercise a real checkout that
+    # was never told which branch origin considers default.
+    subprocess.run(["git", "-C", str(root), "symbolic-ref", "-d", "refs/remotes/origin/HEAD"],
+                   capture_output=True, text=True, check=True)
+
+    run = run_attavo(root, "verify", "1")
+    assert run.returncode == 1
+    assert "origin/HEAD" in run.stdout
+    assert list((root / "records" / "1").glob("verify-*.json")) == []
+
+
+def test_verify_diff_is_empty_without_an_approval_sha(tmp_path):
+    """Issue #52 rejection table row 4 (unchanged from the original
+    issue): a build record with no approval_sha at all gets an empty
+    diff, and no crash. refs/remotes/origin/HEAD is dropped here too, to
+    show it is never consulted when there is no approval_sha to diff
+    from in the first place.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    approve_item(root)
+    assert run_attavo(root, "build", "1").returncode == 0
+
+    build_path = sorted((root / "records" / "1").glob("build-*.json"))[-1]
+    build_rec = json.loads(build_path.read_text())
+    build_rec["approval_sha"] = None
+    build_path.write_text(json.dumps(build_rec))
+
+    subprocess.run(["git", "-C", str(root), "symbolic-ref", "-d", "refs/remotes/origin/HEAD"],
+                   capture_output=True, text=True, check=True)
+
+    run = run_attavo(root, "verify", "1")
+    assert run.returncode == 0
+    assert diff_block(latest_verify_log(root)) == ""
