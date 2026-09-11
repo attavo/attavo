@@ -97,7 +97,7 @@ jobs:
         id: attest
         run: |
           attavo attest ${{ github.event_name == 'pull_request' && '--partial' || '' }} > "$RUNNER_TEMP/attestation.json"
-          if python3 -c "import json,sys; sys.exit(0 if isinstance(json.load(open(sys.argv[1])), dict) else 1)" "$RUNNER_TEMP/attestation.json"; then
+          if python3 -c "import json,sys; sys.exit(0 if isinstance(json.load(open(sys.argv[1])), dict) else 1)" "$RUNNER_TEMP/attestation.json" 2>/dev/null; then
             echo "statement=true" >> "$GITHUB_OUTPUT"
           else
             echo "statement=false" >> "$GITHUB_OUTPUT"
