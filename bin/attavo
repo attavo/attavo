@@ -474,16 +474,36 @@ def proof_one_item_every_stage(root: Path, m: dict | None) -> Proof:
     if not items:
         return p.fail(f"no work item under {records_dir.relative_to(root)}")
     complete = [item for item, stages in items.items() if all(s in stages for s in STAGES)]
+    if not complete:
+        best = max(items.items(), key=lambda kv: len(kv[1]))
+        lacking = [s for s in STAGES if s not in best[1]]
+        return p.fail(f"no item carries every stage; item {best[0]} lacks {', '.join(lacking)}")
+
+    # issue #74: a complete item is counted only when its chain holds --
+    # attavo attest refuses a build re-approved after the fact or a
+    # verify whose build went stale, and the coherence gate refuses the
+    # merge group on exactly that; a proof that never asked would call a
+    # traversal the gate itself would not let through. The refusal text
+    # is check_attest_chain's own, never re-typed here.
+    refused, held = [], []
     for item in complete:
+        chain, message = check_attest_chain(records_dir / item, item)
+        if chain is None:
+            refused.append(f"item {item}: {message}")
+            continue
         merge_sha = merge_introducing_records(root, records_rel, item, STAGES)
         if merge_sha:
-            return p.hold(f"item {item} carries {', '.join(STAGES)}, merged at {merge_sha[:12]}")
-    if complete:
-        return p.fail(f"item(s) {', '.join(sorted(complete))} carry every stage but no merge "
-                      f"commit's first-parent diff introduces all of them")
-    best = max(items.items(), key=lambda kv: len(kv[1]))
-    lacking = [s for s in STAGES if s not in best[1]]
-    return p.fail(f"no item carries every stage; item {best[0]} lacks {', '.join(lacking)}")
+            held.append((item, merge_sha))
+
+    if held:
+        names = ", ".join(item for item, _ in held)
+        shas = ", ".join(sha[:12] for _, sha in held)
+        return p.hold(f"item(s) {names} carry {', '.join(STAGES)} with the chain held, "
+                      f"merged at {shas}")
+    if refused:
+        return p.fail("; ".join(refused))
+    return p.fail(f"item(s) {', '.join(complete)} carry every stage with the chain held but no "
+                  f"merge commit's first-parent diff introduces all of them")
 
 
 def touches_boundary(root: Path, sha: str, boundary_paths: list[str]) -> bool:
@@ -506,9 +526,33 @@ def proof_no_commit_lacks_record(root: Path, m: dict | None) -> Proof:
         return p.fail(f"git: {exc}")
     if not install:
         return p.fail(f"{MANIFEST} is not committed; the tenant has no record boundary")
-    commits = git(root, "rev-list", f"{install[0]}..HEAD", "--first-parent").split()
-    if not commits:
-        return p.fail(f"no commit after the install commit {install[0][:12]}; nothing has been recorded")
+    install_sha = install[0]
+    full_chain = git(root, "rev-list", f"{install_sha}..HEAD", "--first-parent").split()
+    if not full_chain:
+        return p.fail(f"no commit after the install commit {install_sha[:12]}; nothing has been recorded")
+
+    # issue #74: [doctor] from lets a tenant declare the doctor's read to
+    # start at a later commit on main's first-parent line -- the point
+    # after which every push arrived through the queue -- rather than the
+    # install commit, which on a repository that adopted the product
+    # after its history began is a boundary the doctor cannot otherwise
+    # see. Checked, not trusted: a declared from that is not on that line
+    # is refused by name rather than silently falling back to install.
+    declared_from = (m.get("doctor") or {}).get("from")
+    window_start = install_sha
+    if declared_from is not None:
+        if declared_from != install_sha and declared_from not in full_chain:
+            return p.fail(f"[doctor] from {declared_from[:12]} is not on main's first-parent "
+                          f"line after the install commit {install_sha[:12]}")
+        window_start = declared_from
+
+    if window_start == install_sha:
+        window_spec = f"{install_sha}..HEAD"
+        commits = full_chain
+    else:
+        window_spec = f"{window_start}^..HEAD"
+        commits = git(root, "rev-list", window_spec, "--first-parent").split()
+    before_window = len(full_chain) - len(commits)
 
     records_rel = m.get("paths", {}).get("records", "")
     records_dir = root / records_rel
@@ -521,13 +565,12 @@ def proof_no_commit_lacks_record(root: Path, m: dict | None) -> Proof:
             for c in rec.get("commits", []) or []:
                 if isinstance(c, str):
                     named.add(c)
-    record_commits = set(git(root, "rev-list", f"{install[0]}..HEAD", "--first-parent",
+    record_commits = set(git(root, "rev-list", window_spec, "--first-parent",
                              "--", records_rel).split()) if records_rel else set()
-    merges = set(git(root, "rev-list", f"{install[0]}..HEAD", "--first-parent",
-                     "--merges").split())
+    merges = set(git(root, "rev-list", window_spec, "--first-parent", "--merges").split())
     boundary_paths = ((m.get("spec") or {}).get("boundary") or {}).get("paths") or []
 
-    # Every first-parent commit since install is exactly one of three
+    # Every first-parent commit in the window is exactly one of three
     # (issue #72): recorded (a record names it, or its diff touches
     # paths.records), ordinary (a merge that doesn't), or unrecorded
     # (anything else -- on a protected main with a queue, a non-merge
@@ -547,11 +590,13 @@ def proof_no_commit_lacks_record(root: Path, m: dict | None) -> Proof:
     counts = f"{len(recorded)} recorded, {len(ordinary)} ordinary, {len(unrecorded)} unrecorded"
     evasions = boundary_evasions if boundary_paths else "n/a"
     extra = {"recorded": len(recorded), "ordinary": len(ordinary),
-             "unrecorded": len(unrecorded), "boundary_evasions": evasions}
+             "unrecorded": len(unrecorded), "boundary_evasions": evasions,
+             "before_window": before_window}
     if unrecorded:
-        return p.fail(f"{unrecorded[-1][:12]} lacks a record; {counts}; boundary evasions: {evasions}",
-                      **extra)
-    return p.hold(f"{counts}; boundary evasions: {evasions}", **extra)
+        return p.fail(f"{unrecorded[-1][:12]} lacks a record; {counts}; boundary evasions: "
+                      f"{evasions}; before the window: {before_window}", **extra)
+    return p.hold(f"{counts}; boundary evasions: {evasions}; before the window: {before_window}",
+                  **extra)
 
 
 def doctor(root: Path) -> list[Proof]:
@@ -1472,17 +1517,18 @@ def check_attest_chain(records_dir: Path, item_id: str, partial: bool = False):
     approval, build, and verify records for item_id all exist, build's
     approval_sha names the latest approval -- a re-approval after a build
     must force a re-run of what changed -- and verify's build_sha names
-    that build. Prints the refusal attest prints and returns None on any
-    of them; returns the four latest records (spec, approval, build,
-    verify) when the chain holds.
+    that build. Returns (None, message) on any of them, the message being
+    the same text attest prints, not a copy of it a caller re-types
+    (issue #74: proof two reuses it); returns ((spec, approval, build,
+    verify), None) when the chain holds.
 
     partial (issue #67) is for a pull request, where a later stage's
     record cannot exist yet because the stage that would produce it is
     itself waiting on this check. Under partial, a missing record is not
     a refusal -- the two chain assertions still run over whatever records
-    exist, and NOT_YET is returned, with the item and the stages present
-    and absent named on stdout, when a stage is still missing once those
-    assertions hold."""
+    exist, and (NOT_YET, message) is returned, the message naming the
+    item and the stages present and absent, when a stage is still missing
+    once those assertions hold."""
     latest_spec = latest_record(records_dir, "spec")
     latest_approval = latest_record(records_dir, "approval")
     latest_build = latest_record(records_dir, "build")
@@ -1493,28 +1539,23 @@ def check_attest_chain(records_dir: Path, item_id: str, partial: bool = False):
     if not partial:
         for stage, rec in stages:
             if rec is None:
-                print(f"attavo attest: refused: no {stage} record for item {item_id}", file=sys.stderr)
-                return None
+                return None, f"no {stage} record for item {item_id}"
 
     if latest_approval is not None and latest_build is not None:
         if latest_build.get("approval_sha") != latest_approval.get("sha"):
-            print("attavo attest: refused: build's approval_sha does not name the latest "
-                  "approval; a re-approval after the build must force a re-run", file=sys.stderr)
-            return None
+            return None, ("build's approval_sha does not name the latest approval; a "
+                          "re-approval after the build must force a re-run")
     if latest_build is not None and latest_verify is not None:
         if latest_verify.get("build_sha") != latest_build.get("sha"):
-            print("attavo attest: refused: verify's build_sha does not name the latest build",
-                  file=sys.stderr)
-            return None
+            return None, "verify's build_sha does not name the latest build"
 
     missing = [stage for stage, rec in stages if rec is None]
     if partial and missing:
         present = [stage for stage, rec in stages if rec is not None]
-        print(f"attavo attest --partial: item {item_id} not yet "
-              f"(present: {', '.join(present) or 'none'}; absent: {', '.join(missing)})")
-        return NOT_YET
+        return NOT_YET, (f"item {item_id} not yet (present: {', '.join(present) or 'none'}; "
+                         f"absent: {', '.join(missing)})")
 
-    return latest_spec, latest_approval, latest_build, latest_verify
+    return (latest_spec, latest_approval, latest_build, latest_verify), None
 
 
 def cmd_attest(argv: list[str]) -> int:
@@ -1554,10 +1595,12 @@ def cmd_attest(argv: list[str]) -> int:
         item_id = next(iter(items))
 
     records_dir = root / records_rel / item_id
-    chain = check_attest_chain(records_dir, item_id, partial=partial)
+    chain, message = check_attest_chain(records_dir, item_id, partial=partial)
     if chain is None:
+        print(f"attavo attest: refused: {message}", file=sys.stderr)
         return 1
     if chain is NOT_YET:
+        print(f"attavo attest --partial: {message}")
         return 0
     latest_spec, latest_approval, latest_build, latest_verify = chain
 
