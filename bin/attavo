@@ -485,7 +485,7 @@ def proof_one_item_every_stage(root: Path, m: dict | None) -> Proof:
     # merge group on exactly that; a proof that never asked would call a
     # traversal the gate itself would not let through. The refusal text
     # is check_attest_chain's own, never re-typed here.
-    refused, held = [], []
+    refused, held, unmerged = [], [], []
     for item in complete:
         chain, message = check_attest_chain(records_dir / item, item)
         if chain is None:
@@ -494,6 +494,8 @@ def proof_one_item_every_stage(root: Path, m: dict | None) -> Proof:
         merge_sha = merge_introducing_records(root, records_rel, item, STAGES)
         if merge_sha:
             held.append((item, merge_sha))
+        else:
+            unmerged.append(item)
 
     if held:
         names = ", ".join(item for item, _ in held)
@@ -502,7 +504,7 @@ def proof_one_item_every_stage(root: Path, m: dict | None) -> Proof:
                       f"merged at {shas}")
     if refused:
         return p.fail("; ".join(refused))
-    return p.fail(f"item(s) {', '.join(complete)} carry every stage with the chain held but no "
+    return p.fail(f"item(s) {', '.join(unmerged)} carry every stage with the chain held but no "
                   f"merge commit's first-parent diff introduces all of them")
 
 
@@ -536,15 +538,22 @@ def proof_no_commit_lacks_record(root: Path, m: dict | None) -> Proof:
     # after which every push arrived through the queue -- rather than the
     # install commit, which on a repository that adopted the product
     # after its history began is a boundary the doctor cannot otherwise
-    # see. Checked, not trusted: a declared from that is not on that line
-    # is refused by name rather than silently falling back to install.
+    # see. Any spelling git resolves is accepted (a short sha, a tag, a
+    # ref) -- resolved with rev-parse --verify before the first-parent
+    # check runs, so the two failure modes stay distinct: a spelling that
+    # names no commit at all, and a commit that names one off the line.
+    # Checked, not trusted: neither is silently forgiven back to install.
     declared_from = (m.get("doctor") or {}).get("from")
     window_start = install_sha
     if declared_from is not None:
-        if declared_from != install_sha and declared_from not in full_chain:
-            return p.fail(f"[doctor] from {declared_from[:12]} is not on main's first-parent "
+        try:
+            resolved_from = git(root, "rev-parse", "--verify", f"{declared_from}^{{commit}}").strip()
+        except RuntimeError:
+            return p.fail(f"[doctor] from {declared_from} does not resolve to a commit")
+        if resolved_from != install_sha and resolved_from not in full_chain:
+            return p.fail(f"[doctor] from {declared_from} is not on main's first-parent "
                           f"line after the install commit {install_sha[:12]}")
-        window_start = declared_from
+        window_start = resolved_from
 
     if window_start == install_sha:
         window_spec = f"{install_sha}..HEAD"
