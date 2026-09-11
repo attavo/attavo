@@ -91,6 +91,22 @@ def test_attest_step_sets_a_statement_output_from_a_json_object_check_not_a_grep
     assert 'echo "statement=false" >> "$GITHUB_OUTPUT"' in script
 
 
+def test_statement_check_discards_the_not_yet_lines_traceback():
+    """Issue #76: on every pull-request run before an item's later record
+    lands, `attavo attest --partial` prints its not-yet line to stdout --
+    the ruled contract (issue #67) -- which this step captures to the
+    file the json.load line then parses; json.load raises on that prose,
+    and the interpreter's traceback reaches the step's stderr and the run
+    log, read by an operator as the check having already failed (it had
+    not: the exit code is correct and statement=false is correct).
+    2>/dev/null on the json.load line discards only that traceback -- the
+    exit code, and everything else in this file, is unchanged. Red
+    today."""
+    script = extract_step_run(TEMPLATE.read_text(), "attavo attest")
+    json_load_line = next(l for l in script.splitlines() if "json.load" in l)
+    assert json_load_line.rstrip().endswith("2>/dev/null; then")
+
+
 def test_digest_and_signing_steps_require_the_statement_output():
     """The header's promise -- a not-yet or zero-item line makes the
     captured file a non-statement the later steps skip -- must be a real
