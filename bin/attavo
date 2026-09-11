@@ -166,9 +166,23 @@ PRODUCT_ROOT = Path(__file__).resolve().parent.parent
 # issue #84: a constant the lane names, not a manifest key, until a tenant
 # disagrees -- how long drive gives a forge's checks room to conclude
 # before it gives up and stops rather than call a judge on a tree the
-# forge has not yet finished reading.
-DRIVE_FORGE_POLL_BOUND_S = 1.5
-DRIVE_FORGE_POLL_INTERVAL_S = 0.3
+# forge has not yet finished reading. Tenant zero's own checks conclude
+# about five minutes after a push; the default bound gives them room to
+# finish so a person is not the one re-running drive after CI, which is
+# exactly the transport act this lane retires. ATTAVO_DRIVE_POLL_BOUND_S
+# and ATTAVO_DRIVE_POLL_INTERVAL_S, read at call time rather than once at
+# import, are for a test's own clock, not a tenant's -- there is no
+# manifest key for either.
+DRIVE_FORGE_POLL_BOUND_DEFAULT_S = 600.0
+DRIVE_FORGE_POLL_INTERVAL_DEFAULT_S = 20.0
+
+
+def drive_forge_poll_bound_s() -> float:
+    return float(os.environ.get("ATTAVO_DRIVE_POLL_BOUND_S", DRIVE_FORGE_POLL_BOUND_DEFAULT_S))
+
+
+def drive_forge_poll_interval_s() -> float:
+    return float(os.environ.get("ATTAVO_DRIVE_POLL_INTERVAL_S", DRIVE_FORGE_POLL_INTERVAL_DEFAULT_S))
 
 
 class Proof:
@@ -1492,14 +1506,19 @@ def cmd_verify(argv: list[str]) -> int:
 # records already on disk are the only state it reads. ---
 
 def poll_forge_checks(root: Path, checks_command: str, sha: str) -> tuple[dict, bool]:
-    """read_forge_checks, retried within DRIVE_FORGE_POLL_BOUND_S while the
-    read is not green -- a check still running is not yet red, and drive
-    gives it a little room to conclude before it gives up. The bound is a
-    constant this lane names, not a manifest key."""
-    deadline = time.monotonic() + DRIVE_FORGE_POLL_BOUND_S
+    """read_forge_checks, retried within drive_forge_poll_bound_s() while
+    the read is not green -- a check still running is not yet red, and
+    drive gives it a little room to conclude before it gives up. The bound
+    and interval are constants this lane names, not a manifest key,
+    re-read at call time so a test's own clock (ATTAVO_DRIVE_POLL_BOUND_S,
+    ATTAVO_DRIVE_POLL_INTERVAL_S) never has to survive past when it was
+    set."""
+    bound = drive_forge_poll_bound_s()
+    interval = drive_forge_poll_interval_s()
+    deadline = time.monotonic() + bound
     forge_checks, ok = read_forge_checks(root, checks_command, sha)
     while not ok and time.monotonic() < deadline:
-        time.sleep(DRIVE_FORGE_POLL_INTERVAL_S)
+        time.sleep(interval)
         forge_checks, ok = read_forge_checks(root, checks_command, sha)
     return forge_checks, ok
 

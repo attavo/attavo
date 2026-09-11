@@ -10,6 +10,8 @@ subcommand".
 
 Run: python3 -m pytest tests -q
 """
+import importlib.machinery
+import importlib.util
 import json
 import os
 import subprocess
@@ -24,13 +26,34 @@ ATTAVO = ROOT / "bin" / "attavo"
 GREEN_FORGE = "printf 'ci success\\n'"
 RED_FORGE = "printf 'ci failure\\n'"
 
+# The real defaults (ATTAVO_DRIVE_POLL_BOUND_S=600, _INTERVAL_S=20) are a
+# real forge's clock, not a test's -- tenant zero's own checks conclude
+# about five minutes after a push. Every `attavo drive` call here runs
+# against this much shorter clock instead, read at call time from the
+# same environment variables; test_drive_forge_poll_defaults_are_a_real_
+# forges_clock is the one test that leaves them unset, to assert the
+# defaults themselves.
+FAST_POLL_ENV = {"ATTAVO_DRIVE_POLL_BOUND_S": "1.5", "ATTAVO_DRIVE_POLL_INTERVAL_S": "0.3"}
+
 
 def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
     full_env = dict(os.environ)
+    full_env.update(FAST_POLL_ENV)
     if env:
         full_env.update(env)
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
                           capture_output=True, text=True, check=False, env=full_env)
+
+
+def attavo_module():
+    """bin/attavo imported in-process, for the default-constant assertion
+    below that a CLI invocation cannot provoke without actually waiting
+    out the real clock."""
+    loader = importlib.machinery.SourceFileLoader("attavo_drive_under_test", str(ATTAVO))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 def add_forge(root: Path, checks_command: str) -> None:
@@ -318,3 +341,19 @@ def test_drive_retries_a_rejected_push_with_a_merge_never_a_rebase(tmp_path):
     assert remote_head(bare, branch) == head_of(root)
     # the concurrent commit from the other clone is present too
     assert "concurrent.txt" in git(root, "ls-tree", "-r", "--name-only", "HEAD")
+
+
+def test_drive_forge_poll_defaults_are_a_real_forges_clock():
+    """The bound and interval every other test overrides with
+    FAST_POLL_ENV default, unset, to at least five minutes and ten
+    seconds -- tenant zero's own checks conclude about five minutes after
+    a push, and a bound shorter than that would make every drive run
+    after a record push stop on 'forge checks not green', with a person
+    running it again after CI: exactly the transport act this lane
+    retires. Row 4 (a forge that never goes green) is unchanged in
+    meaning by this -- it still stops, just after waiting out a real
+    forge's own clock instead of a test's fake one.
+    """
+    module = attavo_module()
+    assert module.DRIVE_FORGE_POLL_BOUND_DEFAULT_S >= 300
+    assert module.DRIVE_FORGE_POLL_INTERVAL_DEFAULT_S >= 10
