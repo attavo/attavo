@@ -8,5 +8,10 @@ runs:
         python-version: "3.11"
     - run: echo "${{ github.action_path }}/bin" >> "$GITHUB_PATH"
       shell: bash
-    - run: echo "ATTAVO_PRODUCT_VERSION=${{ github.action_ref }}" >> "$GITHUB_ENV"
+    - run: |
+        ref="${{ github.action_ref }}"
+        if [ -z "$ref" ] && [ ! -d "${{ github.action_path }}/.git" ]; then
+          ref="$(basename "${{ github.action_path }}")"
+        fi
+        echo "ATTAVO_PRODUCT_VERSION=$ref" >> "$GITHUB_ENV"
       shell: bash
