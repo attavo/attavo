@@ -1282,6 +1282,13 @@ def cmd_build(argv: list[str]) -> int:
 # --- verify: the forge's own read first, a judge only once it is green ---
 
 FORGE_OK_CONCLUSIONS = {"success", "neutral", "skipped"}
+# issue #84: a concluded check's second token is a conclusion --
+# FORGE_OK_CONCLUSIONS, or another concluded one such as failure,
+# cancelled, or timed_out; an unconcluded check's is a status instead,
+# one of these. drive's own poll (poll_forge_checks) is the one reader
+# that needs to tell a still-running check apart from a concluded, not-ok
+# one -- read_forge_checks itself only ever needed "green or not".
+FORGE_UNCONCLUDED_STATUSES = {"queued", "in_progress", "pending", "waiting"}
 
 
 def read_forge_checks(root: Path, checks_command: str, sha: str) -> dict:
@@ -1505,19 +1512,35 @@ def cmd_verify(argv: list[str]) -> int:
 # state that belongs to a person. Writes no record of its own; the stage
 # records already on disk are the only state it reads. ---
 
+def forge_checks_unconcluded(forge_checks: dict) -> bool:
+    """Whether poll_forge_checks should keep waiting rather than stop at
+    once: an empty read (the forge has not attached any check to this sha
+    yet) or any one check still carrying a status (queued, in_progress,
+    pending, waiting) rather than a concluded conclusion. A concluded
+    conclusion that is not green (failure, cancelled, timed_out, and
+    anything else read_forge_checks did not recognize as ok) is not this
+    -- that check is done, whether or not it passed."""
+    conclusions = forge_checks["conclusions"]
+    if not conclusions:
+        return True
+    return any(c["conclusion"] in FORGE_UNCONCLUDED_STATUSES for c in conclusions)
+
+
 def poll_forge_checks(root: Path, checks_command: str, sha: str) -> tuple[dict, bool]:
     """read_forge_checks, retried within drive_forge_poll_bound_s() while
-    the read is not green -- a check still running is not yet red, and
-    drive gives it a little room to conclude before it gives up. The bound
-    and interval are constants this lane names, not a manifest key,
-    re-read at call time so a test's own clock (ATTAVO_DRIVE_POLL_BOUND_S,
-    ATTAVO_DRIVE_POLL_INTERVAL_S) never has to survive past when it was
-    set."""
+    some check is still unconcluded (forge_checks_unconcluded) -- a check
+    still running is not yet red, and drive gives it a little room to
+    conclude before it gives up. A read where every check has already
+    concluded, green or not, stops here at once: there is nothing left to
+    wait on. The bound and interval are constants this lane names, not a
+    manifest key, re-read at call time so a test's own clock
+    (ATTAVO_DRIVE_POLL_BOUND_S, ATTAVO_DRIVE_POLL_INTERVAL_S) never has to
+    survive past when it was set."""
     bound = drive_forge_poll_bound_s()
     interval = drive_forge_poll_interval_s()
     deadline = time.monotonic() + bound
     forge_checks, ok = read_forge_checks(root, checks_command, sha)
-    while not ok and time.monotonic() < deadline:
+    while not ok and forge_checks_unconcluded(forge_checks) and time.monotonic() < deadline:
         time.sleep(interval)
         forge_checks, ok = read_forge_checks(root, checks_command, sha)
     return forge_checks, ok

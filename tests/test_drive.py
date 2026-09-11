@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from helpers import commit_all, git, make_tenant
@@ -24,7 +25,12 @@ ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
 
 GREEN_FORGE = "printf 'ci success\\n'"
+# A concluded conclusion -- checked and failing, not something still
+# running. Distinct from UNCONCLUDED_FORGE below (issue #84): drive polls
+# the one still running for the bound, but stops on the first read of a
+# check that has already concluded, whether or not it passed.
 RED_FORGE = "printf 'ci failure\\n'"
+UNCONCLUDED_FORGE = "printf 'ci in_progress\\n'"
 
 # The real defaults (ATTAVO_DRIVE_POLL_BOUND_S=600, _INTERVAL_S=20) are a
 # real forge's clock, not a test's -- tenant zero's own checks conclude
@@ -32,8 +38,10 @@ RED_FORGE = "printf 'ci failure\\n'"
 # against this much shorter clock instead, read at call time from the
 # same environment variables; test_drive_forge_poll_defaults_are_a_real_
 # forges_clock is the one test that leaves them unset, to assert the
-# defaults themselves.
-FAST_POLL_ENV = {"ATTAVO_DRIVE_POLL_BOUND_S": "1.5", "ATTAVO_DRIVE_POLL_INTERVAL_S": "0.3"}
+# defaults themselves. The interval is kept well above typical subprocess
+# startup overhead so a zero-sleep stop and a polled one are easy to tell
+# apart by wall clock alone.
+FAST_POLL_ENV = {"ATTAVO_DRIVE_POLL_BOUND_S": "0.9", "ATTAVO_DRIVE_POLL_INTERVAL_S": "0.5"}
 
 
 def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
@@ -232,8 +240,11 @@ def test_drive_prints_ready_to_merge_from_a_passed_verify(tmp_path):
 
 
 def test_drive_stops_when_the_forge_is_red(tmp_path):
-    """Acceptance row 4. Fake forge red past the bound: stops naming the
-    check, writes nothing -- no verify record at all, no new commit."""
+    """Acceptance row 4. A forge read where the one check has already
+    concluded and failed is not polled at all -- there is nothing left to
+    wait on, so drive stops on the first read, naming the check, with no
+    sleep in between. Writes nothing -- no verify record at all, no new
+    commit."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, RED_FORGE)
     add_bare_remote(root, tmp_path)
@@ -242,9 +253,14 @@ def test_drive_stops_when_the_forge_is_red(tmp_path):
     assert run_attavo(root, "drive", "1").returncode == 0  # builds
     pre_head = head_of(root)
 
+    started = time.monotonic()
     run = run_attavo(root, "drive", "1")
+    elapsed = time.monotonic() - started
     assert run.returncode != 0
     assert "ci" in run.stdout and "failure" in run.stdout
+    assert elapsed < 0.4, (
+        f"a concluded, red forge check should stop on the first read with no "
+        f"poll interval slept -- took {elapsed:.2f}s")
 
     assert record_files(root, "verify") == []
     assert head_of(root) == pre_head
@@ -255,6 +271,30 @@ def test_drive_stops_when_the_forge_is_red(tmp_path):
     assert run2.returncode != 0
     assert record_files(root, "verify") == []
     assert head_of(root) == pre_head
+
+
+def test_drive_polls_the_bound_while_the_forge_is_still_running(tmp_path):
+    """Acceptance row 4, the unconcluded case: a check still carrying a
+    status (in_progress) rather than a conclusion is not yet red -- drive
+    keeps polling it for the full bound before giving up, unlike a
+    concluded red check, which it does not poll at all. Writes nothing."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, UNCONCLUDED_FORGE)
+    add_bare_remote(root, tmp_path)
+    approve_item(root)
+
+    assert run_attavo(root, "drive", "1").returncode == 0  # builds
+
+    started = time.monotonic()
+    run = run_attavo(root, "drive", "1")
+    elapsed = time.monotonic() - started
+    assert run.returncode != 0
+    assert "ci" in run.stdout and "in_progress" in run.stdout
+    assert elapsed >= 0.4, (
+        f"a check still in_progress should be polled for the bound, not "
+        f"stopped on the first read -- took only {elapsed:.2f}s")
+
+    assert record_files(root, "verify") == []
 
 
 def test_drive_halts_on_a_question_and_resumes_at_build_after_a_ruling(tmp_path):
