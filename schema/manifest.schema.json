@@ -165,6 +165,18 @@
           "description": "Logins allowed to bind a spec's approval to a commit. `attavo approve` refuses a LOGIN not on this list."
         }
       }
+    },
+    "doctor": {
+      "type": "object",
+      "description": "Optional; the doctor's own read. Absent, proof three's window starts at the install commit, as it always has.",
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "A commit sha on main's first-parent line, at or after the install commit, where proof three's window starts -- a tenant that adopted the product on a repository with pre-existing history names the commit after which every push arrived through the queue. Checked against main's first-parent line, not trusted: a sha that is not on it is refused by name.",
+          "pattern": "^[0-9a-f]{7,40}$"
+        }
+      }
     }
   }
 }

@@ -153,6 +153,109 @@ def test_doctor_proof_two_fails_when_four_stage_records_are_never_merged(tmp_pat
     assert "merge" in p["reason"]
 
 
+def test_proof_two_fails_naming_the_item_and_refusal_text_on_approval_sha_mismatch(tmp_path):
+    """Acceptance row 1, issue #74. build-01's approval_sha does not name
+    the latest approval's sha -- attavo attest would refuse exactly this
+    chain, and from v0.11.0 the coherence gate refuses the merge group on
+    it. Proof two must refuse it too, not just find the four stages
+    present: fails naming the item and check_attest_chain's own refusal
+    text, never a re-typed copy of it."""
+    root = tmp_path / "approval_sha_mismatch"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    subprocess.run(["git", "-C", str(root), "checkout", "-b", "attavo/1-x"], check=True)
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "spec-01.json").write_text(json.dumps({"status": "pass"}))
+    (records / "approval-01.json").write_text(json.dumps({"approved_by": "alice", "sha": "1" * 40}))
+    (records / "build-01.json").write_text(
+        json.dumps({"status": "pass", "approval_sha": "2" * 40, "sha": "3" * 40}))
+    (records / "verify-01.json").write_text(json.dumps({"status": "pass", "build_sha": "3" * 40}))
+    commit_all(root, "spec, approval, build, and verify records with a stale approval_sha")
+    subprocess.run(["git", "-C", str(root), "checkout", "main"], check=True)
+    subprocess.run(["git", "-C", str(root), "merge", "--no-ff", "-m",
+                    "Merge branch 'attavo/1-x'", "attavo/1-x"], check=True)
+
+    p = run_doctor(root)["one-item-every-stage"]
+    assert not p["holds"]
+    assert "item 1" in p["reason"]
+    assert "approval_sha does not name the latest approval" in p["reason"]
+
+
+def test_proof_two_fails_naming_the_item_and_refusal_text_on_build_sha_mismatch(tmp_path):
+    """Acceptance row 2, issue #74. verify-01's build_sha does not name
+    the latest build's sha; fails likewise."""
+    root = tmp_path / "build_sha_mismatch"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    subprocess.run(["git", "-C", str(root), "checkout", "-b", "attavo/1-x"], check=True)
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "spec-01.json").write_text(json.dumps({"status": "pass"}))
+    (records / "approval-01.json").write_text(json.dumps({"approved_by": "alice", "sha": "1" * 40}))
+    (records / "build-01.json").write_text(
+        json.dumps({"status": "pass", "approval_sha": "1" * 40, "sha": "3" * 40}))
+    (records / "verify-01.json").write_text(json.dumps({"status": "pass", "build_sha": "9" * 40}))
+    commit_all(root, "spec, approval, build, and verify records with a stale build_sha")
+    subprocess.run(["git", "-C", str(root), "checkout", "main"], check=True)
+    subprocess.run(["git", "-C", str(root), "merge", "--no-ff", "-m",
+                    "Merge branch 'attavo/1-x'", "attavo/1-x"], check=True)
+
+    p = run_doctor(root)["one-item-every-stage"]
+    assert not p["holds"]
+    assert "item 1" in p["reason"]
+    assert "verify's build_sha does not name the latest build" in p["reason"]
+
+
+def test_proof_two_holds_naming_only_the_held_item_when_another_is_refused(tmp_path):
+    """Acceptance row 3, issue #74. Item 1 carries every stage but a
+    stale approval_sha; item 2's chain holds cleanly. Proof two holds,
+    naming only item 2 -- item 1's refusal never leaks into a passing
+    reason."""
+    root = tmp_path / "two_items_one_refused"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    subprocess.run(["git", "-C", str(root), "checkout", "-b", "attavo/1-x"], check=True)
+    records1 = root / "records" / "1"
+    records1.mkdir(parents=True)
+    (records1 / "spec-01.json").write_text(json.dumps({"status": "pass"}))
+    (records1 / "approval-01.json").write_text(json.dumps({"approved_by": "alice", "sha": "1" * 40}))
+    (records1 / "build-01.json").write_text(
+        json.dumps({"status": "pass", "approval_sha": "2" * 40, "sha": "3" * 40}))
+    (records1 / "verify-01.json").write_text(json.dumps({"status": "pass", "build_sha": "3" * 40}))
+    commit_all(root, "spec, approval, build, and verify records for item 1, chain refused")
+    subprocess.run(["git", "-C", str(root), "checkout", "main"], check=True)
+    subprocess.run(["git", "-C", str(root), "merge", "--no-ff", "-m",
+                    "Merge branch 'attavo/1-x'", "attavo/1-x"], check=True)
+
+    subprocess.run(["git", "-C", str(root), "checkout", "-b", "attavo/2-x"], check=True)
+    records2 = root / "records" / "2"
+    records2.mkdir(parents=True)
+    (records2 / "spec-01.json").write_text(json.dumps({"status": "pass"}))
+    (records2 / "approval-01.json").write_text(json.dumps({"approved_by": "alice", "sha": "9" * 40}))
+    (records2 / "build-01.json").write_text(
+        json.dumps({"status": "pass", "approval_sha": "9" * 40, "sha": "8" * 40}))
+    (records2 / "verify-01.json").write_text(json.dumps({"status": "pass", "build_sha": "8" * 40}))
+    commit_all(root, "spec, approval, build, and verify records for item 2, chain holds")
+    subprocess.run(["git", "-C", str(root), "checkout", "main"], check=True)
+    subprocess.run(["git", "-C", str(root), "merge", "--no-ff", "-m",
+                    "Merge branch 'attavo/2-x'", "attavo/2-x"], check=True)
+    merge2_sha = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                                capture_output=True, text=True, check=True).stdout.strip()
+
+    p = run_doctor(root)["one-item-every-stage"]
+    assert p["holds"], p["reason"]
+    assert p["reason"] == (
+        "item(s) 2 carry spec, approval, build, verify with the chain held, "
+        f"merged at {merge2_sha[:12]}")
+
+
 def test_proof_three_holds_on_an_item_merge_with_no_attestation_record(tmp_path):
     """Acceptance row 5, issue #69: an item's merge commit carries its
     record paths in its own first-parent diff, so it is a record commit
@@ -290,6 +393,96 @@ def test_proof_three_json_carries_the_path_ratio_fields(tmp_path):
     assert p["ordinary"] == 1
     assert p["unrecorded"] == 0
     assert p["boundary_evasions"] == 0
+
+
+def _window_fixture(tmp_path: Path, name: str) -> tuple[Path, str, str]:
+    """Two commits made straight to main, then a branch carrying item 1's
+    spec record, merged --no-ff. Returns (root, merge_sha, branch_sha) --
+    merge_sha is on main's first-parent line and is the only sha issue
+    #74's [doctor] from tests declare as valid; branch_sha is the branch
+    commit itself, reachable only as the merge's second parent and never
+    on that line, the sha the invalid-from test declares instead."""
+    root = tmp_path / name
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    (root / "pre1.txt").write_text("1\n")
+    commit_all(root, "a change committed straight to main")
+    (root / "pre2.txt").write_text("2\n")
+    commit_all(root, "another change committed straight to main")
+
+    subprocess.run(["git", "-C", str(root), "checkout", "-b", "attavo/1-x"], check=True)
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "spec-01.json").write_text(json.dumps({"status": "pass"}))
+    commit_all(root, "spec record for item 1")
+    branch_sha = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                                capture_output=True, text=True, check=True).stdout.strip()
+    subprocess.run(["git", "-C", str(root), "checkout", "main"], check=True)
+    subprocess.run(["git", "-C", str(root), "merge", "--no-ff", "-m",
+                    "Merge branch 'attavo/1-x'", "attavo/1-x"], check=True)
+    merge_sha = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                               capture_output=True, text=True, check=True).stdout.strip()
+    return root, merge_sha, branch_sha
+
+
+def _declare_doctor_from(root: Path, from_sha: str) -> None:
+    """Names [doctor] from via its own merge, not a direct commit to
+    main -- declaring the window must never itself read as an unrecorded
+    commit inside it."""
+    subprocess.run(["git", "-C", str(root), "checkout", "-b", "declare-window"], check=True)
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text() + f'\n[doctor]\nfrom = "{from_sha}"\n')
+    commit_all(root, "declare the doctor's window")
+    subprocess.run(["git", "-C", str(root), "checkout", "main"], check=True)
+    subprocess.run(["git", "-C", str(root), "merge", "--no-ff", "-m",
+                    "Merge branch 'declare-window'", "declare-window"], check=True)
+
+
+def test_proof_three_holds_reporting_before_the_window_with_doctor_from(tmp_path):
+    """Acceptance row 4, issue #74. [doctor] from names the item merge:
+    the two commits made straight to main before it fall before the
+    window, not into unrecorded -- proof three holds, `before the
+    window: 2`, and the window's own counts, 1 recorded (the item merge)
+    and 1 ordinary (the merge that declares the window itself)."""
+    root, merge_sha, _ = _window_fixture(tmp_path, "window_holds")
+    _declare_doctor_from(root, merge_sha)
+
+    p = run_doctor(root)["no-commit-lacks-record"]
+    assert p["holds"], p["reason"]
+    assert "before the window: 2" in p["reason"]
+    assert "1 recorded, 1 ordinary, 0 unrecorded" in p["reason"]
+    assert p["before_window"] == 2
+
+
+def test_proof_three_fails_naming_the_key_when_doctor_from_is_off_the_first_parent_line(tmp_path):
+    """Acceptance row 5, issue #74. [doctor] from names the item branch's
+    own commit -- reachable only as a merge's second parent, never on
+    main's first-parent line -- proof three fails naming the key rather
+    than silently falling back to the install commit."""
+    root, _, branch_sha = _window_fixture(tmp_path, "window_off_line")
+    _declare_doctor_from(root, branch_sha)
+
+    p = run_doctor(root)["no-commit-lacks-record"]
+    assert not p["holds"]
+    assert "[doctor] from" in p["reason"]
+    assert branch_sha[:12] in p["reason"]
+
+
+def test_proof_three_defaults_to_the_install_commit_when_doctor_key_is_absent(tmp_path):
+    """Acceptance row 6, issue #74. No [doctor] table at all: the window
+    defaults to the install commit exactly as before this issue -- both
+    commits made straight to main are still read as unrecorded, and
+    before_window is 0 -- the read every existing proof-three test
+    exercises is unaffected by the key's addition."""
+    root, _merge_sha, _branch_sha = _window_fixture(tmp_path, "window_absent")
+
+    p = run_doctor(root)["no-commit-lacks-record"]
+    assert not p["holds"]
+    assert "1 recorded, 0 ordinary, 2 unrecorded" in p["reason"]
+    assert "before the window: 0" in p["reason"]
+    assert p["before_window"] == 0
 
 
 def test_doctor_proof_one_refuses_a_gate_with_empty_retires(tmp_path):
