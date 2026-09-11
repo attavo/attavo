@@ -456,6 +456,22 @@ def test_proof_three_holds_reporting_before_the_window_with_doctor_from(tmp_path
     assert p["before_window"] == 2
 
 
+def test_proof_three_holds_when_doctor_from_names_a_seven_character_prefix(tmp_path):
+    """Acceptance row 5 (amendment), issue #74. [doctor] from need not be
+    a full sha -- any spelling git rev-parse --verify resolves is
+    accepted, resolved before the first-parent check runs. A
+    seven-character prefix of the item merge holds with the same counts
+    as the full-sha case."""
+    root, merge_sha, _ = _window_fixture(tmp_path, "window_holds_short_sha")
+    _declare_doctor_from(root, merge_sha[:7])
+
+    p = run_doctor(root)["no-commit-lacks-record"]
+    assert p["holds"], p["reason"]
+    assert "before the window: 2" in p["reason"]
+    assert "1 recorded, 1 ordinary, 0 unrecorded" in p["reason"]
+    assert p["before_window"] == 2
+
+
 def test_proof_three_fails_naming_the_key_when_doctor_from_is_off_the_first_parent_line(tmp_path):
     """Acceptance row 5, issue #74. [doctor] from names the item branch's
     own commit -- reachable only as a merge's second parent, never on
