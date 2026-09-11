@@ -289,6 +289,46 @@ def test_verify_records_a_silently_failing_adapter_without_being_refused(tmp_pat
     assert "1" in log  # the exit status, so the record explains itself
 
 
+def test_verify_records_the_tools_own_error_line_on_a_nonzero_exit(tmp_path):
+    """Issue #86, rejection test 3. Specimen: tenant zero
+    attest/records/659/verify-01.log -- two lines, thread.started and
+    "[adapter exited 1]", though the codex adapter printed codex's own
+    "Input exceeds..." error line to its stdout, which issue #53's fix
+    was supposed to guarantee reaches the log. The mechanism:
+    split_adapter_stdout takes the adapter's last non-empty stdout line
+    as an attempted JSON payload and treats only what comes before it as
+    transcript; on a non-zero exit, a tool's own error line, printed
+    last, is that attempted payload -- it fails to parse as JSON and is
+    dropped from the transcript instead of kept in it. An adapter that
+    prints an event line, then an error line, then exits 1: the log
+    must still carry the error line.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    approve_item(root)
+    assert run_attavo(root, "build", "1").returncode == 0
+
+    adapter_dir = root / "attavo" / "adapters" / "loud"
+    adapter_dir.mkdir(parents=True)
+    adapter_run = adapter_dir / "run"
+    adapter_run.write_text(
+        "#!/bin/sh\n"
+        "echo '{\"type\":\"thread.started\"}'\n"
+        "echo 'Error: turn/start failed: input_too_large'\n"
+        "exit 1\n")
+    adapter_run.chmod(0o755)
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace(
+        '[executor]\nbuild = "fixture"', '[executor]\nbuild = "fixture"\nverify = "loud"'))
+    commit_all(root, "use a verify adapter that errors loudly on stdout")
+
+    run = run_attavo(root, "verify", "1")
+    assert run.returncode == 1
+
+    log = (root / "records" / "1" / "verify-01.log").read_text()
+    assert "input_too_large" in log
+
+
 # --- issue #52: the diff handed to the adapter is the item's own work,
 # not everything merged onto the branch since approval ---
 #
