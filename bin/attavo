@@ -10,6 +10,7 @@
     attavo file-findings [N]
     attavo record-only
     attavo attest [--partial] [N]
+    attavo drive [N]
 
 The doctor is the definition of done. It asserts three proofs against a
 tenant root and exits 1 until every proof holds:
@@ -121,6 +122,22 @@ approval_sha names the latest approval, verify's build_sha names the
 latest build -- still run over whatever records exist. merge_group and a
 push to main still demand the whole chain. See issue #69's lane for the
 full rules it enforces.
+
+drive reads an item's latest records and a forge's own check conclusions
+and performs the next mechanical step, and only that step, then stops: no
+valid approval refuses by name and runs nothing; no passing build bound to
+that approval runs build; a passing build with the forge green on the
+branch head (polled for a bound, not the manifest) runs verify; a passing
+verify with the forge still green prints that the item is ready to merge
+and stops there -- the merge is never drive's own act, and it enqueues
+nothing. Every record build or verify writes, drive commits with `git
+commit --only` on the record and its log alone, never sweeping the index,
+then pushes; a push a divergent remote rejects is retried once after `git
+pull --no-rebase --no-edit`, never a rebase, since the record already
+names the commit's sha. drive writes no record of its own: a second run
+in the same state repeats the same step or the same stop, reading exactly
+what the prior run left behind. See issue #84's lane for the full rules
+it enforces.
 """
 from __future__ import annotations
 
@@ -146,6 +163,12 @@ BUILD_ITERATION_BUDGET = 3
 BUILD_HALT_EXIT = 3
 CHECKS_FEEDBACK_TAIL_LINES = 200
 PRODUCT_ROOT = Path(__file__).resolve().parent.parent
+# issue #84: a constant the lane names, not a manifest key, until a tenant
+# disagrees -- how long drive gives a forge's checks room to conclude
+# before it gives up and stops rather than call a judge on a tree the
+# forge has not yet finished reading.
+DRIVE_FORGE_POLL_BOUND_S = 1.5
+DRIVE_FORGE_POLL_INTERVAL_S = 0.3
 
 
 class Proof:
@@ -1463,6 +1486,182 @@ def cmd_verify(argv: list[str]) -> int:
     return 0 if status_out == "pass" else 1
 
 
+# --- drive: the mechanical transitions between approval and ready-to-merge
+# (issue #84) -- one step per invocation, and only that step, until a
+# state that belongs to a person. Writes no record of its own; the stage
+# records already on disk are the only state it reads. ---
+
+def poll_forge_checks(root: Path, checks_command: str, sha: str) -> tuple[dict, bool]:
+    """read_forge_checks, retried within DRIVE_FORGE_POLL_BOUND_S while the
+    read is not green -- a check still running is not yet red, and drive
+    gives it a little room to conclude before it gives up. The bound is a
+    constant this lane names, not a manifest key."""
+    deadline = time.monotonic() + DRIVE_FORGE_POLL_BOUND_S
+    forge_checks, ok = read_forge_checks(root, checks_command, sha)
+    while not ok and time.monotonic() < deadline:
+        time.sleep(DRIVE_FORGE_POLL_INTERVAL_S)
+        forge_checks, ok = read_forge_checks(root, checks_command, sha)
+    return forge_checks, ok
+
+
+def commit_record(root: Path, record_path: Path, message: str) -> None:
+    """`git commit --only` on record_path and its .log, if one exists --
+    never the whole index. A transport commit that sweeps the index is
+    exactly the regression issue #46 already guards build and verify
+    against on the adapter side; drive must not reintroduce it on the
+    transport side."""
+    paths = [str(record_path.relative_to(root))]
+    log_path = record_path.with_suffix(".log")
+    if log_path.is_file():
+        paths.append(str(log_path.relative_to(root)))
+    git(root, "add", *paths)
+    git(root, "commit", "--only", "-m", message, *paths)
+
+
+def push_record_commit(root: Path, branch: str) -> tuple[bool, str | None]:
+    """Push HEAD to branch on origin. A push a divergent remote rejects is
+    retried once after `git pull --no-rebase --no-edit origin branch` -- a
+    merge, never a rebase, because a rebase would change the sha the record
+    commit just wrote already names."""
+    def attempt() -> tuple[bool, str]:
+        run = subprocess.run(["git", "-C", str(root), "push", "origin", f"HEAD:{branch}"],
+                             capture_output=True, text=True, check=False)
+        return run.returncode == 0, run.stderr.strip()
+
+    ok, err = attempt()
+    if ok:
+        return True, None
+    pull = subprocess.run(["git", "-C", str(root), "pull", "--no-rebase", "--no-edit",
+                           "origin", branch], capture_output=True, text=True, check=False)
+    if pull.returncode != 0:
+        return False, f"push rejected and the retry merge failed: {pull.stderr.strip() or err}"
+    ok, err = attempt()
+    if not ok:
+        return False, f"push rejected again after merging {branch}: {err}"
+    return True, None
+
+
+def drive_state(root: Path, m: dict, item_id: str) -> tuple[str, str | None, Path]:
+    """("no-approval" | "build" | "verify" | "ready", detail, records_dir):
+    the next mechanical step for item_id, read from its latest records
+    alone. A build only counts as current when it is a pass bound to the
+    valid approval's own sha; a verify only counts as current when it is a
+    pass bound to that build's own sha -- the same staleness a re-approval
+    or a re-build must force, attest's own chain check already enforces
+    (check_attest_chain), read here rather than re-typed."""
+    records_rel = m["paths"]["records"]
+    records_dir = root / records_rel / item_id
+
+    status = approval_status(root, m, item_id)
+    if status != "valid":
+        return "no-approval", status, records_dir
+
+    latest_approval = latest_record(records_dir, "approval")
+    latest_build = latest_record(records_dir, "build")
+    build_current = (latest_build is not None and latest_build.get("status") == "pass"
+                     and latest_build.get("approval_sha") == (latest_approval or {}).get("sha"))
+    if not build_current:
+        return "build", None, records_dir
+
+    latest_verify = latest_record(records_dir, "verify")
+    verify_current = (latest_verify is not None and latest_verify.get("status") == "pass"
+                      and latest_verify.get("build_sha") == latest_build.get("sha"))
+    if not verify_current:
+        return "verify", None, records_dir
+
+    return "ready", None, records_dir
+
+
+def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, item_id: str) -> int:
+    """Runs build or verify in-process -- the same command `attavo build`
+    or `attavo verify` would run, printing the same reason on a refusal,
+    failure, or halt. Any record it wrote is then transported: committed
+    alone with commit_record and pushed with push_record_commit, whatever
+    its status -- the record pushes stay the same pushes, made by drive in
+    the run that produced the record (issue #84's rule 42 row)."""
+    before = latest_attempt_path(records_dir, stage)
+    rc = cmd_build([item_id]) if stage == "build" else cmd_verify([item_id])
+    after = latest_attempt_path(records_dir, stage)
+
+    if after is None or after == before:
+        # Refused before writing anything at all (e.g. no adapter
+        # configured) -- the stage command already printed why.
+        return rc if rc != 0 else 1
+
+    message = f"attavo: {stage} record for item {item_id} ({after.stem})"
+    try:
+        commit_record(root, after, message)
+    except RuntimeError as exc:
+        print(f"attavo drive: stopped: could not commit the {stage} record: {exc}")
+        return 1
+
+    ok, err = push_record_commit(root, branch)
+    if not ok:
+        print(f"attavo drive: stopped: could not push the {stage} record: {err}")
+        return 1
+
+    record = latest_record(records_dir, stage)
+    status_out = record.get("status")
+    if status_out == "halted":
+        question = (record.get("halted") or {}).get("question")
+        print(f"attavo drive: stopped: {stage} halted: {question} ({after.name}); "
+              f"pushed to {branch}")
+    elif status_out != "pass":
+        reason = record.get("refusal") or status_out
+        print(f"attavo drive: stopped: {stage} {status_out}: {reason} ({after.name}); "
+              f"pushed to {branch}")
+    else:
+        print(f"attavo drive: pushed {after.name} to {branch}")
+    return rc
+
+
+def cmd_drive(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attavo drive: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo drive: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    try:
+        stage, extra, records_dir = drive_state(root, m, item_id)
+    except ShallowCheckoutError as exc:
+        print(f"attavo drive: refused: {exc}", file=sys.stderr)
+        return 2
+
+    if stage == "no-approval":
+        print(f"attavo drive: refused: approval is {extra}")
+        return 1
+
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+
+    if stage == "build":
+        return _drive_run_stage(root, records_dir, branch, "build", item_id)
+
+    checks_command = (m.get("forge") or {}).get("checks_command")
+    if not checks_command:
+        print("attavo drive: refused: no [forge].checks_command in the manifest")
+        return 1
+    head_sha = git(root, "rev-parse", "HEAD").strip()
+    forge_checks, ok = poll_forge_checks(root, checks_command, head_sha)
+    if not ok:
+        conclusions = (", ".join(f"{c['name']} {c['conclusion']}"
+                                 for c in forge_checks["conclusions"])
+                      or "no checks reported")
+        print(f"attavo drive: stopped: forge checks not green on {head_sha[:12]}: {conclusions}")
+        return 1
+
+    if stage == "verify":
+        return _drive_run_stage(root, records_dir, branch, "verify", item_id)
+
+    print(f"attavo drive: item {item_id} is ready to merge")
+    return 0
+
+
 # --- file-findings: one tenant issue per finding, nothing filed silently ---
 
 def cmd_file_findings(argv: list[str]) -> int:
@@ -1729,9 +1928,11 @@ def main(argv: list[str]) -> int:
         return cmd_record_only(argv[1:])
     if argv[0] == "attest":
         return cmd_attest(argv[1:])
+    if argv[0] == "drive":
+        return cmd_drive(argv[1:])
     print(f"attavo: unknown subcommand {argv[0]!r}; only doctor, spec-gate, approve, "
-          f"approval-status, build, verify, file-findings, record-only, attest exist "
-          f"at this commit", file=sys.stderr)
+          f"approval-status, build, verify, file-findings, record-only, attest, drive "
+          f"exist at this commit", file=sys.stderr)
     return 2
 
 
