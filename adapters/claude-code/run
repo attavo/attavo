@@ -97,6 +97,22 @@ def read_text(path_env: str) -> str:
     return p.read_text() if p.is_file() else ""
 
 
+def describe_file(path: str, text: str, diff_like: bool) -> str:
+    """Path, byte count, line count, and (for a diff) files touched --
+    named in the instruction instead of inlining the file's own text, so
+    the instruction stays a small fixed size whatever the file's size
+    (issue #86: a 27,367-line deletion diff inlined whole exceeded a
+    judge's input ceiling -- codex's, on the specimen that surfaced it).
+    Files touched counts unified-diff file headers (`diff --git a/...
+    b/...`), the shape `git diff` produces."""
+    size = Path(path).stat().st_size
+    lines = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
+    if not diff_like:
+        return f"`{path}` ({size} bytes, {lines} lines)"
+    files = sum(1 for l in text.splitlines() if l.startswith("diff --git "))
+    return f"`{path}` ({size} bytes, {lines} lines, {files} files touched)"
+
+
 def spec_sections() -> list[str]:
     """The spec's Problem, Claims, and Criteria sections verbatim -- what
     both build and verify need to see, in the shape the spec contract
@@ -122,9 +138,14 @@ def build_instruction() -> str:
     if rulings.strip():
         parts.append("## Rulings\n\n" + rulings.strip())
 
+    feedback_path = os.environ.get("ATTAVO_FEEDBACK")
     feedback = read_text("ATTAVO_FEEDBACK")
     if feedback.strip():
-        parts.append("## Feedback from the previous attempt\n\n" + feedback.strip())
+        parts.append(
+            "## Feedback from the previous attempt\n\n"
+            f"The feedback is at {describe_file(feedback_path, feedback, diff_like=False)}. "
+            "It is not inlined here: read it yourself with your own tools "
+            "before continuing.")
 
     parts.append(
         "commit your work on the current branch; if you cannot proceed "
@@ -144,17 +165,29 @@ def build_instruction() -> str:
 def verify_instruction() -> str:
     parts = list(spec_sections())
 
+    diff_path = os.environ.get("ATTAVO_DIFF")
     diff = read_text("ATTAVO_DIFF")
-    parts.append("## Diff since the approved spec\n\n" + (diff.strip() or "(the diff is empty)"))
+    if diff.strip():
+        parts.append(
+            "## Diff since the approved spec\n\n"
+            f"The diff is at {describe_file(diff_path, diff, diff_like=True)}. "
+            "It is not inlined here: read it yourself with your own tools "
+            "before judging it.")
+    else:
+        parts.append("## Diff since the approved spec\n\n(the diff is empty)")
 
+    build_record_path = os.environ.get("ATTAVO_BUILD_RECORD")
     build_record = read_text("ATTAVO_BUILD_RECORD")
     if build_record.strip():
-        parts.append("## The build record\n\n" + build_record.strip())
+        parts.append(
+            "## The build record\n\n"
+            f"The build record is at {describe_file(build_record_path, build_record, diff_like=False)}. "
+            "Read it yourself with your own tools.")
 
     parts.append(
         "you are verifying a completed build, not building: make no edits, "
-        "write no files, commit nothing. Read the diff above against the "
-        "criteria and name what the criteria do not assert but the diff "
+        "write no files, commit nothing. Read the diff named above against "
+        "the criteria and name what the criteria do not assert but the diff "
         "should still be judged on, and name the tests that would assert "
         "it if they existed. A spec whose approval commit does not "
         "describe the working tree the build produced is itself a "

@@ -216,3 +216,81 @@ def test_real_invocation_tolerates_tracing_lines_in_the_event_stream(tmp_path):
     assert run.returncode == 0, run.stderr
     line = json.loads(run.stdout.splitlines()[-1])
     assert line["tokens"] == {"input": 7, "output": 3}
+
+
+def make_diff(tmp_path: Path, n_files: int, lines_per_file: int) -> Path:
+    diff_path = tmp_path / "diff.patch"
+    chunks = []
+    for i in range(n_files):
+        chunks.append(f"diff --git a/file{i}.py b/file{i}.py\n")
+        chunks.append("+line of a large deletion diff\n" * lines_per_file)
+    diff_path.write_text("".join(chunks))
+    return diff_path
+
+
+def test_verify_instruction_names_the_diffs_path_not_its_text(tmp_path):
+    """Issue #86, rejection test 1. Specimen: tenant zero #659, verify-01,
+    codex exec exit 1, "Input exceeds the maximum length of 1048576
+    characters (actual_chars: 1297762)" -- ATTAVO_DIFF inlined in full
+    made the invocation's own size track the diff's, and the first item
+    with a real deletion exceeded codex's input ceiling. The instruction
+    now names the diff's path, byte count, line count, and files
+    touched, and stays small whatever the diff's size.
+    """
+    diff_path = make_diff(tmp_path, n_files=3, lines_per_file=30000)
+    assert diff_path.stat().st_size > 2_000_000
+
+    dry = dry_run(tmp_path, extra_env={"ATTAVO_STAGE": "verify", "ATTAVO_DIFF": str(diff_path)})
+    instruction = dry["instruction"]
+
+    assert len(instruction.encode()) < 16 * 1024
+    assert str(diff_path) in instruction
+    assert str(diff_path.stat().st_size) in instruction
+    assert "3 files touched" in instruction
+    assert "line of a large deletion diff" not in instruction
+
+
+def test_build_instruction_names_the_feedback_files_path_not_its_text(tmp_path):
+    """Issue #86, rejection test (build side): the same size-dependence
+    applied to a large ATTAVO_FEEDBACK file -- the previous iteration's
+    failing criteria, test output, and checks output -- inlined whole.
+    """
+    feedback_path = tmp_path / "feedback.txt"
+    feedback_path.write_text("a failing test line\n" * 120000)
+    assert feedback_path.stat().st_size > 2_000_000
+
+    dry = dry_run(tmp_path, extra_env={"ATTAVO_FEEDBACK": str(feedback_path)})
+    instruction = dry["instruction"]
+
+    assert len(instruction.encode()) < 16 * 1024
+    assert str(feedback_path) in instruction
+    assert str(feedback_path.stat().st_size) in instruction
+    assert "a failing test line" not in instruction
+
+
+def test_nonzero_exit_with_error_only_on_stderr_reaches_the_log(tmp_path):
+    """Issue #86, rejection test 3 (confirmation). Specimen: tenant zero
+    #659 verify-01 -- codex exec exit 1 with "Input exceeds the maximum
+    length..." and the failed record's own log carried only
+    thread.started and "[adapter exited 1]", the error reaching neither
+    captured channel. Whichever channel codex writes its own error line
+    to -- here, stderr, with nothing on stdout at all -- must reach this
+    adapter's own stdout, which build-NN.log/verify-NN.log is built
+    from. Already true of the current invoke(): this closes the gap
+    explicitly rather than relying on situation 5's two-channel case.
+    """
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text(
+        "#!/bin/sh\n"
+        "echo 'Error: turn failed: Input exceeds the maximum length of "
+        "1048576 characters (actual_chars: 1297762)' 1>&2\n"
+        "exit 1\n")
+    fake_codex.chmod(0o755)
+
+    env = base_env(tmp_path, config={"model": "gpt-test"})
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+    run = run_codex(env)
+    assert run.returncode == 1
+    assert "Input exceeds the maximum length" in run.stdout

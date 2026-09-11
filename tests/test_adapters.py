@@ -380,6 +380,55 @@ def test_claude_code_requested_model_with_no_matching_usage_key(tmp_path):
     assert "claude-sonnet-5" in run.stderr
 
 
+def make_diff(tmp_path: Path, n_files: int, lines_per_file: int) -> Path:
+    diff_path = tmp_path / "diff.patch"
+    chunks = []
+    for i in range(n_files):
+        chunks.append(f"diff --git a/file{i}.py b/file{i}.py\n")
+        chunks.append("+line of a large deletion diff\n" * lines_per_file)
+    diff_path.write_text("".join(chunks))
+    return diff_path
+
+
+def test_verify_instruction_names_the_diffs_path_not_its_text(tmp_path):
+    """Issue #86, rejection test 1. Specimen: tenant zero #659, verify-01,
+    the codex adapter's own reproduction -- ATTAVO_DIFF inlined in full
+    made the invocation's own size track the diff's, and the first item
+    with a real deletion exceeded a judge's input ceiling. The
+    instruction now names the diff's path, byte count, line count, and
+    files touched, and stays small whatever the diff's size.
+    """
+    diff_path = make_diff(tmp_path, n_files=3, lines_per_file=30000)
+    assert diff_path.stat().st_size > 2_000_000
+
+    cmd = dry_run(tmp_path, extra_env={"ATTAVO_STAGE": "verify", "ATTAVO_DIFF": str(diff_path)})
+    instruction = cmd[cmd.index("-p") + 1]
+
+    assert len(instruction.encode()) < 16 * 1024
+    assert str(diff_path) in instruction
+    assert str(diff_path.stat().st_size) in instruction
+    assert "3 files touched" in instruction
+    assert "line of a large deletion diff" not in instruction
+
+
+def test_build_instruction_names_the_feedback_files_path_not_its_text(tmp_path):
+    """Issue #86, rejection test (build side): the same size-dependence
+    applied to a large ATTAVO_FEEDBACK file -- the previous iteration's
+    failing criteria, test output, and checks output -- inlined whole.
+    """
+    feedback_path = tmp_path / "feedback.txt"
+    feedback_path.write_text("a failing test line\n" * 120000)
+    assert feedback_path.stat().st_size > 2_000_000
+
+    cmd = dry_run(tmp_path, extra_env={"ATTAVO_FEEDBACK": str(feedback_path)})
+    instruction = cmd[cmd.index("-p") + 1]
+
+    assert len(instruction.encode()) < 16 * 1024
+    assert str(feedback_path) in instruction
+    assert str(feedback_path.stat().st_size) in instruction
+    assert "a failing test line" not in instruction
+
+
 def test_claude_code_tokens_input_includes_cached_tokens(tmp_path):
     """Issue #77, rejection test. usage.input_tokens alone undercounts a
     cache-heavy iteration by orders of magnitude (specimen:
