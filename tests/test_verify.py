@@ -240,3 +240,36 @@ def test_verify_fails_when_the_adapter_commits(tmp_path):
     assert rec["status"] == "failed"
     assert rec["sha"] == pre_head  # what was actually being verified
     assert rec["commits"] == [post_head]  # named, not silently kept
+
+
+def test_verify_records_a_silently_failing_adapter_without_being_refused(tmp_path):
+    """Issue #53, rejection test 4. Same guarantee as build's: an adapter
+    invoked during verify that exits non-zero with nothing on stdout or
+    stderr must not leave a failed record with an empty log and no trail
+    -- cmd_verify puts the adapter's exit status into the log before the
+    write, so the write is not refused.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    approve_item(root)
+    assert run_attavo(root, "build", "1").returncode == 0
+
+    adapter_dir = root / "attavo" / "adapters" / "silent"
+    adapter_dir.mkdir(parents=True)
+    adapter_run = adapter_dir / "run"
+    adapter_run.write_text("#!/bin/sh\nexit 1\n")
+    adapter_run.chmod(0o755)
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace(
+        '[executor]\nbuild = "fixture"', '[executor]\nbuild = "fixture"\nverify = "silent"'))
+    commit_all(root, "use a silently failing verify adapter")
+
+    run = run_attavo(root, "verify", "1")
+    assert run.returncode == 1
+
+    rec = latest_verify(root)
+    assert rec["status"] == "failed"
+
+    log = (root / "records" / "1" / "verify-01.log").read_text()
+    assert log.strip() != ""
+    assert "1" in log  # the exit status, so the record explains itself

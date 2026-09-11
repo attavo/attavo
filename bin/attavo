@@ -346,7 +346,8 @@ def latest_attempt_path(records_dir: Path, stage: str) -> Path | None:
     return records_dir / f"{stage}-{max(attempts):02d}.json"
 
 
-def write_record(records_dir: Path, stage: str, record: dict, m: dict, item: str) -> Path:
+def write_record(records_dir: Path, stage: str, record: dict, m: dict, item: str,
+                 log: str | None = None) -> Path:
     """Every record gains record_version (this stage schema's own $id
     version -- issue #60) and item (verbatim from the caller, matching the
     record's directory segment), plus product_version (what ran, derived
@@ -360,7 +361,15 @@ def write_record(records_dir: Path, stage: str, record: dict, m: dict, item: str
     Refuses (raises ValueError) a record carrying a key this stage's
     schema does not declare -- the declared key set enforced with the
     standard library, not a jsonschema import: bin/attavo is a single
-    script a tenant pins, and a runtime dependency changes installation."""
+    script a tenant pins, and a runtime dependency changes installation.
+
+    Also refuses a `status: "failed"` record that carries no trail at all
+    -- log the empty or missing text it will sit beside, and refusal and
+    halted (where the stage's schema has them) both null (issue #53).
+    `returned`, `pass`, `halted`, and `refused` owe no such trail. log is
+    None for a stage that invoked no adapter (verify's `returned`), which
+    write_record then writes no log file for; otherwise the log is
+    written before the record, so a refusal leaves no half-pair."""
     records_dir.mkdir(parents=True, exist_ok=True)
     nn = next_attempt_number(records_dir, stage)
     schema = stage_schema(stage)
@@ -371,7 +380,13 @@ def write_record(records_dir: Path, stage: str, record: dict, m: dict, item: str
     if undeclared:
         raise ValueError(f"write_record: {stage} record carries key(s) its schema does not "
                          f"declare: {', '.join(sorted(undeclared))}")
+    if (record.get("status") == "failed" and not log
+            and record.get("refusal") is None and record.get("halted") is None):
+        raise ValueError(f"write_record: {stage} record status is 'failed' with no log, "
+                         f"refusal, or halted to say why")
     path = records_dir / f"{stage}-{nn:02d}.json"
+    if log is not None:
+        path.with_suffix(".log").write_text(log)
     path.write_text(json.dumps(record, indent=2) + "\n")
     return path
 
@@ -1094,8 +1109,14 @@ def cmd_build(argv: list[str]) -> int:
             run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
                                  capture_output=True, text=True, check=False)
             transcript, payload = split_adapter_stdout(run.stdout)
-            if run.returncode != 0 and run.stderr.strip():
-                transcript = (transcript + "\n" if transcript else "") + run.stderr.rstrip("\n")
+            if run.returncode != 0:
+                # The guarantee behind issue #53's refusal: an adapter that
+                # exits non-zero always leaves a non-empty log, even one
+                # that printed nothing at all on stderr.
+                detail = f"[adapter exited {run.returncode}]"
+                if run.stderr.strip():
+                    detail += "\n" + run.stderr.rstrip("\n")
+                transcript = (transcript + "\n" if transcript else "") + detail
             transcripts.append(transcript)
 
             if run.returncode != 0 or payload is None or not payload.get("model"):
@@ -1203,8 +1224,8 @@ def cmd_build(argv: list[str]) -> int:
         "refusal": refusal,
         "halted": halted,
     }
-    record_path = write_record(item_records_dir, "build", record, m, item_id)
-    record_path.with_suffix(".log").write_text("\n".join(transcripts))
+    record_path = write_record(item_records_dir, "build", record, m, item_id,
+                               log="\n".join(transcripts))
 
     print(f"attavo build: {status_out} ({record_path.name})")
     if status_out == "halted":
@@ -1343,8 +1364,13 @@ def cmd_verify(argv: list[str]) -> int:
         run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
                              capture_output=True, text=True, check=False)
         transcript, payload = split_adapter_stdout(run.stdout)
-        if run.returncode != 0 and run.stderr.strip():
-            transcript = (transcript + "\n" if transcript else "") + run.stderr.rstrip("\n")
+        if run.returncode != 0:
+            # Same guarantee as cmd_build's, issue #53: a non-zero adapter
+            # exit always leaves a non-empty log.
+            detail = f"[adapter exited {run.returncode}]"
+            if run.stderr.strip():
+                detail += "\n" + run.stderr.rstrip("\n")
+            transcript = (transcript + "\n" if transcript else "") + detail
 
     # Verify is a report, not a commit (issue #46): the adapter is invoked
     # on the branch head it was handed, and must leave that head alone.
@@ -1400,8 +1426,7 @@ def cmd_verify(argv: list[str]) -> int:
         "wall_clock_s": round(time.monotonic() - started, 3),
         "status": status_out,
     }
-    record_path = write_record(item_records_dir, "verify", record, m, item_id)
-    record_path.with_suffix(".log").write_text(transcript)
+    record_path = write_record(item_records_dir, "verify", record, m, item_id, log=transcript)
 
     print(f"attavo verify: {status_out} ({record_path.name})")
     return 0 if status_out == "pass" else 1

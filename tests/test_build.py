@@ -310,6 +310,40 @@ def test_build_logs_adapter_stderr_on_failure(tmp_path):
     assert "stderr from the failing adapter" in log
 
 
+def test_build_records_a_silently_failing_adapter_without_being_refused(tmp_path):
+    """Issue #53, rejection test 3. An adapter that exits non-zero with
+    nothing on stdout and nothing on stderr -- tenant zero's build-11, the
+    claude-code adapter's account error swallowed before v0.3.6 kept
+    stderr as transcript -- would otherwise write a failed record with an
+    empty log and no refusal or halted to explain it. cmd_build's own
+    guarantee puts the adapter's exit status into the log before the
+    write, so the write is not refused.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    adapter_dir = root / "attavo" / "adapters" / "silent"
+    adapter_dir.mkdir(parents=True)
+    adapter_run = adapter_dir / "run"
+    adapter_run.write_text("#!/bin/sh\nexit 1\n")
+    adapter_run.chmod(0o755)
+
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace('build = "fixture"', 'build = "silent"'))
+    commit_all(root, "use a silently failing adapter")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1")
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    assert rec["status"] == "failed"
+    assert rec["refusal"] is None
+    assert rec["halted"] is None
+
+    log = (root / "records" / "1" / "build-01.log").read_text()
+    assert log.strip() != ""
+    assert "1" in log  # the exit status, so the record explains itself
+
+
 def test_executor_commits_carry_the_executor_identity(tmp_path):
     """Issue #33, acceptance 1. attavo build exports the executor
     identity -- set by the product, never the tenant's git config -- as

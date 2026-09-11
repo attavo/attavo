@@ -285,6 +285,57 @@ def test_write_record_stamps_record_version_from_the_schemas_id(tmp_path):
     assert json.loads(path.read_text())["record_version"] == int(tail) + 1
 
 
+def _blank_record(stage: str) -> dict:
+    schema = load_schema(stage)
+    return {k: None for k in schema["properties"]
+            if k not in ("record_version", "item", "product_version", "product_pin")}
+
+
+def test_write_record_refuses_a_failed_record_with_no_trail(tmp_path):
+    """Issue #53, rejection test 1. A failed record whose log is empty and
+    whose refusal and halted are both null explains nothing -- write_record
+    refuses it by name and writes neither the record nor the log. Tenant
+    zero's build-11.json, as recorded, has exactly this shape."""
+    attavo = attavo_module()
+    record = _blank_record("build")
+    record.update({"status": "failed", "refusal": None, "halted": None})
+
+    records_dir = tmp_path / "records" / "576"
+    with pytest.raises(ValueError, match="failed"):
+        attavo.write_record(records_dir, "build", record, {"attavo": {}}, "576", log="")
+    assert list(records_dir.glob("build-*.json")) == []
+    assert list(records_dir.glob("build-*.log")) == []
+
+
+def test_write_record_accepts_a_returned_record_with_no_log(tmp_path):
+    """Issue #53, rejection test 2. A returned verify record owes no log at
+    all, because no adapter ran -- accepted, and write_record writes no log
+    file for it. #576's verify-02 shape."""
+    attavo = attavo_module()
+    record = _blank_record("verify")
+    record["status"] = "returned"
+
+    records_dir = tmp_path / "records" / "1"
+    path = attavo.write_record(records_dir, "verify", record, {"attavo": {}}, "1")
+    assert path.exists()
+    assert not path.with_suffix(".log").exists()
+
+
+def test_write_record_accepts_a_failed_record_with_a_populated_refusal(tmp_path):
+    """Issue #53, lane table row 5. A failed record with a populated
+    refusal (or halted) and an empty log is accepted -- the refusal or
+    halted text is itself the trail the rule requires."""
+    attavo = attavo_module()
+    record = _blank_record("build")
+    record.update({"status": "failed", "refusal": "outside the claims boundary", "halted": None})
+
+    records_dir = tmp_path / "records" / "1"
+    path = attavo.write_record(records_dir, "build", record, {"attavo": {}}, "1", log="")
+    assert path.exists()
+    assert path.with_suffix(".log").exists()
+    assert path.with_suffix(".log").read_text() == ""
+
+
 def _load_check_record_schema_version():
     """scripts/check_record_schema_version.py -- schema_version_drift's
     one home. CI's schema-version job (.github/workflows/ci.yml, on
