@@ -385,3 +385,59 @@ def test_situation_13_subagent_guard_is_declared(adapter_name, tmp_path):
         assert guard.get("reason"), (
             f"{adapter_name} declares subagent_guard.supported: false "
             "with no reason")
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_14_input_limit_is_declared(adapter_name, tmp_path):
+    """Issue #93, rejection test 1. Every adapter's conformance.json
+    names input_limit: a unit and a number (as the tool documents it),
+    or a null value and a reason (mirrors situation 13's vendor-
+    independence pattern: an adapter naming neither is an undeclared
+    blind spot, not a legitimate absence)."""
+    manifest = CONFORMANCE[adapter_name]
+    limit = manifest.get("input_limit")
+    assert limit is not None, f"{adapter_name} declares no input_limit"
+
+    if limit.get("value") is not None:
+        assert limit.get("unit") in ("chars", "tokens"), (
+            f"{adapter_name}'s input_limit has a value but no chars/tokens unit")
+    else:
+        assert limit.get("reason"), (
+            f"{adapter_name}'s input_limit has no value and no reason")
+
+
+def make_large_file(path: Path, diff_like: bool) -> Path:
+    """A file over 2 MB: a diff-shaped one (3 files, unified-diff
+    headers) or a flat feedback-shaped one, the same shapes issue #86's
+    own rejection tests use."""
+    if diff_like:
+        chunks = []
+        for i in range(3):
+            chunks.append(f"diff --git a/file{i}.py b/file{i}.py\n")
+            chunks.append("+line of a large deletion diff\n" * 30000)
+        path.write_text("".join(chunks))
+    else:
+        path.write_text("a failing test line\n" * 120000)
+    return path
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_15_instruction_stays_under_the_bound_with_large_files(adapter_name, tmp_path):
+    """Issue #93, rejection test 3. A 2 MB diff and a 2 MB feedback file
+    both leave the dry-run instruction under the 64 KB fixed bound --
+    the guarantee issue #86 built (naming a file's path instead of
+    inlining it) staying in place, checked generally rather than per
+    adapter file, so a third adapter inlining a large file again is
+    caught here rather than only in judgment."""
+    FIXED_BOUND_CHARS = 65536
+
+    diff_path = make_large_file(tmp_path / "diff.patch", diff_like=True)
+    assert diff_path.stat().st_size > 2_000_000
+    verify = dry_run(adapter_name, tmp_path, extra_env={
+        "ATTAVO_STAGE": "verify", "ATTAVO_DIFF": str(diff_path)})
+    assert len(verify["instruction"].encode()) < FIXED_BOUND_CHARS
+
+    feedback_path = make_large_file(tmp_path / "feedback.txt", diff_like=False)
+    assert feedback_path.stat().st_size > 2_000_000
+    build = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_FEEDBACK": str(feedback_path)})
+    assert len(build["instruction"].encode()) < FIXED_BOUND_CHARS

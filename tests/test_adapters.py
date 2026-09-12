@@ -77,6 +77,7 @@ Run: python3 -m pytest tests -q
 """
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -589,4 +590,98 @@ def test_claude_code_tokens_input_includes_cached_tokens(tmp_path):
     assert run.returncode == 0, run.stderr
     line = json.loads(run.stdout.splitlines()[-1])
     assert line["tokens"]["input"] == 16 + 100 + 5
+
+
+def test_claude_code_ceiling_refuses_an_oversized_instruction(tmp_path):
+    """Issue #93, rejection test 2. claude code publishes no input-size
+    ceiling of its own (conformance.json's input_limit is null with a
+    reason), so this adapter asserts its own instruction stays under a
+    fixed bound and refuses by name -- with both numbers and the word
+    "ceiling" -- rather than handing an unbounded prompt to the tool.
+    ATTAVO_ADAPTER_INPUT_LIMIT_CHARS overrides the bound for the test so
+    the default fixture's small instruction is enough to exceed it,
+    exactly the way the real 64 KB bound would with a large one.
+    """
+    env = base_env(tmp_path)
+    env["ATTAVO_ADAPTER_CONFIG"] = json.dumps({})
+    env["ATTAVO_ADAPTER_INPUT_LIMIT_CHARS"] = "10"
+    run = subprocess.run([str(CLAUDE_CODE_RUN)], capture_output=True, text=True,
+                         check=False, env=env)
+    assert run.returncode == 1
+    assert "ceiling" in run.stderr
+    assert "10" in run.stderr
+    numbers = [int(n) for n in re.findall(r"\d+", run.stderr)]
+    assert 10 in numbers
+    assert any(n > 10 for n in numbers), "both numbers (limit and size) must appear"
+
+
+def test_claude_code_ceiling_refuses_before_invoking_claude(tmp_path):
+    """Issue #93, rejection test 2 (invokes nothing). A fake claude on
+    PATH would leave a sentinel file if it ran; the ceiling refusal
+    happens before the adapter ever shells out."""
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    sentinel = tmp_path / "invoked"
+    fake_claude = fake_bin / "claude"
+    fake_claude.write_text(f"#!/bin/sh\ntouch {sentinel}\nexit 0\n")
+    fake_claude.chmod(0o755)
+
+    env = base_env(tmp_path)
+    env["ATTAVO_ADAPTER_CONFIG"] = json.dumps({})
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+    env["ATTAVO_ADAPTER_INPUT_LIMIT_CHARS"] = "10"
+    run = subprocess.run([str(CLAUDE_CODE_RUN)], capture_output=True, text=True,
+                         check=False, env=env)
+    assert run.returncode == 1
+    assert not sentinel.exists(), "claude must never be invoked over the ceiling"
+
+
+def test_claude_code_ceiling_at_the_real_fixed_bound_with_no_override(tmp_path):
+    """The real 64 KB bound, with no test override: a rulings.md over it
+    (rulings are inlined in full, unlike the diff and feedback files
+    issue #86 already bounded) makes the instruction exceed it."""
+    env = base_env(tmp_path)
+    env["ATTAVO_ADAPTER_CONFIG"] = json.dumps({})
+    rulings_path = Path(env["ATTAVO_RULINGS"])
+    rulings_path.parent.mkdir(parents=True, exist_ok=True)
+    rulings_path.write_text("x" * 70_000)
+    run = subprocess.run([str(CLAUDE_CODE_RUN)], capture_output=True, text=True,
+                         check=False, env=env)
+    assert run.returncode == 1
+    assert "ceiling" in run.stderr
+    assert "65536" in run.stderr
+
+
+def test_claude_code_verify_instruction_states_what_a_stub_is(tmp_path):
+    """Issue #90 (closed by #93). ATTAVO_SPEC_DIR's own spec, fixtures'
+    build_valid/specs/1, carries a stub/ -- the instruction now names its
+    path beside a sentence saying it is the fixture the criteria were
+    shown to pass against, not the intended change, so a difference
+    between the built tree and the stub is not itself a finding. Red
+    before this fix: the judge twice reported the built tree as failing
+    to match its stub (tenant zero #664, #644)."""
+    cmd = dry_run(tmp_path, extra_env={"ATTAVO_STAGE": "verify"})
+    instruction = cmd[cmd.index("-p") + 1]
+    assert "stub" in instruction.lower()
+    assert "is not the intended change" in instruction
+    assert "not a finding" in instruction
+
+
+def test_claude_code_build_instruction_says_nothing_about_the_stub(tmp_path):
+    """The stub sentence is verify's objective, not build's -- a spec
+    carrying a stub/ must not change the build instruction at all."""
+    cmd = dry_run(tmp_path)
+    instruction = cmd[cmd.index("-p") + 1]
+    assert "is not the intended change" not in instruction
+
+
+def test_claude_code_verify_instruction_says_nothing_about_a_stub_when_absent(tmp_path):
+    """A spec with no stub/ (fixtures' prose_criterion/specs/1) gets no
+    stub section at all -- the sentence is conditioned on the stub
+    existing, not always appended."""
+    spec_dir = FIXTURES / "prose_criterion" / "specs" / "1"
+    cmd = dry_run(tmp_path, extra_env={
+        "ATTAVO_STAGE": "verify", "ATTAVO_SPEC_DIR": str(spec_dir)})
+    instruction = cmd[cmd.index("-p") + 1]
+    assert "stub" not in instruction.lower()
 
