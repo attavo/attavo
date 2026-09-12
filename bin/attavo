@@ -1070,9 +1070,14 @@ def cmd_spec_gate(argv: list[str]) -> int:
     # expired the approval landed above the line, not below it, and the
     # tree the build produced is what must satisfy the criteria now, not
     # the stub that only ever proved they were reachable before approval.
+    # Issue #98: whatever the build's status, including a halt -- the
+    # executor commits then asks, so a halted build's sha postdating the
+    # approval means it did the work. commit_postdates already excludes a
+    # halt that committed nothing, since such a build's sha equals its
+    # start_sha and so postdates nothing.
     latest_build = latest_record(records_dir, "build")
     built = bool(
-        latest_approval and latest_build and latest_build.get("status") != "halted"
+        latest_approval and latest_build
         and commit_postdates(root, latest_approval["sha"], latest_build["sha"]))
 
     parsed, refusal = parse_spec(spec_md)
