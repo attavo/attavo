@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/build/2",
+  "$id": "https://attavo.dev/schema/records/build/3",
   "title": "attavo build record (build-NN.json)",
   "type": "object",
   "additionalProperties": false,
@@ -9,7 +9,7 @@
     "adapter_config", "executor_identity", "reports", "adapter_version",
     "model", "model_version", "iterations", "criteria", "selected_tests",
     "checks", "tokens", "cost_usd", "wall_clock_s", "status", "refusal",
-    "halted", "product_version", "product_pin"
+    "halted", "stop", "product_version", "product_pin"
   ],
   "properties": {
     "record_version": {"type": "integer", "minimum": 1},
@@ -98,6 +98,24 @@
       "required": ["question"],
       "properties": {
         "question": {"type": ["string", "null"]}
+      }
+    },
+    "stop": {
+      "type": ["object", "null"],
+      "description": "Non-null exactly when status is not \"pass\" (issue #89): what class of stop this is and whose it is, derived by the record writer from the refusal, halted, and log it already has -- never a fresh read of anything.",
+      "additionalProperties": false,
+      "required": ["class", "provenance", "detail"],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": ["non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
+                   "ceiling", "claims-boundary", "repeated-act", "unclassed"]
+        },
+        "provenance": {"type": "string", "enum": ["product", "tenant", "executor", "spec"]},
+        "detail": {
+          "type": ["string", "null"],
+          "description": "Populated only for class \"unclassed\", with the log's last line; null for every other class, whose evidence already lives in refusal, halted, or the log itself."
+        }
       }
     },
     "product_version": {"type": "string", "minLength": 1},
