@@ -3,6 +3,10 @@
   "response_env": "ATTAVO_ADAPTER_RESPONSE_FILE",
   "tool_binary": "codex",
   "reports": ["tokens"],
+  "subagent_guard": {
+    "supported": false,
+    "reason": "codex exec's --help, its JSONL event stream (thread.*, turn.*, item.*), and its --output-schema/--output-last-message response name no subagent or background-task concept at all (confirmed against codex-cli 0.153.4) -- codex drives sandboxed shell commands as a single agent, with no tool of its own that could spawn work outliving this invocation the way issue #88's claude-code specimen did"
+  },
   "success_script": "#!/bin/sh\ngit commit -q --allow-empty -m 'adapter commit'\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--output-last-message\" ] || [ \"$prev\" = \"-o\" ]; then\n    out=\"$arg\"\n  fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then\n  printf '{\"status\":\"done\",\"question\":null}' > \"$out\"\nfi\nprintf '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"reasoning_output_tokens\":0}}\\n'\n",
   "situations": {
     "done": {

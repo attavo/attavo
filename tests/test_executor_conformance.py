@@ -355,3 +355,33 @@ def test_situation_12_adapter_supplies_every_field_it_declares(adapter_name, tmp
         assert report.get(field) is not None, (
             f"{adapter_name} declares {field!r} in its reports but a done "
             f"run's own report line carries none")
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_13_subagent_guard_is_declared(adapter_name, tmp_path):
+    """Issue #88, rejection test (class B, general across any adapter).
+    Every adapter's conformance.json names subagent_guard.supported: an
+    adapter naming neither a working check nor an admitted inability is
+    an undeclared blind spot, not a legitimate absence (mirrors
+    situation 12's vendor-independence ruling). A supported adapter's
+    named situation must refuse the run -- naming the tool's own counts
+    -- rather than reporting done on work that can outlive it; an
+    unsupported adapter must say why it cannot check at all.
+    """
+    manifest = CONFORMANCE[adapter_name]
+    guard = manifest.get("subagent_guard")
+    assert guard is not None, f"{adapter_name} declares no subagent_guard"
+    assert isinstance(guard.get("supported"), bool), (
+        f"{adapter_name}'s subagent_guard.supported must be true or false")
+
+    if guard["supported"]:
+        run = run_situation(adapter_name, guard["situation"], tmp_path)
+        assert run.returncode != 0, (
+            f"{adapter_name} accepted a run with spawned background work "
+            "as done")
+        transcript = run.stdout + run.stderr
+        assert "subagent" in transcript.lower()
+    else:
+        assert guard.get("reason"), (
+            f"{adapter_name} declares subagent_guard.supported: false "
+            "with no reason")

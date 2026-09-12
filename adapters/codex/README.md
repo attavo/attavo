@@ -65,7 +65,37 @@ key: a deliberate choice, not an oversight.
   parsed content, or null...}, "exit_code": N}` instead of invoking
   `codex` -- codex has no canned-response mechanism of its own, so this
   adapter provides one, exactly as `adapters/claude-code/run` does with
-  its own `ATTAVO_ADAPTER_RESPONSE_FILE`.
+  its own `ATTAVO_ADAPTER_RESPONSE_FILE`. A JSON array of such objects is
+  a queue, one per invocation this adapter makes in order, its last
+  element repeating once exhausted -- a single object still repeats for
+  every call (issue #88: the non-question retry below is a second
+  invocation inside one run).
+
+## A report is not a question (issue #88)
+
+Exactly claude-code's own fix, against the same build-side
+status/question channel: a `status: "question"` whose text clears the
+40-character gate but carries no `"?"` is a report, not a question, and
+this adapter re-invokes `codex exec` once more (the same reinstruction
+text appended to the instruction) before ever reporting a halt. A second
+report in a row still halts, but its report line carries `"class":
+"non-question"` and both calls' raw results -- events and the parsed
+output file alike -- already reached the transcript above it. `tokens`
+on that line sums both calls; `cost_usd` stays null regardless (issue
+#41: null plus null is still null), and `model`/`adapter_version` come
+from the second call only.
+
+## No subagent concept to guard (issue #88)
+
+`codex exec`'s own surface -- `codex exec --help` (codex-cli 0.153.4),
+the JSONL event stream (`thread.*`, `turn.*`, `item.*`), and the
+`--output-schema`/`--output-last-message` response -- names no subagent
+or background-task concept at all: codex drives sandboxed shell
+commands as a single agent, with no tool of its own that could spawn
+work outliving an invocation the way claude-code's Agent/Workflow tools
+did. `conformance.json` declares `"subagent_guard": {"supported":
+false, "reason": "..."}` for exactly this reason, rather than asserting
+a check against a concept that is not there.
 
 ## Residuals
 
