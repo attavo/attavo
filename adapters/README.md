@@ -31,6 +31,10 @@ JSON object on its last stdout line:
  "tokens": {"input": n, "output": n}, "cost_usd": n | null}
 ```
 
+A `"question"` line may also carry `"class": "non-question"` (see below);
+`attavo build` reads only `status`/`question` off this line and does not
+know about the extra field.
+
 Anything else on stdout is the adapter's transcript and is saved beside the
 build record as `build-NN.log`, never inside the record.
 
@@ -38,3 +42,40 @@ An adapter never writes a record. `attavo build` writes the one
 `build-NN.json` for the whole invocation. What it must do with a tool
 error, an absent report, or a bad question is `tests/test_executor_conformance.py`,
 run against every `adapters/<name>/conformance.json` it declares.
+
+## Two stops (issue #88)
+
+A `"question"` is not always a question. A status report landing in the
+question channel ("I've traced the spec's 5 criteria and dispatched an
+implementation agent…") halts an item to a person exactly like a real
+question does, but the person has nothing to rule on. Every adapter
+therefore treats a `"question"` whose text clears the length gate but
+carries no `"?"` as a report, not a question: it re-invokes the executor
+once more, in the same invocation, appending "your last answer was a
+report, not a question; either continue to done, or ask one question
+ending in a question mark that names the spec line or guard you cannot
+resolve" to the same instruction. A proper question or a `"done"` on the
+retry ends the invocation normally, at the cost of one extra executor
+turn; a second report in a row still halts (someone must look), but its
+report line carries `"class": "non-question"` and both raw results
+already reached the transcript above it. No record field changes: the
+class lives in the transcript and the report line, not in
+`build-NN.json`.
+
+The report line's own `tokens` and `cost_usd` sum both calls, whatever
+the retry's outcome — the record's cost matches the two executor turns
+actually spent, not just the second one; only `model`/`model_version`/
+`adapter_version` come from the second call.
+
+Work can also outlive the invocation that started it: a tool that spawns
+its own background subagents can report `"done"` and exit while those
+subagents are still running or still being torn down, so the checks
+`attavo build` runs right after `"done"` land on a tree something else
+is still writing. An adapter whose tool can do this must refuse the run
+by name -- exit 1, with the counts -- rather than report `"done"` on it;
+`adapters/<name>/conformance.json` names this ability as
+`"subagent_guard": {"supported": true, "situation": "<name>"}` or, when
+the tool has no such concept to check at all, `{"supported": false,
+"reason": "<why>"}` -- an adapter naming neither is an undeclared blind
+spot, not a legitimate absence (`tests/test_executor_conformance.py`
+enforces this the same way it enforces `"reports"`).

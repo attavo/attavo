@@ -27,6 +27,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from helpers import FIXTURES
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -71,6 +73,22 @@ def run_with_response(tmp_path: Path, events: list[dict], final, exit_code: int 
                       ) -> subprocess.CompletedProcess:
     response_file = tmp_path / "response.json"
     response_file.write_text(json.dumps({"events": events, "final": final, "exit_code": exit_code}))
+    env = base_env(tmp_path, config)
+    env["ATTAVO_ADAPTER_RESPONSE_FILE"] = str(response_file)
+    if extra_env:
+        env.update(extra_env)
+    return run_codex(env)
+
+
+def run_with_responses(tmp_path: Path, canned: list[dict],
+                       config: dict | None = None, extra_env: dict | None = None
+                       ) -> subprocess.CompletedProcess:
+    """canned is a queue of {"events", "final", "exit_code"} objects, one
+    per invocation this adapter makes in order, its last element
+    repeating once exhausted (issue #88: the non-question retry is a
+    second invocation inside one adapter run)."""
+    response_file = tmp_path / "response.json"
+    response_file.write_text(json.dumps(canned))
     env = base_env(tmp_path, config)
     env["ATTAVO_ADAPTER_RESPONSE_FILE"] = str(response_file)
     if extra_env:
@@ -266,6 +284,106 @@ def test_build_instruction_names_the_feedback_files_path_not_its_text(tmp_path):
     assert str(feedback_path) in instruction
     assert str(feedback_path.stat().st_size) in instruction
     assert "a failing test line" not in instruction
+
+
+REPORT_1 = ("I've traced the spec's 5 criteria against the tree and "
+           "dispatched an implementation agent to continue the work.")
+REPORT_2 = ("Running the acceptance suite in the background to find the "
+           "specific test failure that is blocking this item.")
+PROPER_QUESTION = ("Which of the two conflicting rulings on issue #12 "
+                  "applies to criterion 3?")
+
+
+def _events(question) -> tuple[list[dict], dict]:
+    return DONE_EVENTS, {"status": "question", "question": question}
+
+
+def test_codex_report_without_question_mark_is_reinstructed_once(tmp_path):
+    """Issue #88, rejection test 1 (codex). A "question" with no "?" is a
+    report, not a question: the adapter re-invokes once, appending
+    REINSTRUCTION, and a proper question on the retry is returned as the
+    question -- no halt on the first report at all.
+    """
+    events1, final1 = _events(REPORT_1)
+    events2, final2 = _events(PROPER_QUESTION)
+    canned = [{"events": events1, "final": final1, "exit_code": 0},
+             {"events": events2, "final": final2, "exit_code": 0}]
+    run = run_with_responses(tmp_path, canned, config={"model": "gpt-test"})
+    assert run.returncode == 0, run.stderr
+    assert REPORT_1 in run.stdout
+    assert PROPER_QUESTION in run.stdout
+    line = json.loads(run.stdout.splitlines()[-1])
+    assert line["status"] == "question"
+    assert line["question"] == PROPER_QUESTION
+    assert "class" not in line
+
+
+def test_codex_two_reports_in_a_row_halts_with_class_non_question(tmp_path):
+    """Issue #88, rejection test 2 (codex). Two non-questions in a row
+    still halt, but the report line names the class and both raw results
+    reach the transcript.
+    """
+    events1, final1 = _events(REPORT_1)
+    events2, final2 = _events(REPORT_2)
+    canned = [{"events": events1, "final": final1, "exit_code": 0},
+             {"events": events2, "final": final2, "exit_code": 0}]
+    run = run_with_responses(tmp_path, canned, config={"model": "gpt-test"})
+    assert run.returncode == 0, run.stderr
+    assert REPORT_1 in run.stdout
+    assert REPORT_2 in run.stdout
+    line = json.loads(run.stdout.splitlines()[-1])
+    assert line["status"] == "question"
+    assert line["class"] == "non-question"
+
+
+def _events_with_usage(question, status, input_tokens, output_tokens
+                       ) -> tuple[list[dict], dict]:
+    events = [
+        {"type": "thread.started", "thread_id": "t1"},
+        {"type": "turn.started"},
+        {"type": "turn.completed",
+         "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens}},
+    ]
+    return events, {"status": status, "question": question}
+
+
+@pytest.mark.parametrize("second_status,second_question", [
+    ("done", None),
+    ("question", PROPER_QUESTION),
+    ("question", REPORT_2),
+])
+def test_codex_retry_sums_tokens_across_both_invocations(
+        tmp_path, second_status, second_question):
+    """Issue #88 (codex). A non-question costs two executor turns, not
+    one: the report line must sum both calls' tokens, whatever the
+    retry's own outcome, or the record undercounts by exactly the
+    first, discarded call. cost_usd stays null on codex regardless
+    (issue #41): summing null with null is still null.
+    """
+    events1, final1 = _events_with_usage(REPORT_1, "question", 5, 9)
+    events2, final2 = _events_with_usage(second_question, second_status, 7, 3)
+    canned = [{"events": events1, "final": final1, "exit_code": 0},
+             {"events": events2, "final": final2, "exit_code": 0}]
+    run = run_with_responses(tmp_path, canned, config={"model": "gpt-test"})
+    assert run.returncode == 0, run.stderr
+    line = json.loads(run.stdout.splitlines()[-1])
+    assert line["tokens"]["input"] == 5 + 7
+    assert line["tokens"]["output"] == 9 + 3
+    assert line["cost_usd"] is None
+
+
+def test_codex_declares_it_cannot_check_the_subagent_guard(tmp_path):
+    """Issue #88, rejection test 4. codex exec has no subagent or
+    background-task concept anywhere in its surface (confirmed against
+    `codex exec --help`, codex-cli 0.153.4) -- its conformance.json
+    declares this rather than asserting a check against a concept that
+    is not there, so this is not an undeclared blind spot.
+    """
+    conformance = json.loads((ROOT / "adapters" / "codex" / "conformance.json").read_text())
+    guard = conformance.get("subagent_guard")
+    assert guard is not None
+    assert guard["supported"] is False
+    assert guard.get("reason")
 
 
 def test_nonzero_exit_with_error_only_on_stderr_reaches_the_log(tmp_path):

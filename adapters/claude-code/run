@@ -40,6 +40,39 @@ tool names each stage may use at all -- `Read,Edit,Write,Bash` for build,
 sandbox does not govern them. `allowed_tools` is retired as a manifest
 key: a config that still declares it is refused by name rather than
 silently accepted.
+
+Issue #88 (class A: a report is not a question). `--json-schema`
+constrains the tool's structured_output to "done"/"question", but
+nothing stops "question" from carrying a status report rather than an
+actual question -- confirmed against tenant zero's own corpus, five
+specimens with no "?" anywhere in the text. A "question" whose text
+clears MIN_QUESTION_CHARS but contains no "?" is a report, not a
+question: this adapter re-invokes the executor once, appending
+REINSTRUCTION to the same instruction, before ever reporting a halt to
+a person. A second report in a row still halts (someone must look), but
+its report line carries "class": "non-question" and both raw results
+reached stdout above it -- an extra field bin/attavo's own record schema
+does not know about and never has to: it reads "status"/"question" off
+this line exactly as before, so a "question" halt still halts. Read via
+ATTAVO_ADAPTER_RESPONSE_FILE, a JSON array is a queue -- one canned
+result per invocation this adapter makes, its last element repeating
+once exhausted -- while a single object still repeats for every call,
+unchanged.
+
+Issue #88 (class B: work that outlives the invocation). Confirmed live,
+this machine, `claude 2.1.269`: with both "Agent" and "Task" allowed, a
+prompt asking for a subagent produced `subagent_stats.spawned: 1`, `"Agent"`
+alone in `--disallowedTools` (Task is not a distinct tool in this build)
+brought it back to 0 -- the tool's own reply named "Workflow" as the
+other path to background work, so both are named here. `--allowedTools`
+is an allow-list a background spawn does not consult (tenant zero's
+specimen: `--allowedTools` without "Agent" or "Workflow" in it at all did
+not stop three of them), so this adapter also disallows them by name on
+both stages and, after the run, refuses by name -- exit 1, not a
+halt -- any response whose subagent_stats.spawned is not zero, with the
+counts in the message. A tool that reports no subagent_stats at all
+(spawned absent or 0) is unaffected; this is a refusal on evidence, not a
+guess from the flag.
 """
 from __future__ import annotations
 
@@ -209,6 +242,13 @@ def verify_instruction() -> str:
 BUILD_ALLOWED_TOOLS = ["Read", "Edit", "Write", "Bash"]
 VERIFY_ALLOWED_TOOLS = ["Read", "Bash"]
 
+# Issue #88 (class B): both tools the tool's own reply named as a way to
+# spawn work that outlives this invocation -- confirmed live against
+# `claude 2.1.269` (see module docstring). Named on both stages: verify's
+# own allowed tools never included either, and did not stop the
+# specimen either.
+SUBAGENT_TOOLS = ["Agent", "Workflow"]
+
 
 def load_config() -> dict:
     raw = os.environ.get("ATTAVO_ADAPTER_CONFIG")
@@ -264,7 +304,8 @@ def build_command(instruction: str, config: dict, schema: dict, stage: str) -> l
            "--output-format", "json",
            "--json-schema", json.dumps(schema),
            "--permission-mode", permission_mode,
-           "--allowedTools", ",".join(allowed_tools)]
+           "--allowedTools", ",".join(allowed_tools),
+           "--disallowedTools", ",".join(SUBAGENT_TOOLS)]
     model = config.get("model")
     if model:
         cmd += ["--model", model]
@@ -326,6 +367,146 @@ def adapter_version() -> str:
 
 MIN_QUESTION_CHARS = 40
 
+REINSTRUCTION = (
+    "your last answer was a report, not a question; either continue to "
+    "done, or ask one question ending in a question mark that names the "
+    "spec line or guard you cannot resolve")
+
+
+def question_class(status: str, question: str | None) -> str:
+    """"done" (no halt at all), "fail" (a question too short or absent to
+    be worth a person's judgment -- MIN_QUESTION_CHARS, unchanged since
+    v0.15.0), "report" (long enough but carries no "?" -- issue #88's
+    class A, a status update in the question channel), or "question" (a
+    real question)."""
+    if status != "question":
+        return "done"
+    if not question or len(question) < MIN_QUESTION_CHARS:
+        return "fail"
+    if "?" not in question:
+        return "report"
+    return "question"
+
+
+def subagent_refusal(response: dict) -> str | None:
+    """None if response carries no spawned background work; else the
+    refusal naming the counts (issue #88, class B). Checked on the
+    response itself, not the flag that was supposed to forbid it --
+    tenant zero's specimen spawned three with the tool absent from
+    --allowedTools entirely, so the flag alone is not the mechanism."""
+    stats = response.get("subagent_stats") or {}
+    spawned = stats.get("spawned") or 0
+    if not spawned:
+        return None
+    killed = stats.get("killed") or {}
+    killed_total = sum(v or 0 for v in killed.values())
+    return (
+        f"adapters/claude-code/run: refused: subagent_stats.spawned={spawned} "
+        f"-- the {' or '.join(SUBAGENT_TOOLS)} tool spawned work that can "
+        f"outlive this invocation (completed={stats.get('completed', 0)}, "
+        f"killed={killed_total}, "
+        f"started_in_background={stats.get('started_in_background', 0)})")
+
+
+def load_canned_responses() -> list[dict] | None:
+    """None when ATTAVO_ADAPTER_RESPONSE_FILE is unset. Otherwise the
+    queue this run answers from: a single object repeats for every
+    invocation this adapter makes (unchanged since v0.3.0 -- most tests
+    make exactly one), a JSON array is consumed in order, one response
+    per invocation, its last element repeating once exhausted (issue
+    #88: the non-question retry is a second invocation inside the same
+    adapter run, and a canned test needs to hand it a different answer
+    than the first)."""
+    response_file = os.environ.get("ATTAVO_ADAPTER_RESPONSE_FILE")
+    if not response_file:
+        return None
+    raw = json.loads(Path(response_file).read_text())
+    return raw if isinstance(raw, list) else [raw]
+
+
+def invoke_once(cmd: list[str], responses: list[dict] | None, call_index: int
+                ) -> tuple[int | None, dict | None]:
+    """(None, response) for a result this adapter goes on to evaluate;
+    (exit_code, None) when the call itself must end the adapter right
+    away (the underlying tool's own non-zero exit). Always prints this
+    call's raw result to stdout first -- issue #34's guarantee holds
+    across a retry too: every raw result the tool returns, not just the
+    one this adapter finally reports on, reaches build-NN.log.
+    """
+    if responses is not None:
+        response = responses[min(call_index, len(responses) - 1)]
+        print(json.dumps(response))
+        return None, response
+
+    run = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if run.returncode != 0:
+        # keep the evidence: claude's own account of a failure is the
+        # only record of it once this process exits.
+        if run.stdout.strip():
+            print(run.stdout.rstrip("\n"))
+        if run.stderr.strip():
+            print(run.stderr.rstrip("\n"))
+        return run.returncode, None
+    response = json.loads(run.stdout)
+    # keep the evidence: the whole result, not just the fields common{}
+    # below carries, is the transcript build-NN.log saves -- a halt
+    # otherwise cannot be explained after the fact.
+    print(run.stdout.rstrip("\n"))
+    if run.stderr.strip():
+        print(run.stderr.rstrip("\n"))
+    return None, response
+
+
+def usage_fields(response: dict) -> tuple[int, int, float | None]:
+    """(tokens.input, tokens.output, cost_usd) for one response, pulled
+    straight off usage/total_cost_usd -- independent of model derivation,
+    so a retry's first, discarded call still counts (issue #88: a
+    non-question costs two executor turns, and a report line built from
+    the second call alone undercounts by exactly the first one)."""
+    usage = response.get("usage") or {}
+    tokens_input = ((usage.get("input_tokens", 0) or 0)
+                    + (usage.get("cache_read_input_tokens", 0) or 0)
+                    + (usage.get("cache_creation_input_tokens", 0) or 0))
+    tokens_output = usage.get("output_tokens", 0) or 0
+    return tokens_input, tokens_output, response.get("total_cost_usd")
+
+
+def add_cost(a: float | None, b: float | None) -> float | None:
+    """None when neither call reported a cost; otherwise the sum,
+    treating an absent figure as 0 -- mirrors bin/attavo's own
+    cost_usd accumulation across build iterations."""
+    if a is None and b is None:
+        return None
+    return (a or 0) + (b or 0)
+
+
+def report_fields(response: dict, requested_model: str | None) -> dict | None:
+    """The fields common to every final report line, derived from one
+    tool response; None when no model id can be derived at all (the
+    caller must fail loudly rather than emit a report with no identity
+    behind it)."""
+    model, model_version = derive_model(response, requested_model)
+    if not model:
+        sys.stderr.write(
+            "adapters/claude-code/run: could not derive a model id -- the "
+            "response carried no requested model and an empty "
+            "'modelUsage'\n")
+        return None
+    if requested_model and response.get("modelUsage") and not model_version:
+        sys.stderr.write(
+            f"adapters/claude-code/run: requested model {requested_model!r} "
+            "matches no modelUsage canonicalModel -- model_version left "
+            "null\n")
+
+    tokens_input, tokens_output, cost = usage_fields(response)
+    return {
+        "model": model,
+        "model_version": model_version,
+        "adapter_version": adapter_version(),
+        "tokens": {"input": tokens_input, "output": tokens_output},
+        "cost_usd": cost,
+    }
+
 
 def main() -> int:
     config = load_config()
@@ -351,30 +532,11 @@ def main() -> int:
         print(json.dumps({"argv": cmd, "instruction": instruction, "schema": schema}))
         return 0
 
-    response_file = os.environ.get("ATTAVO_ADAPTER_RESPONSE_FILE")
-    if response_file:
-        raw_result = Path(response_file).read_text()
-        response = json.loads(raw_result)
-        print(raw_result.rstrip("\n"))
-    else:
-        run = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        if run.returncode != 0:
-            # keep the evidence: claude's own account of a failure is the
-            # only record of it once this process exits.
-            if run.stdout.strip():
-                print(run.stdout.rstrip("\n"))
-            if run.stderr.strip():
-                print(run.stderr.rstrip("\n"))
-            return run.returncode
-        response = json.loads(run.stdout)
-        # keep the evidence: the whole result, not just the five fields
-        # below, is the transcript build-NN.log saves -- a halt otherwise
-        # cannot be explained after the fact.
-        print(run.stdout.rstrip("\n"))
-        if run.stderr.strip():
-            print(run.stderr.rstrip("\n"))
+    responses = load_canned_responses()
 
-    structured = response.get("structured_output") or {}
+    exit_code, response = invoke_once(cmd, responses, 0)
+    if exit_code is not None:
+        return exit_code
 
     # An error dressed as a question still costs a ruling act. Treat both
     # the same way build already treats a non-zero adapter exit: failed,
@@ -383,33 +545,17 @@ def main() -> int:
     if response.get("is_error") or not response.get("structured_output"):
         return 1
 
-    model, model_version = derive_model(response, config.get("model"))
-    if not model:
-        sys.stderr.write(
-            "adapters/claude-code/run: could not derive a model id -- the "
-            "response carried no requested model and an empty "
-            "'modelUsage'\n")
+    refusal = subagent_refusal(response)
+    if refusal:
+        sys.stderr.write(refusal + "\n")
         return 1
-    if config.get("model") and response.get("modelUsage") and not model_version:
-        sys.stderr.write(
-            f"adapters/claude-code/run: requested model {model!r} matches "
-            "no modelUsage canonicalModel -- model_version left null\n")
 
-    usage = response.get("usage") or {}
-    common = {
-        "model": model,
-        "model_version": model_version,
-        "adapter_version": adapter_version(),
-        "tokens": {
-            "input": (usage.get("input_tokens", 0) or 0)
-                     + (usage.get("cache_read_input_tokens", 0) or 0)
-                     + (usage.get("cache_creation_input_tokens", 0) or 0),
-            "output": usage.get("output_tokens", 0),
-        },
-        "cost_usd": response.get("total_cost_usd"),
-    }
+    structured = response.get("structured_output") or {}
 
     if verifying:
+        common = report_fields(response, config.get("model"))
+        if common is None:
+            return 1
         # .get(), not "or []": an absent findings key must reach
         # cmd_verify as None, distinct from an explicit empty list --
         # that distinction is the whole fix for issue #46.
@@ -421,9 +567,67 @@ def main() -> int:
 
     status = structured.get("status", "done")
     question = structured.get("question")
-    if status == "question" and (not question or len(question) < MIN_QUESTION_CHARS):
+    cls = question_class(status, question)
+
+    if cls == "fail":
         return 1
 
+    if cls == "report":
+        # Issue #88, class A: a report in the question channel is
+        # re-instructed once, in this same invocation, before it ever
+        # reaches a person.
+        reinstruction = instruction + "\n\n" + REINSTRUCTION
+        cmd2 = build_command(reinstruction, config, schema, stage)
+        exit_code2, response2 = invoke_once(cmd2, responses, 1)
+        if exit_code2 is not None:
+            return exit_code2
+        if response2.get("is_error") or not response2.get("structured_output"):
+            return 1
+        refusal2 = subagent_refusal(response2)
+        if refusal2:
+            sys.stderr.write(refusal2 + "\n")
+            return 1
+
+        structured2 = response2.get("structured_output") or {}
+        status2 = structured2.get("status", "done")
+        question2 = structured2.get("question")
+        cls2 = question_class(status2, question2)
+        if cls2 == "fail":
+            return 1
+
+        common2 = report_fields(response2, config.get("model"))
+        if common2 is None:
+            return 1
+        # A non-question costs two executor turns, not one: sum both
+        # calls' tokens and cost into the one report line this
+        # invocation gets, whatever the retry's own outcome -- only
+        # adapter_version/model/model_version stay the second call's.
+        tokens1_input, tokens1_output, cost1 = usage_fields(response)
+        common2["tokens"]["input"] += tokens1_input
+        common2["tokens"]["output"] += tokens1_output
+        common2["cost_usd"] = add_cost(common2["cost_usd"], cost1)
+
+        if cls2 == "report":
+            # Two reports in a row: still a halt (someone must look),
+            # but the transcript above already carries both raw
+            # results, and this report line names the class so a
+            # reader -- or a future record field, not this one -- can
+            # tell it apart from a genuine question.
+            print("adapters/claude-code/run: halted: class non-question "
+                  "-- the executor reported instead of asking, twice in "
+                  "a row")
+            line = {**common2, "status": "question", "question": question2,
+                   "class": "non-question"}
+            print(json.dumps(line))
+            return 0
+
+        line = {**common2, "status": status2, "question": question2}
+        print(json.dumps(line))
+        return 0
+
+    common = report_fields(response, config.get("model"))
+    if common is None:
+        return 1
     line = {**common, "status": status, "question": question}
     print(json.dumps(line))
     return 0

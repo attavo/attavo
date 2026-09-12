@@ -53,7 +53,30 @@ response handling is checked by ATTAVO_ADAPTER_RESPONSE_FILE, which
 feeds a canned {"events": [...JSONL objects...], "final": {...the
 output-file's parsed content, or null...}, "exit_code": N} instead of
 invoking codex -- codex's own canned-response hook, since codex itself
-has none (issue #41).
+has none (issue #41). A JSON array of such objects is a queue, one per
+invocation this adapter makes, its last element repeating once
+exhausted; a single object still repeats for every call (issue #88: the
+non-question retry below is a second invocation inside the same run).
+
+Issue #88 (class A: a report is not a question). Exactly claude-code's
+own fix, against the same build-side status/question channel: a
+"question" whose text clears MIN_QUESTION_CHARS but carries no "?" is a
+report, not a question, and this adapter re-invokes codex once more
+(REINSTRUCTION appended to the same instruction) before ever reporting a
+halt. A second report in a row still halts -- someone must look -- but
+its report line carries "class": "non-question" and both raw results
+already reached stdout above it.
+
+Issue #88 (class B: work that outlives the invocation). `codex exec`'s
+own surface -- `codex exec --help` (codex-cli 0.153.4), the JSONL event
+stream (thread.*, turn.*, item.*), and the --output-schema/
+--output-last-message response -- names no subagent or background-task
+concept at all: codex is a single agent driving sandboxed shell
+commands, with no tool of its own that could spawn work outliving this
+invocation the way claude-code's Agent/Workflow tools did (issue #88,
+confirmed live on claude-code, this adapter's own conformance.json
+declares codex's guard unsupported for exactly this reason rather than
+asserting a check against a concept that is not there).
 """
 from __future__ import annotations
 
@@ -271,14 +294,32 @@ def terminal_event(events: list[dict]) -> dict | None:
     return None
 
 
-def invoke(instruction: str, schema: dict, config: dict,
-          stage: str) -> tuple[str, list[dict], dict | None, int]:
-    """(raw transcript text, parsed events, the output file's parsed
-    content or None, exit code) -- from a canned ATTAVO_ADAPTER_RESPONSE_FILE
-    when set, else a real `codex exec -` invocation."""
+def load_canned_responses() -> list[dict] | None:
+    """None when ATTAVO_ADAPTER_RESPONSE_FILE is unset. Otherwise the
+    queue of canned {"events", "final", "exit_code"} objects this run
+    answers from: a single object repeats for every invocation this
+    adapter makes (unchanged since v0.3.0 -- most tests make exactly
+    one), a JSON array is consumed in order, one response per
+    invocation, its last element repeating once exhausted (issue #88:
+    the non-question retry is a second invocation inside the same
+    adapter run, and a canned test needs to hand it a different answer
+    than the first)."""
     response_file = os.environ.get("ATTAVO_ADAPTER_RESPONSE_FILE")
-    if response_file:
-        canned = json.loads(Path(response_file).read_text())
+    if not response_file:
+        return None
+    raw = json.loads(Path(response_file).read_text())
+    return raw if isinstance(raw, list) else [raw]
+
+
+def invoke(instruction: str, schema: dict, config: dict, stage: str,
+          responses: list[dict] | None, call_index: int
+          ) -> tuple[str, list[dict], dict | None, int]:
+    """(raw transcript text, parsed events, the output file's parsed
+    content or None, exit code) -- from responses[call_index] (clamped
+    to the last element) when responses is not None, else a real
+    `codex exec -` invocation."""
+    if responses is not None:
+        canned = responses[min(call_index, len(responses) - 1)]
         events = canned.get("events") or []
         final = canned.get("final")
         exit_code = canned.get("exit_code", 0)
@@ -317,6 +358,54 @@ def adapter_version() -> str:
 
 MIN_QUESTION_CHARS = 40
 
+REINSTRUCTION = (
+    "your last answer was a report, not a question; either continue to "
+    "done, or ask one question ending in a question mark that names the "
+    "spec line or guard you cannot resolve")
+
+
+def question_class(status: str, question: str | None) -> str:
+    """"done" (no halt at all), "fail" (a question too short or absent to
+    be worth a person's judgment -- MIN_QUESTION_CHARS, unchanged since
+    v0.15.0), "report" (long enough but carries no "?" -- issue #88's
+    class A, a status update in the question channel), or "question" (a
+    real question). Identical to claude-code's own -- the build-side
+    status/question channel is the shared adapter contract, not either
+    tool's own shape."""
+    if status != "question":
+        return "done"
+    if not question or len(question) < MIN_QUESTION_CHARS:
+        return "fail"
+    if "?" not in question:
+        return "report"
+    return "question"
+
+
+def usage_fields(events: list[dict]) -> tuple[int, int]:
+    """(tokens.input, tokens.output) for one call's own event stream --
+    split out from report_fields so a retry's first, discarded call
+    still counts (issue #88: a non-question costs two executor turns,
+    and a report line built from the second call alone undercounts by
+    exactly the first one)."""
+    term = terminal_event(events)
+    usage = (term or {}).get("usage") or {}
+    return usage.get("input_tokens", 0) or 0, usage.get("output_tokens", 0) or 0
+
+
+def report_fields(model: str, events: list[dict]) -> dict:
+    """The fields common to every final report line, derived from one
+    call's own event stream -- model is always the configured id (issue
+    #41: codex reports none of its own), cost_usd always null (issue
+    #41's auth addendum)."""
+    tokens_input, tokens_output = usage_fields(events)
+    return {
+        "model": model,
+        "model_version": None,
+        "adapter_version": adapter_version(),
+        "tokens": {"input": tokens_input, "output": tokens_output},
+        "cost_usd": None,
+    }
+
 
 def main() -> int:
     config = load_config()
@@ -344,11 +433,18 @@ def main() -> int:
             sys.stderr.write(f"adapters/codex/run: refused: {auth_error}\n")
             return 1
 
-    raw, events, final, exit_code = invoke(instruction, schema, config, stage)
+    responses = load_canned_responses()
+
+    raw, events, final, exit_code = invoke(instruction, schema, config, stage, responses, 0)
     # keep the evidence: both channels, not just the fields below, are
     # the transcript build-NN.log saves -- a halt otherwise cannot be
-    # explained after the fact.
+    # explained after the fact. final is printed here too (issue #88):
+    # a question the executor answers on the first call otherwise never
+    # reaches the transcript at all, since only the terminal report line
+    # -- printed once, at the very end -- carried it before.
     print(raw.rstrip("\n") if raw.strip() else "(codex produced no output)")
+    if final is not None:
+        print(json.dumps(final))
 
     if exit_code != 0:
         return exit_code
@@ -359,20 +455,8 @@ def main() -> int:
     if final is None:
         return 1
 
-    term = terminal_event(events)
-    usage = (term or {}).get("usage") or {}
-    common = {
-        "model": model,
-        "model_version": None,
-        "adapter_version": adapter_version(),
-        "tokens": {
-            "input": usage.get("input_tokens", 0) or 0,
-            "output": usage.get("output_tokens", 0) or 0,
-        },
-        "cost_usd": None,
-    }
-
     if verifying:
+        common = report_fields(model, events)
         line = {**common,
                "findings": final.get("findings"),
                "tests_named": final.get("tests_named")}
@@ -381,9 +465,60 @@ def main() -> int:
 
     status = final.get("status", "done")
     question = final.get("question")
-    if status == "question" and (not question or len(question) < MIN_QUESTION_CHARS):
+    cls = question_class(status, question)
+
+    if cls == "fail":
         return 1
 
+    if cls == "report":
+        # Issue #88, class A: a report in the question channel is
+        # re-instructed once, in this same invocation, before it ever
+        # reaches a person.
+        reinstruction = instruction + "\n\n" + REINSTRUCTION
+        raw2, events2, final2, exit_code2 = invoke(
+            reinstruction, schema, config, stage, responses, 1)
+        print(raw2.rstrip("\n") if raw2.strip() else "(codex produced no output)")
+        if final2 is not None:
+            print(json.dumps(final2))
+
+        if exit_code2 != 0:
+            return exit_code2
+        if final2 is None:
+            return 1
+
+        status2 = final2.get("status", "done")
+        question2 = final2.get("question")
+        cls2 = question_class(status2, question2)
+        if cls2 == "fail":
+            return 1
+
+        common2 = report_fields(model, events2)
+        # A non-question costs two executor turns, not one: sum both
+        # calls' tokens into the one report line this invocation gets,
+        # whatever the retry's own outcome. cost_usd stays null (issue
+        # #41): null plus null is still null.
+        tokens1_input, tokens1_output = usage_fields(events)
+        common2["tokens"]["input"] += tokens1_input
+        common2["tokens"]["output"] += tokens1_output
+
+        if cls2 == "report":
+            # Two reports in a row: still a halt (someone must look),
+            # but the transcript above already carries both raw
+            # results, and this report line names the class so a
+            # reader -- or a future record field, not this one -- can
+            # tell it apart from a genuine question.
+            print("adapters/codex/run: halted: class non-question -- the "
+                  "executor reported instead of asking, twice in a row")
+            line = {**common2, "status": "question", "question": question2,
+                   "class": "non-question"}
+            print(json.dumps(line))
+            return 0
+
+        line = {**common2, "status": status2, "question": question2}
+        print(json.dumps(line))
+        return 0
+
+    common = report_fields(model, events)
     line = {**common, "status": status, "question": question}
     print(json.dumps(line))
     return 0

@@ -69,3 +69,31 @@ including fields (`num_turns`, `duration_ms`, `is_error`,
 missing or under 40 characters all make the adapter exit 1 (build records
 the attempt `failed`) instead of a halt someone has to rule on — a
 question worth a person's judgment is at least a sentence.
+
+## A report is not a question (issue #88)
+
+A `status: "question"` whose text clears the 40-character gate but
+carries no `"?"` is a report, not a question — five of tenant zero's
+twelve non-pass build records were exactly this ("I've traced the
+spec's 5 criteria against the tree and dispatched an implementation
+agent…"), each costing a person a read and a re-launch for nothing to
+rule on. This adapter re-invokes `claude` once more on a report,
+appending a line asking it to either continue to done or ask a real
+question, before ever reporting a halt. A second report in a row still
+halts, but its report line carries `"class": "non-question"` and both
+raw results already reached the transcript above it — see `../README.md`.
+`tokens` and `cost_usd` on that line sum both calls; `model`,
+`model_version`, and `adapter_version` come from the second call only.
+
+## Work that can outlive the invocation (issue #88)
+
+Confirmed live against `claude 2.1.269`: a prompt encouraging a
+subagent produced `subagent_stats.spawned: 1` when the Agent tool was
+allowed, and `0` with `"Agent"` alone in `--disallowedTools` — the
+tool's own reply named `Workflow` as the other path to background work,
+so both are disallowed by name on every invocation, both stages.
+Tenant zero's own specimen (`#659` build-01) spawned three with neither
+tool in `--allowedTools` at all, so the flag is checked after the fact
+too: any response whose `subagent_stats.spawned` is not zero is refused
+by name, with the counts, rather than accepted as `done` — a build the
+tool's own background work could still be writing to.

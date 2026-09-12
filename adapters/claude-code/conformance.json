@@ -4,6 +4,11 @@
   "tool_binary": "claude",
   "reports": ["tokens", "cost_usd"],
   "success_script": "#!/bin/sh\ngit commit -q --allow-empty -m 'adapter commit'\nprintf '{\"is_error\": false, \"structured_output\": {\"status\": \"done\", \"question\": null}, \"usage\": {\"input_tokens\": 1, \"output_tokens\": 1}, \"modelUsage\": {\"claude-sonnet-5\": {\"inputTokens\": 1, \"outputTokens\": 1}}}\\n'\n",
+  "subagent_guard": {
+    "supported": true,
+    "situation": "subagent_spawned",
+    "note": "issue #88, class B -- checked against the tool's own subagent_stats.spawned, named in --disallowedTools by 'Agent' and 'Workflow' (confirmed live, claude 2.1.269, see adapters/claude-code/run's own docstring)"
+  },
   "situations": {
     "done": {
       "is_error": false,
@@ -50,6 +55,19 @@
       },
       "usage": {"input_tokens": 1, "output_tokens": 1},
       "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}}
+    },
+    "subagent_spawned": {
+      "is_error": false,
+      "structured_output": {"status": "done", "question": null},
+      "usage": {"input_tokens": 5, "output_tokens": 9},
+      "total_cost_usd": 0.01,
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 5, "outputTokens": 9}},
+      "subagent_stats": {
+        "spawned": 3,
+        "completed": 1,
+        "killed": {"parent": 0, "user": 0, "system": 2},
+        "started_in_background": 3
+      }
     }
   }
 }
