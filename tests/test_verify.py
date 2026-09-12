@@ -96,6 +96,22 @@ def test_verify_refuses_when_latest_build_is_not_pass(tmp_path):
     assert list((root / "records" / "1").glob("verify-*.json")) == []
 
 
+def test_verify_pass_record_carries_no_stop(tmp_path):
+    """Issue #89, rejection test 2 (half). A pass record carries stop:
+    null."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    approve_item(root)
+    assert run_attavo(root, "build", "1").returncode == 0
+
+    run = run_attavo(root, "verify", "1")
+    assert run.returncode == 0
+
+    rec = latest_verify(root)
+    assert rec["status"] == "pass"
+    assert rec["stop"] is None
+
+
 def test_verify_returns_when_the_forge_is_red(tmp_path):
     """Acceptance 5. The forge's own check conclusions on the build
     record's commit are read before any judge is called: a failing
@@ -118,6 +134,8 @@ def test_verify_returns_when_the_forge_is_red(tmp_path):
     assert rec["forge_checks"]["conclusions"] == [{"name": "ci", "conclusion": "failure"}]
     # no adapter was ever invoked -- no transcript log for this attempt
     assert not (root / "records" / "1" / "verify-01.log").exists()
+    # Issue #89, rejection test 3: a returned verify is forge-unconcluded/tenant.
+    assert rec["stop"] == {"class": "forge-unconcluded", "provenance": "tenant", "detail": None}
 
 
 def test_verify_treats_an_empty_forge_read_as_not_green(tmp_path):
@@ -228,6 +246,11 @@ def test_verify_fails_when_findings_key_is_absent(tmp_path):
     rec = latest_verify(root)
     assert rec["status"] == "failed"
     assert rec["findings"] is None
+    # Issue #89: no rule of its own names this shape -- it falls to
+    # unclassed/product, with the log's last line as its detail.
+    assert rec["stop"]["class"] == "unclassed"
+    assert rec["stop"]["provenance"] == "product"
+    assert rec["stop"]["detail"]
 
 
 def test_verify_fails_when_the_adapter_commits(tmp_path):
@@ -287,6 +310,25 @@ def test_verify_records_a_silently_failing_adapter_without_being_refused(tmp_pat
     log = (root / "records" / "1" / "verify-01.log").read_text()
     assert log.strip() != ""
     assert "1" in log  # the exit status, so the record explains itself
+
+
+def test_verify_ceiling_error_line_carries_ceiling_stop(tmp_path):
+    """Issue #89, rejection test 3: an adapter exit with a tool error line
+    matching a declared ceiling is ceiling/product -- issue #86's own
+    specimen, codex's "input_too_large" on a diff too large to judge."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    approve_item(root)
+    assert run_attavo(root, "build", "1").returncode == 0
+
+    run = run_attavo(root, "verify", "1", env={"ATTAVO_FIXTURE_CEILING_ERROR": "1"})
+    assert run.returncode == 1
+
+    rec = latest_verify(root)
+    assert rec["status"] == "failed"
+    assert rec["stop"] == {"class": "ceiling", "provenance": "product", "detail": None}
+    log = latest_verify_log(root)
+    assert "input_too_large" in log
 
 
 def test_verify_records_the_tools_own_error_line_on_a_nonzero_exit(tmp_path):
