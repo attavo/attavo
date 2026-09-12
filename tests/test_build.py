@@ -571,15 +571,17 @@ def test_build_halt_naming_non_question_in_its_report_line_carries_that_stop_cla
 
 
 def test_build_subagent_refusal_carries_outlived_invocation_stop_class(tmp_path):
-    """Issue #89 union with issue #88. claude-code refuses (exit 1, not a
-    halt) a result whose subagent_stats.spawned is not zero; the record
-    ends up failed with the refusal text only in the log (build's own
-    refusal field, set by cmd_build's own claims/identity checks, is
-    untouched by this adapter-side path). The refusal's exact wording --
-    "...spawned work that can outlive this invocation..." -- never spells
-    the enum name itself, which is why CLASS_TEXT_MARKERS carries it as a
-    synonym for outlived-invocation rather than relying on the bare
-    substring match that already covers non-question.
+    """Issue #89 union with issue #88, updated by issue #94. claude-code
+    refuses (exit 1, not a halt) a result whose subagent_stats.spawned is
+    not zero; the record ends up failed with the refusal text only in the
+    log (build's own refusal field, set by cmd_build's own claims/identity
+    checks, is untouched by this adapter-side path). This refusal path
+    prints no report line at all, so there is no payload "class" key for
+    derive_stop to read (issue #94 retires the text scan that used to
+    stand in for one): the stop falls to unclassed/product, with the
+    refusal's own wording -- "...spawned work that can outlive this
+    invocation..." -- as its detail, rather than a fabricated
+    outlived-invocation class.
     """
     root = make_tenant(tmp_path, "build_valid")
     use_claude_code_adapter(root)
@@ -597,11 +599,35 @@ def test_build_subagent_refusal_carries_outlived_invocation_stop_class(tmp_path)
 
     rec = latest_build(root)
     assert rec["status"] == "failed"
-    assert rec["stop"] == {"class": "outlived-invocation", "provenance": "executor",
-                          "detail": None}
+    assert rec["stop"]["class"] == "unclassed"
+    assert rec["stop"]["provenance"] == "product"
+    assert "subagent_stats.spawned=3" in rec["stop"]["detail"]
 
     log = (root / "records" / "1" / "build-01.log").read_text()
     assert "subagent_stats.spawned=3" in log
+
+
+def test_build_halt_report_line_class_field_sets_stop_class(tmp_path):
+    """Issue #94, rejection test 4: stop.class is read from the adapter's
+    report line via payload.get("class") itself -- not a text scan over
+    refusal/halted/log, which CLASS_TEXT_MARKERS and its bare substring
+    match used to provide before this issue retired both. Proven with the
+    fixture adapter's report line carrying "class": "non-question"
+    alongside a question whose own wording never once says
+    "non-question" -- a text scan over refusal/halted/log would find
+    nothing here, so this fails today (the field itself is unread) and
+    only holds once derive_stop reads payload.get("class") directly."""
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1",
+                     env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?",
+                          "ATTAVO_FIXTURE_REPORT_CLASS": "non-question"})
+    assert run.returncode == 3
+
+    rec = latest_build(root)
+    assert rec["status"] == "halted"
+    assert rec["stop"] == {"class": "non-question", "provenance": "executor", "detail": None}
 
 
 def test_build_refuses_a_commit_not_authored_by_the_executor(tmp_path):

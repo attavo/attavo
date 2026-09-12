@@ -463,19 +463,6 @@ def write_record(records_dir: Path, stage: str, record: dict, m: dict, item: str
 STOP_CLASSES = ("non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
                "ceiling", "claims-boundary", "repeated-act", "unclassed")
 
-# Beyond the enum spelling itself, the prose issue #88 actually shipped
-# (adapters/claude-code/run and adapters/codex/run, on main since
-# v0.16.0): a class's own name is one marker for it, and a real
-# specimen's wording is another, when the two differ. non-question's own
-# halt line ("halted: class non-question") names the enum spelling
-# verbatim; outlived-invocation's refusal ("...spawned work that can
-# outlive this invocation...") never says the class name at all -- this
-# map is where that gap is closed, not a rule of its own in derive_stop.
-CLASS_TEXT_MARKERS: dict[str, tuple[str, ...]] = {
-    "outlived-invocation": ("outlived-invocation", "outlive this invocation",
-                            "can outlive this invocation"),
-}
-
 # Known tool error text for a declared ceiling -- issue #86's own specimen
 # (codex's "Input exceeds..." line on a diff too large to judge) is
 # "input_too_large"; a matching line anywhere in the log, not only its
@@ -490,34 +477,25 @@ def _log_last_line(log: str | None) -> str:
     return lines[-1] if lines else ""
 
 
-def _carries_a_known_class(text: str | None) -> str | None:
-    """Whichever of STOP_CLASSES this text names -- its own spelling, or
-    one of CLASS_TEXT_MARKERS' real-world phrasings of it -- or None.
-    Issue #88 (the sibling "crimson" lane, concurrent with this one, on
-    main since v0.16.0) is where an adapter's own halt or refusal first
-    names its class this way -- non-question and outlived-invocation
-    reach a record only through this generic match, never a rule of
-    their own here, since this lane does not touch adapters/claude-code
-    or adapters/codex."""
-    text = text or ""
-    for name in STOP_CLASSES:
-        markers = CLASS_TEXT_MARKERS.get(name, (name,))
-        if any(marker in text for marker in markers):
-            return name
-    return None
-
-
 def derive_stop(status: str, *, refusal: str | None = None, halted: dict | None = None,
-                log: str | None = None) -> dict | None:
+                log: str | None = None, report_class: str | None = None) -> dict | None:
     """The stop field for a build or verify record: None for status "pass",
     else {class, provenance, detail} from what the caller already knows.
 
-      - a refusal, a halt question, or the log itself that already names
-        its class (issue #88) is that class, provenance "executor" -- the
-        log is checked because neither adapter's halt or refusal *field*
-        carries the class today (build.schema.json and verify.schema.json
-        are untouched by issue #88 on purpose); the class-naming line
-        each adapter prints reaches only the transcript
+      - report_class -- payload.get("class") off the adapter's own report
+        line (issue #88, #94), when it names a STOP_CLASSES member -- is
+        that class, provenance "executor". build.schema.json and
+        verify.schema.json stay untouched by issue #88 on purpose, so the
+        class lives only on the report line, never a structured field
+        cmd_build or cmd_verify forwards on its own account; the caller
+        reads payload itself and passes this in, since only it still has
+        payload once an iteration ends. Issue #94 retires the prior text
+        scan over refusal/halted/log (CLASS_TEXT_MARKERS and the bare
+        substring match both gone): a class an adapter does not put on
+        its report line -- outlived-invocation today, since that refusal
+        path prints no report line at all -- falls to unclassed below,
+        same as any other unnamed cause, until the adapter that raises it
+        puts a class on the line the way non-question already does.
       - a refusal that is not that -- the write-outside-claims path
         itself, not the "commit ... not authored by the executor" shape
         -- is claims-boundary/spec
@@ -534,11 +512,8 @@ def derive_stop(status: str, *, refusal: str | None = None, halted: dict | None 
         return None
     if status == "returned":
         return {"class": "forge-unconcluded", "provenance": "tenant", "detail": None}
-    known = (_carries_a_known_class(refusal)
-            or _carries_a_known_class((halted or {}).get("question"))
-            or _carries_a_known_class(log))
-    if known:
-        return {"class": known, "provenance": "executor", "detail": None}
+    if report_class in STOP_CLASSES:
+        return {"class": report_class, "provenance": "executor", "detail": None}
     if status == "refused" and refusal is not None and not refusal.startswith("commit "):
         return {"class": "claims-boundary", "provenance": "spec", "detail": None}
     if log and any(marker in log.lower() for marker in CEILING_MARKERS):
@@ -1415,7 +1390,8 @@ def cmd_build(argv: list[str]) -> int:
         "refusal": refusal,
         "halted": halted,
         "stop": derive_stop(status_out, refusal=refusal, halted=halted,
-                            log="\n".join(transcripts)),
+                            log="\n".join(transcripts),
+                            report_class=(payload or {}).get("class")),
     }
     record_path = write_record(item_records_dir, "build", record, m, item_id,
                                log="\n".join(transcripts))
@@ -1648,7 +1624,8 @@ def cmd_verify(argv: list[str]) -> int:
         "cost_usd": cost_usd,
         "wall_clock_s": round(time.monotonic() - started, 3),
         "status": status_out,
-        "stop": derive_stop(status_out, log=transcript),
+        "stop": derive_stop(status_out, log=transcript,
+                            report_class=(payload or {}).get("class")),
     }
     record_path = write_record(item_records_dir, "verify", record, m, item_id, log=transcript)
 
