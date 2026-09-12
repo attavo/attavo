@@ -1,0 +1,51 @@
+schema_version = 1
+
+[attavo]
+version = "v0.17.1"
+
+[doctor]
+from = "c2aaab9d521ee6dc1f4bfb6465c05490398ba1b2"
+
+[forge]
+checks_command = "python3 .attavo/bin/forge-checks"
+file_issue_command = "python3 .attavo/bin/file-issue"
+
+[executor]
+build = "claude-code"
+verify = "codex"
+
+[executor.claude-code]
+auth = "subscription"
+model = "claude-sonnet-5"
+
+[executor.codex]
+model = "gpt-5.6-sol"
+
+[spec]
+[spec.boundary]
+paths = ["bin/**", "adapters/**", "schema/**", "templates/**", "action.yml", "scripts/**"]
+
+[gates]
+[gates.spec]
+command = "attavo spec-gate"
+retires = [
+  "the lane as the product's transport: a Claude Code lane session reporting to a reviewing session, with no spec, no approval bound to a commit, no build/verify separation, and no attestation on the product's own commits",
+  "the || true step in ci.yml that ran the doctor's four proofs against this repository expected to still fail",
+  "the reviewing session as the reader of whether the lane did what the issue said",
+]
+
+[tests]
+select = "python3 .attavo/bin/select-tests"
+run = "xargs -r python3 -m pytest -q"
+
+[paths]
+specs = "attest/specs"
+records = "attest/records"
+rulings = "attest/rulings.md"
+rejections = "attest/rejections"
+
+[operators]
+approvers = ["dbean10"]
+
+[checks]
+command = "python3 -m pytest tests -q"
