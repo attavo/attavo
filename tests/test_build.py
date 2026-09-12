@@ -375,6 +375,142 @@ def test_executor_commits_carry_the_executor_identity(tmp_path):
     assert authors == {"attavo executor (fixture)/executor+fixture@attavo.invalid"}
 
 
+def write_failing_tests_script(root: Path) -> None:
+    """A [tests].run that always fails, printing a pytest-style summary
+    line -- the shape build's own log must carry so a reader never has to
+    rerun the gates by hand (issue #89, tenant zero's #659 build-01)."""
+    script = root / "run_tests.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        "cat >/dev/null\n"
+        "echo '1 failed, 2 passed in 0.05s'\n"
+        "exit 1\n")
+    script.chmod(0o755)
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace('run = "true"', 'run = "./run_tests.sh"'))
+    commit_all(root, "configure a [tests].run that always fails")
+
+
+def test_build_log_carries_each_iterations_gate_output(tmp_path):
+    """Issue #89, rejection test 1. A build whose selected tests fail on
+    every iteration exhausts the budget as failed; the log carries each
+    iteration's gate output -- criteria exits, the selected tests' own
+    stdout, the tenant's checks' tail -- under a heading, so the pytest
+    summary line is in the log rather than only in a feedback.txt this
+    command already deleted by the time anyone could read it. Red before
+    this fix: the log was the adapter's transcript alone, and the fixture
+    adapter prints nothing about the tests it never sees.
+
+    ATTAVO_FIXTURE_REQUIRE_FEEDBACK holds the fixture off committing on
+    iteration 1 (no feedback yet), so gates run against an empty tree
+    first; iteration 3 tries to re-commit the same built.txt with nothing
+    changed and the fixture's own `git commit` aborts it before any gate
+    of its own runs -- exactly what exhausts the budget as failed here,
+    since the tests this build selects fail regardless of built.txt.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    write_failing_tests_script(root)
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1",
+                     env={"ATTAVO_FIXTURE_REQUIRE_FEEDBACK": "1"})
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    assert rec["status"] == "failed"
+    assert rec["iterations"] == 3
+
+    log = (root / "records" / "1" / "build-01.log").read_text()
+    assert "--- attavo gates, iteration 1 ---" in log
+    assert "--- attavo gates, iteration 2 ---" in log
+    assert "1 failed, 2 passed in 0.05s" in log
+
+
+def test_build_pass_record_carries_no_stop(tmp_path):
+    """Issue #89, rejection test 2 (half). A pass record carries stop:
+    null -- only a non-pass record needs a class and a cause."""
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1")
+    assert run.returncode == 0
+
+    rec = latest_build(root)
+    assert rec["status"] == "pass"
+    assert rec["stop"] is None
+
+
+def test_build_refused_on_a_claims_violation_carries_claims_boundary_stop(tmp_path):
+    """Issue #89, rejection test 3: a refusal naming a claims path is
+    claims-boundary/spec -- the write-outside-claims specimen."""
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1", env={"ATTAVO_FIXTURE_WRITE": "unclaimed.txt"})
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    assert rec["status"] == "refused"
+    assert rec["stop"] == {"class": "claims-boundary", "provenance": "spec", "detail": None}
+
+
+def test_build_refused_on_a_foreign_commit_is_unclassed(tmp_path):
+    """A refusal that is not a claims path -- "commit ... not authored by
+    the executor" -- carries no rule of its own in this lane; it falls to
+    unclassed/product, with the log's last line as its detail."""
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1", env={"ATTAVO_FIXTURE_FOREIGN_COMMIT": "1"})
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    assert rec["status"] == "refused"
+    assert rec["stop"]["class"] == "unclassed"
+    assert rec["stop"]["provenance"] == "product"
+    assert rec["stop"]["detail"]
+
+
+def test_build_ceiling_error_line_carries_ceiling_stop(tmp_path):
+    """Issue #89, rejection test 3: an adapter exit with a tool error line
+    matching a declared ceiling is ceiling/product -- issue #86's own
+    specimen, codex's "input_too_large" on a diff too large to judge."""
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1", env={"ATTAVO_FIXTURE_CEILING_ERROR": "1"})
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    assert rec["status"] == "failed"
+    assert rec["stop"] == {"class": "ceiling", "provenance": "product", "detail": None}
+    log = (root / "records" / "1" / "build-01.log").read_text()
+    assert "input_too_large" in log
+
+
+def test_build_halted_on_a_plain_report_is_unclassed(tmp_path):
+    """A halt whose question names none of the enumerated classes -- every
+    adapter today, since embedding a class in the question text is issue
+    #88's own fix, a concurrent sibling lane this one does not touch --
+    falls to unclassed/product, with the log's last line as its detail;
+    the fixture's own question line parses as the adapter's report rather
+    than transcript, so that last line is the feedback marker the fixture
+    prints ahead of it."""
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1",
+                     env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    assert run.returncode == 3
+
+    rec = latest_build(root)
+    assert rec["status"] == "halted"
+    assert rec["stop"]["class"] == "unclassed"
+    assert rec["stop"]["provenance"] == "product"
+    log = (root / "records" / "1" / "build-01.log").read_text()
+    assert rec["stop"]["detail"] == log.splitlines()[-1]
+
+
 def test_build_refuses_a_commit_not_authored_by_the_executor(tmp_path):
     """Issue #33, acceptance 2. A commit whose author is not the executor
     identity build exported -- however it got there -- refuses the build

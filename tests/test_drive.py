@@ -338,6 +338,49 @@ def test_drive_halts_on_a_question_and_resumes_at_build_after_a_ruling(tmp_path)
     assert remote_head(bare, branch) == head_of(root)
 
 
+def configure_filing(root: Path, filed_path: Path) -> None:
+    """Appended under the [forge] table add_forge already opened -- a
+    second [forge] header in the same file is a TOML redeclaration
+    error."""
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text() + f'\nfile_issue_command = "cat >> {filed_path}"\n')
+    commit_all(root, "configure issue filing")
+
+
+def test_drive_files_a_stop_it_reports_exactly_once(tmp_path):
+    """Issue #89, acceptance row 5. A stop drive reports -- here, the
+    fixture adapter's halt -- calls file-stops once: one drive run files
+    exactly one issue for the attempt it just wrote, not zero and not
+    more than one."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_bare_remote(root, tmp_path)
+    approve_item(root)
+    filed = tmp_path / "filed.jsonl"
+    configure_filing(root, filed)
+
+    run = run_attavo(root, "drive", "1",
+                     env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    assert run.returncode == 3
+
+    filed_bodies = [json.loads(l) for l in filed.read_text().splitlines() if l.strip()]
+    assert len(filed_bodies) == 1
+    assert filed_bodies[0]["record"] == "records/1/build-01.json"
+
+    # A second drive run halts again -- a new attempt, build-02 -- and
+    # files exactly one more issue for that new record; file-stops' own
+    # .filed marker means build-01's issue is never filed twice.
+    run2 = run_attavo(root, "drive", "1",
+                      env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    assert run2.returncode == 3
+    assert len(record_files(root, "build")) == 2
+
+    filed_bodies_after = [json.loads(l) for l in filed.read_text().splitlines() if l.strip()]
+    assert len(filed_bodies_after) == 2
+    assert filed_bodies_after[0] == filed_bodies[0]
+    assert filed_bodies_after[1]["record"] == "records/1/build-02.json"
+
+
 def test_drive_retries_a_rejected_push_with_a_merge_never_a_rebase(tmp_path):
     """Acceptance row 7. A rejected push with a divergent remote is
     retried after `git pull --no-rebase --no-edit`, never a rebase; the

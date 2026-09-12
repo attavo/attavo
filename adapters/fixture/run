@@ -5,6 +5,15 @@ set -eu
 
 write_name="${ATTAVO_FIXTURE_WRITE:-built.txt}"
 
+if [ -n "${ATTAVO_FIXTURE_CEILING_ERROR:-}" ]; then
+  # issue #89: a tool error line matching a declared ceiling (the
+  # specimen is codex's own "input_too_large" on a diff too large to
+  # judge, issue #86) -- for the ceiling/product rejection test only; a
+  # real adapter's own tool prints this, never the adapter itself.
+  echo "Error: input_too_large: request exceeds the maximum context length"
+  exit 1
+fi
+
 echo "ATTAVO_ADAPTER_CONFIG=${ATTAVO_ADAPTER_CONFIG:-}"
 echo "--- ATTAVO_FEEDBACK ---"
 cat "${ATTAVO_FEEDBACK:-/dev/null}" 2>/dev/null || true

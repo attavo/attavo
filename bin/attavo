@@ -8,6 +8,7 @@
     attavo build [N]
     attavo verify [N]
     attavo file-findings [N]
+    attavo file-stops [N]
     attavo record-only
     attavo attest [--partial] [N]
     attavo drive [N]
@@ -64,8 +65,14 @@ the test run, and the tenant's checks (if declared) to exit 0; any
 non-zero exit iterates, with the failure as feedback, up to a fixed
 budget. [checks] is optional; a tenant that declares none is not
 refused. It writes the next build-NN.json under paths.records/N/, with
-the adapter's transcript beside it as build-NN.log. See the build
-contract in the project's Phase 2 issue for the full rules it enforces.
+the adapter's transcript -- each iteration's gate output (criteria
+exits, the selected tests' stdout, the tenant's checks' tail) appended
+under an "--- attavo gates, iteration N ---" heading, issue #89 -- beside
+it as build-NN.log. Every record whose status is not pass carries stop:
+{class, provenance, detail}, derived from the refusal, halted, and log
+already on hand (issue #89); a pass record carries stop: null. See the
+build contract in the project's Phase 2 issue for the full rules it
+enforces.
 
 verify refuses (exit 1) unless the item's latest build record has
 status pass, and unless the manifest declares [forge].checks_command --
@@ -80,11 +87,22 @@ the build's approval, the spec, and the build record, and records its
 findings and its declared "reports" (issue #41). [executor.<adapter>.<stage>] shadows [executor.<adapter>] for
 build or verify alone; both merge parent then stage before setting
 ATTAVO_ADAPTER_CONFIG, and the record's adapter_config is the merged
-result. file-findings opens one tenant issue per finding in the item's
-latest verify record via [forge].file_issue_command, and refuses (exit
-1, nothing filed) a record carrying a finding with no retires. See the
-verify contract in the project's Phase 2 issue for the full rules both
-enforce.
+result. Like build, every verify record whose status is not pass
+carries stop: {class, provenance, detail} (issue #89); a pass record
+carries stop: null. file-findings opens one tenant issue per finding in
+the item's latest verify record via [forge].file_issue_command, and
+refuses (exit 1, nothing filed) a record carrying a finding with no
+retires. See the verify contract in the project's Phase 2 issue for the
+full rules both enforce.
+
+file-stops opens one tenant issue per stop record of the item with no
+issue filed for it yet, through [forge].file_issue_command, naming the
+class, the provenance, the record path, and the log's last twenty
+lines; a record it has already filed carries a <stage>-NN.filed marker
+beside it, so a second run files nothing new. It refuses (exit 1,
+nothing filed) a stop whose class is unclassed and whose detail is
+empty -- a stop the product cannot even describe is not filed as if it
+could. See issue #89's lane for the full rules it enforces.
 
 record-only exits 0 when HEAD, against its first parent, touches only
 paths.records; 1 otherwise; 2 with no manifest. Core logic about a git
@@ -136,8 +154,10 @@ then pushes; a push a divergent remote rejects is retried once after `git
 pull --no-rebase --no-edit`, never a rebase, since the record already
 names the commit's sha. drive writes no record of its own: a second run
 in the same state repeats the same step or the same stop, reading exactly
-what the prior run left behind. See issue #84's lane for the full rules
-it enforces.
+what the prior run left behind. A stop it reports calls file-stops once
+(issue #89), which is the only thing drive can leave behind beside a
+record and its log -- the .filed marker file-stops writes once it has
+filed. See issue #84's lane for the full rules it enforces.
 """
 from __future__ import annotations
 
@@ -426,6 +446,81 @@ def write_record(records_dir: Path, stage: str, record: dict, m: dict, item: str
         path.with_suffix(".log").write_text(log)
     path.write_text(json.dumps(record, indent=2) + "\n")
     return path
+
+
+# --- stop: every non-pass build or verify record's class and cause (issue
+# #89) -- derived here, at write time, from the refusal, halted, and log
+# the caller already has. Never a fresh read of anything: the tenant zero
+# specimens this retires (#576 build-11, #659 build-01 and verify-01) are
+# exactly a stop the product wrote with nothing beside it to explain
+# itself after the fact. ---
+
+STOP_CLASSES = ("non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
+               "ceiling", "claims-boundary", "repeated-act", "unclassed")
+
+# Known tool error text for a declared ceiling -- issue #86's own specimen
+# (codex's "Input exceeds..." line on a diff too large to judge) is
+# "input_too_large"; a matching line anywhere in the log, not only its
+# last line, since cmd_build and cmd_verify both append "[adapter exited
+# N]" after whatever the tool itself printed.
+CEILING_MARKERS = ("input_too_large", "exceeds the maximum context length",
+                  "context_length_exceeded")
+
+
+def _log_last_line(log: str | None) -> str:
+    lines = [l for l in (log or "").splitlines() if l.strip()]
+    return lines[-1] if lines else ""
+
+
+def _carries_a_known_class(text: str | None) -> str | None:
+    """Whichever of STOP_CLASSES appears literally inside text, or None.
+    Issue #88 (the sibling "crimson" lane, concurrent with this one) is
+    where an adapter's own halt question or refusal first names its class
+    this way -- non-question and outlived-invocation reach a record only
+    through this generic match, never a rule of their own here, since
+    this lane does not touch adapters/claude-code or adapters/codex."""
+    for name in STOP_CLASSES:
+        if name in (text or ""):
+            return name
+    return None
+
+
+def derive_stop(status: str, *, refusal: str | None = None, halted: dict | None = None,
+                log: str | None = None) -> dict | None:
+    """The stop field for a build or verify record: None for status "pass",
+    else {class, provenance, detail} from what the caller already knows.
+
+      - a refusal or a halt question that already names its class (issue
+        #88) is that class, provenance "executor"
+      - a refusal that is not that -- the write-outside-claims path
+        itself, not the "commit ... not authored by the executor" shape
+        -- is claims-boundary/spec
+      - a returned verify (the forge was not green; no adapter ran) is
+        forge-unconcluded/tenant
+      - an adapter exit whose log carries a declared-ceiling error line is
+        ceiling/product
+      - anything else is unclassed/product, with the log's last line as
+        its detail -- the one class that carries a detail at all, since
+        every other class's evidence already lives in refusal, halted,
+        forge_checks, or the log itself.
+    """
+    if status == "pass":
+        return None
+    if status == "returned":
+        return {"class": "forge-unconcluded", "provenance": "tenant", "detail": None}
+    if status == "refused" and refusal is not None:
+        known = _carries_a_known_class(refusal)
+        if known:
+            return {"class": known, "provenance": "executor", "detail": None}
+        if not refusal.startswith("commit "):
+            return {"class": "claims-boundary", "provenance": "spec", "detail": None}
+    if status == "halted":
+        known = _carries_a_known_class((halted or {}).get("question"))
+        if known:
+            return {"class": known, "provenance": "executor", "detail": None}
+    if log and any(marker in log.lower() for marker in CEILING_MARKERS):
+        return {"class": "ceiling", "provenance": "product", "detail": None}
+    return {"class": "unclassed", "provenance": "product", "detail": _log_last_line(log)}
 
 
 def load_records(records_dir: Path) -> dict[str, dict[str, dict]]:
@@ -1226,6 +1321,28 @@ def cmd_build(argv: list[str]) -> int:
                                             capture_output=True, text=True, check=False)
                 checks_result = {"command": checks_command, "exit": checks_run.returncode}
 
+            # Issue #89, rejection test 1: the gate output that decides pass
+            # or fail is appended to the build log itself, under a heading
+            # per iteration, before this temporary directory goes away --
+            # tenant zero's #576 build-11 and #659 build-01 are a failed
+            # record with nothing beside it to say what was red, because
+            # this output previously lived only in feedback.txt, in a
+            # tempfile.TemporaryDirectory() cmd_build deletes on return.
+            gate_lines = [f"criterion {c['name']}: exit {c['exit']}" for c in criteria_results]
+            gate_lines.append(f"selected tests ({selected_tests['count']}): exit "
+                              f"{selected_tests['exit']}")
+            if test_run.stdout.strip():
+                gate_lines += ["--- selected tests stdout ---", test_run.stdout.rstrip("\n")]
+            if test_run.stderr.strip():
+                gate_lines += ["--- selected tests stderr ---", test_run.stderr.rstrip("\n")]
+            if checks_run is not None:
+                tail = (checks_run.stdout.splitlines() + checks_run.stderr.splitlines())
+                tail = tail[-CHECKS_FEEDBACK_TAIL_LINES:]
+                gate_lines.append(f"tenant checks: exit {checks_run.returncode}")
+                gate_lines += ["--- checks output (tail) ---", *tail]
+            transcripts[-1] += (f"\n--- attavo gates, iteration {iteration} ---\n"
+                               + "\n".join(gate_lines))
+
             failing = [c for c in criteria_results if c["exit"] != 0]
             checks_ok = checks_run is None or checks_run.returncode == 0
             if not failing and test_run.returncode == 0 and checks_ok:
@@ -1274,6 +1391,8 @@ def cmd_build(argv: list[str]) -> int:
         "status": status_out,
         "refusal": refusal,
         "halted": halted,
+        "stop": derive_stop(status_out, refusal=refusal, halted=halted,
+                            log="\n".join(transcripts)),
     }
     record_path = write_record(item_records_dir, "build", record, m, item_id,
                                log="\n".join(transcripts))
@@ -1383,6 +1502,7 @@ def cmd_verify(argv: list[str]) -> int:
             "tokens": {"input": 0, "output": 0}, "cost_usd": None,
             "wall_clock_s": round(time.monotonic() - started, 3),
             "status": "returned",
+            "stop": derive_stop("returned"),
         }
         record_path = write_record(item_records_dir, "verify", record, m, item_id)
         print(f"attavo verify: returned ({record_path.name}); the forge checks are not green")
@@ -1505,6 +1625,7 @@ def cmd_verify(argv: list[str]) -> int:
         "cost_usd": cost_usd,
         "wall_clock_s": round(time.monotonic() - started, 3),
         "status": status_out,
+        "stop": derive_stop(status_out, log=transcript),
     }
     record_path = write_record(item_records_dir, "verify", record, m, item_id, log=transcript)
 
@@ -1659,6 +1780,15 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, ite
               f"pushed to {branch}")
     else:
         print(f"attavo drive: pushed {after.name} to {branch}")
+
+    if status_out != "pass":
+        # Issue #89, acceptance row 5: every stop drive reports is filed --
+        # the reviewing session as the diagnoser and filer of stops (two
+        # of each on tenant zero's #659) is exactly what this retires.
+        # file-stops is its own idempotent read of the item's records, so
+        # calling it here on a status this run's own commit already
+        # pushed is safe to call again unconditionally on a later run.
+        cmd_file_stops([item_id])
     return rc
 
 
@@ -1760,6 +1890,85 @@ def cmd_file_findings(argv: list[str]) -> int:
             return 1
 
     print(f"attavo file-findings: filed {len(findings)} issue(s)")
+    return 0
+
+
+# --- file-stops: one tenant issue per stop record, nothing filed silently,
+# nothing filed twice (issue #89) ---
+
+STOP_STAGES = ("build", "verify")
+FILE_STOPS_LOG_TAIL_LINES = 20
+
+
+def cmd_file_stops(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attavo file-stops: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo file-stops: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    records_rel = m["paths"]["records"]
+    item_records_dir = root / records_rel / item_id
+
+    forge_cfg = m.get("forge") or {}
+    file_issue_command = forge_cfg.get("file_issue_command")
+    if not file_issue_command:
+        print("attavo file-stops: refused: no [forge].file_issue_command in the manifest")
+        return 1
+
+    # A stop record's own .filed marker beside it -- the same convention as
+    # its .log sidecar -- is what makes a second run file nothing: no new
+    # artifact beside the records (the gate output already lives in the
+    # log), just a fact about this one record, in the one place a reader
+    # already looks.
+    pending: list[tuple[str, int, dict, Path]] = []
+    for stage in STOP_STAGES:
+        attempts = parse_attempts(item_records_dir, stage)
+        for n in sorted(attempts):
+            stop = attempts[n].get("stop")
+            if not stop:
+                continue
+            marker = item_records_dir / f"{stage}-{n:02d}.filed"
+            if marker.exists():
+                continue
+            pending.append((stage, n, stop, marker))
+
+    if not pending:
+        print("attavo file-stops: no stops to file")
+        return 0
+
+    for stage, n, stop, _marker in pending:
+        if stop["class"] == "unclassed" and not stop.get("detail"):
+            print(f"attavo file-stops: refused: {stage}-{n:02d} is unclassed with no detail; "
+                  f"nothing filed")
+            return 1
+
+    for stage, n, stop, marker in pending:
+        record_path = item_records_dir / f"{stage}-{n:02d}.json"
+        log_path = record_path.with_suffix(".log")
+        log_tail = ("\n".join(log_path.read_text().splitlines()[-FILE_STOPS_LOG_TAIL_LINES:])
+                   if log_path.is_file() else "")
+        body = {
+            "class": stop["class"],
+            "provenance": stop["provenance"],
+            "record": str(record_path.relative_to(root)),
+            "log_tail": log_tail,
+        }
+        run = subprocess.run(file_issue_command, shell=True, cwd=str(root),
+                             input=json.dumps(body) + "\n", capture_output=True,
+                             text=True, check=False)
+        if run.returncode != 0:
+            print(f"attavo file-stops: refused: filing {stage}-{n:02d} exited {run.returncode}: "
+                  f"{run.stderr.strip()}")
+            return 1
+        marker.write_text("")
+
+    print(f"attavo file-stops: filed {len(pending)} issue(s)")
     return 0
 
 
@@ -1971,6 +2180,8 @@ def main(argv: list[str]) -> int:
         return cmd_verify(argv[1:])
     if argv[0] == "file-findings":
         return cmd_file_findings(argv[1:])
+    if argv[0] == "file-stops":
+        return cmd_file_stops(argv[1:])
     if argv[0] == "record-only":
         return cmd_record_only(argv[1:])
     if argv[0] == "attest":
@@ -1978,8 +2189,8 @@ def main(argv: list[str]) -> int:
     if argv[0] == "drive":
         return cmd_drive(argv[1:])
     print(f"attavo: unknown subcommand {argv[0]!r}; only doctor, spec-gate, approve, "
-          f"approval-status, build, verify, file-findings, record-only, attest, drive "
-          f"exist at this commit", file=sys.stderr)
+          f"approval-status, build, verify, file-findings, file-stops, record-only, attest, "
+          f"drive exist at this commit", file=sys.stderr)
     return 2
 
 
