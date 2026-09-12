@@ -338,6 +338,76 @@ def test_drive_halts_on_a_question_and_resumes_at_build_after_a_ruling(tmp_path)
     assert remote_head(bare, branch) == head_of(root)
 
 
+def configure_counsel(root: Path) -> None:
+    """[executor].counsel = "fixture" -- build_valid's own manifest
+    declares [executor].build = "fixture" only; counsel needs its own
+    adapter named (issue #100)."""
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace(
+        '[executor]\nbuild = "fixture"', '[executor]\nbuild = "fixture"\ncounsel = "fixture"'))
+    commit_all(root, "configure the counsel adapter")
+
+
+def test_drive_counsels_a_stop_before_filing_it_and_commits_both_records_together(tmp_path):
+    """Issue #100, acceptance row 3. On a stop, drive calls counsel
+    before file-stops, and commits the counsel record with the stage
+    record in one commit."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    bare = add_bare_remote(root, tmp_path)
+    configure_counsel(root)
+    approve_item(root)
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    filed = tmp_path / "filed.jsonl"
+    configure_filing(root, filed)
+
+    run = run_attavo(root, "drive", "1",
+                     env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    assert run.returncode == 3
+
+    assert record_files(root, "counsel")
+    counsel_rec = latest_record(root, "counsel")
+    assert counsel_rec["record_stage"] == "build"
+    assert counsel_rec["record"] == "build-01"
+    assert counsel_rec["verdict"] == "person"
+
+    committed = set(last_commit_paths(root))
+    assert committed == {
+        "records/1/build-01.json", "records/1/build-01.log",
+        "records/1/counsel-01.json", "records/1/counsel-01.log",
+        "records/1/build-01.filed",
+    }
+    assert remote_head(bare, branch) == head_of(root)
+
+    filed_bodies = [json.loads(l) for l in filed.read_text().splitlines() if l.strip()]
+    assert len(filed_bodies) == 1
+    assert filed_bodies[0]["counsel_verdict"] == "person"
+    assert filed_bodies[0]["counsel_proposal"]["question"]
+
+
+def test_drive_still_files_a_stop_with_no_counsel_adapter_configured(tmp_path):
+    """counsel refuses gracefully (no [executor].counsel or
+    [executor].verify) -- drive still files and transports the stage
+    record; nothing new for counsel to commit."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    bare = add_bare_remote(root, tmp_path)
+    approve_item(root)
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    filed = tmp_path / "filed.jsonl"
+    configure_filing(root, filed)
+
+    run = run_attavo(root, "drive", "1",
+                     env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    assert run.returncode == 3
+
+    assert record_files(root, "counsel") == []
+    committed = set(last_commit_paths(root))
+    assert committed == {"records/1/build-01.json", "records/1/build-01.log",
+                         "records/1/build-01.filed"}
+    assert remote_head(bare, branch) == head_of(root)
+
+
 def configure_filing(root: Path, filed_path: Path) -> None:
     """Appended under the [forge] table add_forge already opened -- a
     second [forge] header in the same file is a TOML redeclaration

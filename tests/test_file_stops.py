@@ -166,6 +166,77 @@ def test_file_stops_leaves_a_pass_record_alone(tmp_path):
     assert not filed.exists()
 
 
+def write_counsel_record(root: Path, item: str, n: int, record_field: str,
+                         verdict: str = "person",
+                         proposal: dict | None = None) -> Path:
+    """Issue #100: a counsel-NN.json whose own "record" field names the
+    stage record it read (e.g. "build-01") -- what file-stops matches
+    against to find the counsel that read a given stop."""
+    records_dir = root / "records" / item
+    records_dir.mkdir(parents=True, exist_ok=True)
+    record = {
+        "sha": "0" * 40, "record_stage": record_field.split("-")[0], "record": record_field,
+        "at": "2026-01-01T00:00:01Z", "adapter": "fixture", "adapter_config": {},
+        "adapter_version": "fixture-1", "model": "fixture", "model_version": None,
+        "reports": [], "tokens": {"input": 1, "output": 1}, "cost_usd": 0.0,
+        "wall_clock_s": 0.1, "status": "done", "class": "unclassed", "verdict": verdict,
+        "citations": [{"kind": "instruction", "path": "specs/1/spec.md", "symbol": None,
+                       "ruling_id": None}],
+        "proposal": proposal or {"ruling_text": None, "patch": None, "question": "what now?"},
+    }
+    path = records_dir / f"counsel-{n:02d}.json"
+    path.write_text(json.dumps(record))
+    return path
+
+
+def test_file_stops_puts_counsels_verdict_citations_and_proposal_in_the_body(tmp_path):
+    """Issue #100, acceptance row 3. file-stops puts counsel's verdict,
+    citations, and proposal in the issue body, matched to the stage
+    record counsel actually read."""
+    root = make_tenant(tmp_path, "build_valid")
+    filed = tmp_path / "filed.jsonl"
+    configure_filing(root, filed)
+
+    write_build_record(root, "1", 1, "halted",
+                       {"class": "unclassed", "provenance": "product", "detail": "x"})
+    write_counsel_record(root, "1", 1, "build-01", verdict="patch",
+                         proposal={"ruling_text": None,
+                                  "patch": {"file": "bin/attavo", "symbol": "cmd_build",
+                                           "rejection_test": "tests/test_build.py::test_x",
+                                           "diff": "--- a\n+++ b\n"},
+                                  "question": None})
+
+    run = run_attavo(root, "file-stops", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+
+    filed_bodies = [json.loads(l) for l in filed.read_text().splitlines() if l.strip()]
+    assert len(filed_bodies) == 1
+    assert filed_bodies[0]["counsel_verdict"] == "patch"
+    assert filed_bodies[0]["counsel_citations"] == [
+        {"kind": "instruction", "path": "specs/1/spec.md", "symbol": None, "ruling_id": None}]
+    assert filed_bodies[0]["counsel_proposal"]["patch"]["file"] == "bin/attavo"
+
+
+def test_file_stops_leaves_counsel_fields_null_with_no_counsel_record(tmp_path):
+    """A stop file-stops files without counsel having run first (e.g. run
+    standalone, outside drive) still files -- the counsel fields are null
+    rather than blocking the filing."""
+    root = make_tenant(tmp_path, "build_valid")
+    filed = tmp_path / "filed.jsonl"
+    configure_filing(root, filed)
+
+    write_build_record(root, "1", 1, "halted",
+                       {"class": "unclassed", "provenance": "product", "detail": "x"})
+
+    run = run_attavo(root, "file-stops", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+
+    filed_bodies = [json.loads(l) for l in filed.read_text().splitlines() if l.strip()]
+    assert filed_bodies[0]["counsel_verdict"] is None
+    assert filed_bodies[0]["counsel_citations"] == []
+    assert filed_bodies[0]["counsel_proposal"] is None
+
+
 def test_file_stops_refuses_without_a_file_issue_command(tmp_path):
     root = make_tenant(tmp_path, "build_valid")
     write_build_record(root, "1", 1, "failed",
