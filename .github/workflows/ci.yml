@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  merge_group:
 
 jobs:
   test:
@@ -19,8 +20,26 @@ jobs:
           --deselect tests/test_doctor.py::test_one_item_traversed_every_stage
           --deselect tests/test_doctor.py::test_no_commit_lacks_a_record
           --deselect tests/test_doctor.py::test_no_stop_lacks_cause
-      - name: doctor's four proofs (expected to still fail against this repo's own root)
-        run: python3 -m pytest tests/test_doctor.py -q -k "every_gate_rejects or one_item_traversed_every_stage or no_commit_lacks_a_record or no_stop_lacks_cause" || true
+
+  # Since #103, this repository is Attavo's own second tenant (attavo.toml
+  # at the root) and the doctor's four proofs run for real, not under
+  # || true. attavo doctor . fails until an item has traversed every
+  # stage (proof one-item-every-stage): this job is expected red on main
+  # until the first item merges, so it is not yet a required check --
+  # the operator makes it required once that item lands.
+  doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest jsonschema
+      - name: doctor's four proofs
+        run: python3 -m pytest tests/test_doctor.py -q -k "every_gate_rejects or one_item_traversed_every_stage or no_commit_lacks_a_record or no_stop_lacks_cause"
+      - run: python3 bin/attavo doctor .
 
   action-self-check:
     runs-on: ubuntu-latest
@@ -34,8 +53,14 @@ jobs:
         env:
           ATTAVO_ITEM: "1"
 
+  # merge_group added alongside pull_request (#103): the merge queue
+  # requires every required check to report on the merge group, not only
+  # on the pull request that entered it (tenant zero's #662 was the same
+  # class of miss, on pull_request only). github.base_ref is empty on a
+  # merge_group event; the target branch comes from
+  # github.event.merge_group.base_ref there instead.
   schema-version:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,5 +69,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: git fetch --no-tags origin "${{ github.base_ref }}"
-      - run: python3 scripts/check_record_schema_version.py "origin/${{ github.base_ref }}"
+      - name: Resolve the target branch
+        id: base
+        run: |
+          if [ "${{ github.event_name }}" = "merge_group" ]; then
+            branch="${{ github.event.merge_group.base_ref }}"
+            branch="${branch#refs/heads/}"
+          else
+            branch="${{ github.base_ref }}"
+          fi
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+      - run: git fetch --no-tags origin "${{ steps.base.outputs.branch }}"
+      - run: python3 scripts/check_record_schema_version.py "origin/${{ steps.base.outputs.branch }}"

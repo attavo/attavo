@@ -339,9 +339,9 @@ def test_write_record_accepts_a_failed_record_with_a_populated_refusal(tmp_path)
 def _load_check_record_schema_version():
     """scripts/check_record_schema_version.py -- schema_version_drift's
     one home. CI's schema-version job (.github/workflows/ci.yml, on
-    pull_request only) imports the same module to run it against this
-    repository's real schema files at the merge base and at HEAD; a
-    merge-base read behaves differently inside pytest than in the
+    pull_request and merge_group) imports the same module to run it
+    against this repository's real schema files at the merge base and at
+    HEAD; a merge-base read behaves differently inside pytest than in the
     workflow, so that comparison lives outside this suite. This test is
     the helper's own rejection test, run here against a mutated copy of a
     real schema rather than the merge base."""
