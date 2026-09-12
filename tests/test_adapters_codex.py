@@ -23,6 +23,7 @@ Run: python3 -m pytest tests -q
 """
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -412,3 +413,78 @@ def test_nonzero_exit_with_error_only_on_stderr_reaches_the_log(tmp_path):
     run = run_codex(env)
     assert run.returncode == 1
     assert "Input exceeds the maximum length" in run.stdout
+
+
+def test_ceiling_refuses_an_oversized_instruction(tmp_path):
+    """Issue #93, rejection test 2. codex's own declared limit
+    (conformance.json's input_limit: 1048576 chars, its own
+    input_too_large error) is patched down via
+    ATTAVO_ADAPTER_INPUT_LIMIT_CHARS to a small number, small enough
+    that even the default fixture's instruction exceeds it: the dry-run
+    refuses by name, naming both numbers and the word "ceiling", rather
+    than accepting a prompt this adapter can measure is over the ceiling
+    before codex ever sees it (tenant zero #659, verify-01: exit 1,
+    three seconds, no findings, no tokens).
+    """
+    dry_env = base_env(tmp_path, config={"model": "gpt-test"})
+    dry_env["ATTAVO_ADAPTER_DRY_RUN"] = "1"
+    dry_env["ATTAVO_ADAPTER_INPUT_LIMIT_CHARS"] = "10"
+    dry = run_codex(dry_env)
+    assert dry.returncode == 1
+    assert "ceiling" in dry.stderr
+    assert "10" in dry.stderr
+    numbers = [int(n) for n in re.findall(r"\d+", dry.stderr)]
+    assert 10 in numbers
+    assert any(n > 10 for n in numbers), "both numbers (limit and size) must appear"
+
+
+def test_ceiling_refuses_before_invoking_codex(tmp_path):
+    """Issue #93, rejection test 2 (invokes nothing). A fake codex on
+    PATH would leave a sentinel file if it ran; the ceiling refusal
+    happens before the adapter ever shells out, and before the model
+    check even matters here."""
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    sentinel = tmp_path / "invoked"
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text(f"#!/bin/sh\ntouch {sentinel}\nexit 0\n")
+    fake_codex.chmod(0o755)
+
+    env = base_env(tmp_path, config={"model": "gpt-test"})
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+    env["ATTAVO_ADAPTER_INPUT_LIMIT_CHARS"] = "10"
+    run = run_codex(env)
+    assert run.returncode == 1
+    assert not sentinel.exists(), "codex must never be invoked over the ceiling"
+
+
+def test_codex_verify_instruction_states_what_a_stub_is(tmp_path):
+    """Issue #90 (closed by #93). ATTAVO_SPEC_DIR's own spec, fixtures'
+    build_valid/specs/1, carries a stub/ -- the instruction now names its
+    path beside a sentence saying it is the fixture the criteria were
+    shown to pass against, not the intended change, so a difference
+    between the built tree and the stub is not itself a finding. Red
+    before this fix: the judge twice reported the built tree as failing
+    to match its stub (tenant zero #664, #644)."""
+    dry = dry_run(tmp_path, extra_env={"ATTAVO_STAGE": "verify"})
+    instruction = dry["instruction"]
+    assert "stub" in instruction.lower()
+    assert "is not the intended change" in instruction
+    assert "not a finding" in instruction
+
+
+def test_codex_build_instruction_says_nothing_about_the_stub(tmp_path):
+    """The stub sentence is verify's objective, not build's -- a spec
+    carrying a stub/ must not change the build instruction at all."""
+    dry = dry_run(tmp_path)
+    assert "is not the intended change" not in dry["instruction"]
+
+
+def test_codex_verify_instruction_says_nothing_about_a_stub_when_absent(tmp_path):
+    """A spec with no stub/ (fixtures' prose_criterion/specs/1) gets no
+    stub section at all -- the sentence is conditioned on the stub
+    existing, not always appended."""
+    spec_dir = FIXTURES / "prose_criterion" / "specs" / "1"
+    dry = dry_run(tmp_path, extra_env={
+        "ATTAVO_STAGE": "verify", "ATTAVO_SPEC_DIR": str(spec_dir)})
+    assert "stub" not in dry["instruction"].lower()

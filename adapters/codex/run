@@ -163,6 +163,25 @@ def spec_sections() -> list[str]:
     return [section("## Problem"), section("## Claims"), section("## Criteria")]
 
 
+def stub_note() -> str | None:
+    """None when ATTAVO_SPEC_DIR carries no stub/; else the sentence
+    naming what a stub is (issue #90, closed by #93). The stub is
+    evidence -- a criterion it satisfies trivially is weak, and
+    weak_stub is read from exactly that -- but twice the judge reported
+    a built tree as failing to match its stub as if the stub were the
+    intended change (tenant zero #664, #644): one sentence of vocabulary
+    was missing, not a smarter judge or a dropped stub."""
+    stub_dir = Path(os.environ["ATTAVO_SPEC_DIR"]) / "stub"
+    if not stub_dir.is_dir():
+        return None
+    return (
+        f"## The stub at `{stub_dir}`\n\n"
+        "The stub is the fixture the acceptance criteria were shown to "
+        "pass against; it is not the intended change. A difference "
+        "between the built tree and the stub is not a finding: a "
+        "criterion the stub satisfies trivially is.")
+
+
 def build_instruction() -> str:
     parts = list(spec_sections())
 
@@ -196,6 +215,10 @@ def build_instruction() -> str:
 
 def verify_instruction() -> str:
     parts = list(spec_sections())
+
+    note = stub_note()
+    if note:
+        parts.append(note)
 
     diff_path = os.environ.get("ATTAVO_DIFF")
     diff = read_text("ATTAVO_DIFF")
@@ -241,6 +264,38 @@ def verify_instruction() -> str:
 def load_config() -> dict:
     raw = os.environ.get("ATTAVO_ADAPTER_CONFIG")
     return json.loads(raw) if raw else {}
+
+
+# codex's own ceiling (issue #93): "Input exceeds the maximum length of
+# 1048576 characters" -- confirmed live 2026-09-08 against codex-cli
+# 0.153.4, the same specimen issue #86 fixed by handing the diff over by
+# path (tenant zero #659, verify-01: input_too_large, max_chars 1048576,
+# actual_chars 1297762). Declared here and in conformance.json's own
+# input_limit so a test can assert the two agree.
+INPUT_LIMIT_CHARS = 1_048_576
+
+
+def input_limit_chars() -> int:
+    """The declared ceiling, chars. Overridable only for tests via
+    ATTAVO_ADAPTER_INPUT_LIMIT_CHARS -- never a tenant knob: the ceiling
+    is a fact about codex, not something [executor.codex] can set (a
+    tenant typing a number it does not know is the pattern rule 42
+    refuses)."""
+    override = os.environ.get("ATTAVO_ADAPTER_INPUT_LIMIT_CHARS")
+    return int(override) if override else INPUT_LIMIT_CHARS
+
+
+def ceiling_refusal(instruction: str) -> str | None:
+    """None if instruction stays at or under codex's declared ceiling;
+    else the refusal naming both numbers, checked before codex is ever
+    invoked -- so an oversized prompt never reaches the tool that would
+    refuse it anyway, three seconds and a wasted call later."""
+    limit = input_limit_chars()
+    size = len(instruction)
+    if size <= limit:
+        return None
+    return (f"ceiling exceeded -- instruction is {size} chars, over "
+           f"codex's declared limit of {limit} chars")
 
 
 def build_argv(schema_path: Path, output_path: Path, config: dict, stage: str) -> list[str]:
@@ -420,6 +475,11 @@ def main() -> int:
             "adapters/codex/run: refused: [executor.codex].model is "
             "required -- no model id appears anywhere codex itself "
             "reports (the event stream, codex doctor, or any config file)\n")
+        return 1
+
+    ceiling = ceiling_refusal(instruction)
+    if ceiling:
+        sys.stderr.write(f"adapters/codex/run: refused: {ceiling}\n")
         return 1
 
     if os.environ.get("ATTAVO_ADAPTER_DRY_RUN"):
