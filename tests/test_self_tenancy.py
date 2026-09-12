@@ -46,7 +46,16 @@ def test_manifest_validates_against_schema():
 def test_manifest_declares_every_key_issue_103_lists():
     m = load_manifest()
     assert m["attavo"]["version"] == "v0.17.1"
-    assert "from" in m["doctor"]
+    # No [doctor].from: proof_no_commit_lacks_record only accepts a
+    # declared from equal to, or on the first-parent line strictly
+    # after, the install commit (schema: "at or after the install
+    # commit") -- never a commit before it, which is what "the last
+    # ungoverned commit" would have to name. Left absent, proof three's
+    # window starts at the install commit itself (the schema's own
+    # default), which already holds: the one first-parent commit after
+    # it is this issue's own merge, an ordinary merge touching no
+    # boundary path. Verified by simulating the merge locally.
+    assert "doctor" not in m
     assert m["forge"]["checks_command"]
     assert m["forge"]["file_issue_command"]
     assert m["executor"]["build"] == "claude-code"

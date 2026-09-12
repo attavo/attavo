@@ -3,9 +3,6 @@ schema_version = 1
 [attavo]
 version = "v0.17.1"
 
-[doctor]
-from = "c2aaab9d521ee6dc1f4bfb6465c05490398ba1b2"
-
 [forge]
 checks_command = "python3 .attavo/bin/forge-checks"
 file_issue_command = "python3 .attavo/bin/file-issue"
