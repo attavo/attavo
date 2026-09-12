@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""select-tests: [tests].select for attavo build/verify (issue #103).
+
+Reads touched paths on stdin, one per line, and prints test identifiers
+on stdout, one per line, for this repository's own test suite:
+bin/attavo maps to the whole suite ("tests", handed to [tests].run as
+the one path pytest needs to run everything) -- the product's one
+script, and every test depends on it; adapters/<name>/** maps to
+tests/test_adapters.py and the conformance suite
+(tests/test_executor_conformance.py); schema/** maps to the record and
+attest tests (tests/test_record_schemas.py, tests/test_attest.py);
+anything else -- README.md among it -- maps to nothing.
+
+Usage: <touched paths> | select-tests
+"""
+from __future__ import annotations
+
+import sys
+
+ADAPTER_TESTS = ("tests/test_adapters.py", "tests/test_executor_conformance.py")
+SCHEMA_TESTS = ("tests/test_record_schemas.py", "tests/test_attest.py")
+
+
+def select(paths: list[str]) -> list[str]:
+    tests: list[str] = []
+    for path in paths:
+        if path == "bin/attavo":
+            return ["tests"]
+        if path.startswith("adapters/"):
+            for t in ADAPTER_TESTS:
+                if t not in tests:
+                    tests.append(t)
+        elif path.startswith("schema/"):
+            for t in SCHEMA_TESTS:
+                if t not in tests:
+                    tests.append(t)
+    return tests
+
+
+def main() -> int:
+    touched = [line.strip() for line in sys.stdin.read().splitlines() if line.strip()]
+    for t in select(touched):
+        print(t)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

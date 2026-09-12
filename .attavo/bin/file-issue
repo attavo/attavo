@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""file-issue: [forge].file_issue_command for attavo file-findings and
+attavo file-stops (issue #103).
+
+Reads one JSON object on stdin -- a verify finding (title, specimen,
+retires, rejection_test, severity) from file-findings, or a stop (class,
+provenance, record, log_tail, counsel_verdict, counsel_citations,
+counsel_proposal) from file-stops -- and files it as a GitHub issue in
+this repository: a "title" key, if present, becomes the issue's title;
+every other key is rendered into the body, one field per section, in the
+order it was given. Prints the issue's URL on success. Exits non-zero,
+printing nothing to stdout, when filing fails -- both callers stop the
+whole run on the first nonzero exit and report nothing as filed.
+
+Written from schema/manifest.schema.json's own description of
+[forge].file_issue_command and from `gh`, independently of tenant zero's
+equivalent script.
+
+Usage: echo '<json>' | file-issue
+Requires: `gh`, authenticated, run inside this repository's checkout.
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+
+
+def render(payload: dict) -> tuple[str, str]:
+    title = payload.get("title") or f"attavo: {payload.get('class', 'untitled')}"
+    sections = [f"**{key}**\n\n{value}" for key, value in payload.items() if key != "title"]
+    return title, "\n\n".join(sections)
+
+
+def main(argv: list[str]) -> int:
+    try:
+        payload = json.load(sys.stdin)
+    except json.JSONDecodeError as exc:
+        print(f"file-issue: invalid JSON on stdin: {exc}", file=sys.stderr)
+        return 1
+    title, body = render(payload)
+    run = subprocess.run(
+        ["gh", "issue", "create", "--title", title, "--body", body],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    if run.returncode != 0:
+        print(run.stderr.strip(), file=sys.stderr)
+        return 1
+    sys.stdout.write(run.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
