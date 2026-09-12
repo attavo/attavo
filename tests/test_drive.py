@@ -341,9 +341,15 @@ def test_drive_halts_on_a_question_and_resumes_at_build_after_a_ruling(tmp_path)
 def configure_filing(root: Path, filed_path: Path) -> None:
     """Appended under the [forge] table add_forge already opened -- a
     second [forge] header in the same file is a TOML redeclaration
-    error."""
+    error. Prints a fake issue URL on stdout, numbered by filed_path's
+    own line count so far -- the fact a real file_issue_command's stdout
+    would carry, and what the .filed marker beside each stop record is
+    meant to hold (issue #89)."""
     toml = root / "attavo.toml"
-    toml.write_text(toml.read_text() + f'\nfile_issue_command = "cat >> {filed_path}"\n')
+    command = (f"n=$(wc -l < {filed_path} 2>/dev/null || echo 0); "
+              f"cat >> {filed_path}; "
+              f"echo https://github.com/tenant/repo/issues/$((n + 1))")
+    toml.write_text(toml.read_text() + f"\nfile_issue_command = '{command}'\n")
     commit_all(root, "configure issue filing")
 
 
@@ -379,6 +385,67 @@ def test_drive_files_a_stop_it_reports_exactly_once(tmp_path):
     assert len(filed_bodies_after) == 2
     assert filed_bodies_after[0] == filed_bodies[0]
     assert filed_bodies_after[1]["record"] == "records/1/build-02.json"
+
+
+def test_drive_marker_holds_the_filing_commands_stdout_and_is_committed_with_the_record(tmp_path):
+    """A stop's own .filed marker is written before the record is
+    transported, so it carries the filing command's stdout (the issue it
+    opened) and rides in the very same commit as the record and its log
+    -- one commit, one push, as before this fix. Red before it: the
+    marker was written empty, after commit_record and push_record_commit
+    had already run, so it was never part of any commit at all.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    bare = add_bare_remote(root, tmp_path)
+    approve_item(root)
+    filed = tmp_path / "filed.jsonl"
+    configure_filing(root, filed)
+
+    run = run_attavo(root, "drive", "1",
+                     env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    assert run.returncode == 3
+
+    marker_path = records_dir(root) / "build-01.filed"
+    assert marker_path.is_file()
+    assert marker_path.read_text().strip() == "https://github.com/tenant/repo/issues/1"
+
+    committed = set(last_commit_paths(root))
+    assert committed == {"records/1/build-01.json", "records/1/build-01.log",
+                         "records/1/build-01.filed"}
+    assert remote_head(bare) == head_of(root)
+
+
+def test_drive_a_second_run_in_the_same_state_files_nothing(tmp_path):
+    """Issue #89. The marker committed and pushed above is the fact a
+    second worktree or a fresh clone reads too -- a second drive run
+    against the same records, from a fresh clone of the remote drive
+    already pushed to, files nothing for the stop that clone already
+    carries a marker for. Red before this fix: the marker never reached
+    the remote at all, so every clone refiled every stop it found.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    bare = add_bare_remote(root, tmp_path)
+    approve_item(root)
+    filed = tmp_path / "filed.jsonl"
+    configure_filing(root, filed)
+
+    run = run_attavo(root, "drive", "1",
+                     env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    assert run.returncode == 3
+    filed_after_first = filed.read_text()
+    assert filed_after_first.strip() != ""
+
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    clone = tmp_path / "fresh-clone"
+    subprocess.run(["git", "clone", "--quiet", "--branch", branch, str(bare), str(clone)],
+                   check=True)
+
+    run2 = run_attavo(clone, "file-stops", "1")
+    assert run2.returncode == 0
+    assert "no stops to file" in run2.stdout
+    assert filed.read_text() == filed_after_first  # nothing new was filed
 
 
 def test_drive_retries_a_rejected_push_with_a_merge_never_a_rebase(tmp_path):

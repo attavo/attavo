@@ -26,11 +26,17 @@ def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def configure_filing(root: Path, filed_path: Path) -> None:
-    """[forge].file_issue_command reads one stop as JSON on stdin; this
-    stand-in just appends it to a local file, one line per call, so the
-    test can read back what would have been filed."""
+    """[forge].file_issue_command reads one stop as JSON on stdin, appends
+    it to a local file (one line per call, so the test can read back what
+    would have been filed), and prints a fake issue URL on stdout -- the
+    number is the call's own place in filed_path's line count, so two
+    calls in one run print two different URLs, the way two real issues
+    would."""
     toml = root / "attavo.toml"
-    toml.write_text(toml.read_text() + f'\n[forge]\nfile_issue_command = "cat >> {filed_path}"\n')
+    command = (f"n=$(wc -l < {filed_path} 2>/dev/null || echo 0); "
+              f"cat >> {filed_path}; "
+              f"echo https://github.com/tenant/repo/issues/$((n + 1))")
+    toml.write_text(toml.read_text() + f"\n[forge]\nfile_issue_command = '{command}'\n")
     commit_all(root, "configure issue filing")
 
 
@@ -103,6 +109,47 @@ def test_file_stops_files_one_issue_per_stop_record_and_is_idempotent(tmp_path):
     assert "no stops to file" in run2.stdout
     filed_bodies_after = [json.loads(l) for l in filed.read_text().splitlines() if l.strip()]
     assert filed_bodies_after == filed_bodies
+
+
+def test_file_stops_marker_holds_the_filing_commands_stdout(tmp_path):
+    """The .filed marker beside a stop record it just filed carries the
+    filing command's own stdout -- the issue it opened -- not an empty
+    file that only says "filed" with no way to say which issue."""
+    root = make_tenant(tmp_path, "build_valid")
+    filed = tmp_path / "filed.jsonl"
+    configure_filing(root, filed)
+
+    record_path = write_build_record(
+        root, "1", 1, "refused",
+        {"class": "claims-boundary", "provenance": "spec", "detail": None})
+
+    run = run_attavo(root, "file-stops", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+
+    marker = record_path.with_suffix(".filed")
+    assert marker.is_file()
+    assert marker.read_text().strip() == "https://github.com/tenant/repo/issues/1"
+
+
+def test_file_stops_leaves_the_marker_uncommitted(tmp_path):
+    """A run of attavo file-stops by hand, outside drive, writes the
+    marker and leaves committing to the caller -- the same as build and
+    verify leave their own records uncommitted."""
+    root = make_tenant(tmp_path, "build_valid")
+    filed = tmp_path / "filed.jsonl"
+    configure_filing(root, filed)
+
+    record_path = write_build_record(
+        root, "1", 1, "refused",
+        {"class": "claims-boundary", "provenance": "spec", "detail": None})
+
+    run = run_attavo(root, "file-stops", "1")
+    assert run.returncode == 0
+
+    status = subprocess.run(["git", "-C", str(root), "status", "--porcelain",
+                             str(record_path.with_suffix(".filed").relative_to(root))],
+                            capture_output=True, text=True, check=True).stdout
+    assert status.startswith("??")  # untracked -- file-stops never git-adds it
 
 
 def test_file_stops_leaves_a_pass_record_alone(tmp_path):

@@ -99,7 +99,10 @@ file-stops opens one tenant issue per stop record of the item with no
 issue filed for it yet, through [forge].file_issue_command, naming the
 class, the provenance, the record path, and the log's last twenty
 lines; a record it has already filed carries a <stage>-NN.filed marker
-beside it, so a second run files nothing new. It refuses (exit 1,
+beside it, holding the filing command's own stdout, so a second run
+files nothing new. Like a build or verify record, this command writes
+the marker and leaves it uncommitted -- drive commits it, in the same
+commit as the record it names (issue #89). It refuses (exit 1,
 nothing filed) a stop whose class is unclassed and whose detail is
 empty -- a stop the product cannot even describe is not filed as if it
 could. See issue #89's lane for the full rules it enforces.
@@ -148,16 +151,18 @@ that approval runs build; a passing build with the forge green on the
 branch head (polled for a bound, not the manifest) runs verify; a passing
 verify with the forge still green prints that the item is ready to merge
 and stops there -- the merge is never drive's own act, and it enqueues
-nothing. Every record build or verify writes, drive commits with `git
-commit --only` on the record and its log alone, never sweeping the index,
-then pushes; a push a divergent remote rejects is retried once after `git
-pull --no-rebase --no-edit`, never a rebase, since the record already
-names the commit's sha. drive writes no record of its own: a second run
-in the same state repeats the same step or the same stop, reading exactly
-what the prior run left behind. A stop it reports calls file-stops once
-(issue #89), which is the only thing drive can leave behind beside a
-record and its log -- the .filed marker file-stops writes once it has
-filed. See issue #84's lane for the full rules it enforces.
+nothing. A record build or verify writes that is not pass is filed
+(file-stops, issue #89) before it is transported, so its .filed marker
+exists in time to be committed alongside it; drive then commits the
+record, its log, and that marker together with `git commit --only`,
+never sweeping the index, and pushes; a push a divergent remote rejects
+is retried once after `git pull --no-rebase --no-edit`, never a rebase,
+since the record already names the commit's sha. drive writes no record
+of its own: a second run in the same state repeats the same step or the
+same stop, reading exactly what the prior run left behind -- the marker
+included, so a stop already filed is never filed again, from this
+worktree or a fresh one. See issue #84's lane for the full rules it
+enforces.
 """
 from __future__ import annotations
 
@@ -1673,15 +1678,21 @@ def poll_forge_checks(root: Path, checks_command: str, sha: str) -> tuple[dict, 
 
 
 def commit_record(root: Path, record_path: Path, message: str) -> None:
-    """`git commit --only` on record_path and its .log, if one exists --
-    never the whole index. A transport commit that sweeps the index is
-    exactly the regression issue #46 already guards build and verify
-    against on the adapter side; drive must not reintroduce it on the
-    transport side."""
+    """`git commit --only` on record_path and its .log and .filed, each if
+    one exists -- never the whole index. A transport commit that sweeps
+    the index is exactly the regression issue #46 already guards build
+    and verify against on the adapter side; drive must not reintroduce it
+    on the transport side. The .filed marker (issue #89) is committed
+    alongside the record it names, in the same commit and the same push,
+    so a second worktree or a fresh clone reads the same filed fact
+    rather than refiling every stop it finds with no marker of its own."""
     paths = [str(record_path.relative_to(root))]
     log_path = record_path.with_suffix(".log")
     if log_path.is_file():
         paths.append(str(log_path.relative_to(root)))
+    marker_path = record_path.with_suffix(".filed")
+    if marker_path.is_file():
+        paths.append(str(marker_path.relative_to(root)))
     git(root, "add", *paths)
     git(root, "commit", "--only", "-m", message, *paths)
 
@@ -1743,10 +1754,17 @@ def drive_state(root: Path, m: dict, item_id: str) -> tuple[str, str | None, Pat
 def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, item_id: str) -> int:
     """Runs build or verify in-process -- the same command `attavo build`
     or `attavo verify` would run, printing the same reason on a refusal,
-    failure, or halt. Any record it wrote is then transported: committed
-    alone with commit_record and pushed with push_record_commit, whatever
-    its status -- the record pushes stay the same pushes, made by drive in
-    the run that produced the record (issue #84's rule 42 row)."""
+    failure, or halt. A non-pass record is filed (cmd_file_stops, issue
+    #89) before it is transported, so a stop's own .filed marker -- the
+    filing command's stdout, the issue file-stops just opened -- exists
+    on disk in time to be committed and pushed in the very same commit as
+    the record and its log; a marker written only after the push would
+    never reach the ledger at all, and a second worktree or a fresh clone
+    would refile every stop it finds with no marker beside it. The record
+    is then transported: committed with commit_record and pushed with
+    push_record_commit, whatever its status -- the record pushes stay the
+    same pushes, made by drive in the run that produced the record
+    (issue #84's rule 42 row)."""
     before = latest_attempt_path(records_dir, stage)
     rc = cmd_build([item_id]) if stage == "build" else cmd_verify([item_id])
     after = latest_attempt_path(records_dir, stage)
@@ -1755,6 +1773,15 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, ite
         # Refused before writing anything at all (e.g. no adapter
         # configured) -- the stage command already printed why.
         return rc if rc != 0 else 1
+
+    record = latest_record(records_dir, stage)
+    status_out = record.get("status")
+    if status_out != "pass":
+        # file-stops is its own idempotent read of the item's records, so
+        # calling it here on every run that wrote a non-pass record is
+        # safe to call again on a later run: an already-filed stop's own
+        # marker is what stops it from being filed twice.
+        cmd_file_stops([item_id])
 
     message = f"attavo: {stage} record for item {item_id} ({after.stem})"
     try:
@@ -1768,8 +1795,6 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, ite
         print(f"attavo drive: stopped: could not push the {stage} record: {err}")
         return 1
 
-    record = latest_record(records_dir, stage)
-    status_out = record.get("status")
     if status_out == "halted":
         question = (record.get("halted") or {}).get("question")
         print(f"attavo drive: stopped: {stage} halted: {question} ({after.name}); "
@@ -1780,15 +1805,6 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, ite
               f"pushed to {branch}")
     else:
         print(f"attavo drive: pushed {after.name} to {branch}")
-
-    if status_out != "pass":
-        # Issue #89, acceptance row 5: every stop drive reports is filed --
-        # the reviewing session as the diagnoser and filer of stops (two
-        # of each on tenant zero's #659) is exactly what this retires.
-        # file-stops is its own idempotent read of the item's records, so
-        # calling it here on a status this run's own commit already
-        # pushed is safe to call again unconditionally on a later run.
-        cmd_file_stops([item_id])
     return rc
 
 
@@ -1925,7 +1941,12 @@ def cmd_file_stops(argv: list[str]) -> int:
     # its .log sidecar -- is what makes a second run file nothing: no new
     # artifact beside the records (the gate output already lives in the
     # log), just a fact about this one record, in the one place a reader
-    # already looks.
+    # already looks. It carries the filing command's own stdout (the
+    # issue it opened), so that fact is kept, not just the fact of
+    # filing. This command never commits it -- the same as build and
+    # verify, which write their own records uncommitted -- a caller that
+    # wants it on the ledger commits it itself; drive does, in the same
+    # commit as the record and its log (issue #89).
     pending: list[tuple[str, int, dict, Path]] = []
     for stage in STOP_STAGES:
         attempts = parse_attempts(item_records_dir, stage)
@@ -1966,7 +1987,7 @@ def cmd_file_stops(argv: list[str]) -> int:
             print(f"attavo file-stops: refused: filing {stage}-{n:02d} exited {run.returncode}: "
                   f"{run.stderr.strip()}")
             return 1
-        marker.write_text("")
+        marker.write_text(run.stdout)
 
     print(f"attavo file-stops: filed {len(pending)} issue(s)")
     return 0
