@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from helpers import commit_all, make_tenant
+from helpers import commit_all, git, make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
@@ -296,3 +296,66 @@ def test_built_refuses_a_criterion_failing_on_both(tmp_path):
     assert rec["refusal"] == "criterion fails against the tree plus stub: extra.sh"
     by_name = {c["name"]: c for c in rec["criteria"]}
     assert by_name["extra.sh"] == {"name": "extra.sh", "on_tree": 1, "on_stub": 1}
+
+
+def write_build_record(root: Path, item: str, *, sha: str, status: str) -> None:
+    """A minimal build-01.json, faked directly rather than run through the
+    fixture adapter: the adapter has no way to both commit and halt with a
+    question in one invocation (adapters/fixture/run answers a question
+    before it ever reaches the write-and-commit step), and cmd_spec_gate
+    reads nothing off a build record but sha and status.
+    """
+    records_dir = root / "records" / item
+    records_dir.mkdir(parents=True, exist_ok=True)
+    (records_dir / "build-01.json").write_text(json.dumps({"sha": sha, "status": status}) + "\n")
+
+
+def test_spec_gate_built_after_halted_build_that_committed(tmp_path):
+    """Issue #98, acceptance 1. The executor commits its work, then halts
+    with a question -- the common shape, since it commits before it asks.
+    An amendment above the line must still be judged against the tree the
+    halted build produced, not refused for the success that tree already
+    holds. Red today: refused, "criterion passes against the tree:
+    checks_marker.sh" -- the status != "halted" clause excluded the one
+    build that had done the work; tenant zero's #663 build-01/spec-02 is
+    the specimen.
+    """
+    root = make_tenant(tmp_path, "valid")
+    approve_valid(root)
+    complete_the_build(root)
+    build_sha = git(root, "rev-parse", "HEAD").strip()
+    write_build_record(root, "1", sha=build_sha, status="halted")
+
+    amend_problem(root)
+
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0
+
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "built"
+    assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 0, "on_stub": 0}]
+    assert rec["refusal"] is None
+
+
+def test_spec_gate_stub_verdict_after_halted_build_that_committed_nothing(tmp_path):
+    """Issue #98, acceptance 2. A halted build whose sha equals its
+    start_sha did no work -- commit_postdates already treats that as
+    postdating nothing -- so the gate must keep judging it against the
+    stub, exactly as before the fix: Phase 1's rule, not built. The
+    criterion still fails on the real tree (no build ever touched it) and
+    passes on the stub, so the verdict is pass, not built and not refused.
+    """
+    root = make_tenant(tmp_path, "valid")
+    approve_valid(root)
+    approval_sha = git(root, "rev-parse", "HEAD").strip()
+    write_build_record(root, "1", sha=approval_sha, status="halted")
+
+    amend_problem(root)
+
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0
+
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "pass"
+    assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 1, "on_stub": 0}]
+    assert rec["refusal"] is None
