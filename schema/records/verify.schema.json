@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/verify/3",
+  "$id": "https://attavo.dev/schema/records/verify/4",
   "title": "attavo verify record (verify-NN.json)",
   "type": "object",
   "additionalProperties": false,
@@ -111,12 +111,12 @@
         "class": {
           "type": "string",
           "enum": ["non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
-                   "ceiling", "claims-boundary", "repeated-act", "unclassed"]
+                   "ceiling", "claims-boundary", "repeated-act", "unclassed", "question"]
         },
         "provenance": {"type": "string", "enum": ["product", "tenant", "executor", "spec"]},
         "detail": {
           "type": ["string", "null"],
-          "description": "Populated only for class \"unclassed\", with the log's last line; null for every other class, whose evidence already lives in forge_checks or the log itself."
+          "description": "Populated for class \"unclassed\" (the log's last line, capped at 200 characters) and class \"question\" (the halt's own question, its first line only); null for every other class, whose evidence already lives in forge_checks or the log itself."
         }
       }
     },
