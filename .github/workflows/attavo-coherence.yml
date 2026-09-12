@@ -1,0 +1,119 @@
+# Template. Copy this file into your own .github/workflows/ and fill in
+# uses: <owner>/attavo@<tag> below. Not vendored or executed by Attavo's
+# own repository -- this is the tenant's workflow, not the product's.
+#
+# `attavo attest` derives the merged item from the merge ref's own record
+# paths, refuses unless that item's chain holds, and prints the
+# attestation statement to stdout -- it never writes to the tree (issue
+# #69: the four stage records already under paths.records are the
+# evidence; this job seals them). This workflow runs it on pull_request,
+# against the pull request's own merge ref, and on merge_group, against
+# the exact tree the merge will produce, so an incoherent chain refuses
+# while the branch can still be pushed to.
+#
+# On pull_request the run line also carries --partial (issue #67): the
+# verify record a complete chain would need is the output of `attavo
+# verify`, which itself waits on this check going green, so the two
+# checks deadlock without it. --partial treats a missing later record as
+# "not yet" rather than a refusal, while still enforcing that a build's
+# approval_sha names the latest approval and a verify's build_sha names
+# the latest build. merge_group and a push to main still demand the whole
+# chain -- nothing runs after either that could still supply a record
+# found missing there. attest's stdout -- the statement, or a not-yet or
+# zero-item line -- is captured to a plain file, and the attest step
+# itself reads whether that file parses as a JSON object into its own
+# `statement` output: a python3 -c json.load check, its exit status read
+# into the output, never a grep -- a grep would say yes for any line that
+# merely looks like JSON, which a not-yet line's stage names could. The
+# not-yet and zero-item lines are prose, not JSON, and a merge group can
+# carry no item exactly as easily as a pull request can; without this
+# check the steps below would hand actions/attest that prose the moment
+# the pin lane's own installing merge -- which touches no item -- reached
+# the queue.
+#
+# Only on merge_group -- github.sha there resolves to the commit that
+# will actually land on main, not the merge queue's own temporary ref --
+# and only when attest's own output says the captured file is a
+# statement, two further steps run: a sha256 digest of that commit's own
+# sha text (deterministic and reproducible from the sha alone), and
+# actions/attest@v2, signing attest's printed statement as the predicate,
+# https://attavo.dev/attestation/v1, over that digest. Signing here
+# replaces the post-merge attest workflow this product shipped before
+# (issue #69): the four stage records are the evidence, and the bundle
+# actions/attest@v2 writes to the forge's attestation store is the seal
+# over them -- no attestation record is ever written to the tree.
+#
+# Neither step carries continue-on-error. Ruled: a merge without a
+# signature is unattested, and the product's claim is that nothing merges
+# unattested, so a signing failure fails this required context and the
+# merge does not happen. This reverses the 2026-09-09 refusal-tolerance
+# ruling for the step that used to patch a record's signed field either
+# way; there is no record left for that patch to write to, and a tenant
+# whose signing provider is unavailable un-requires this context as its
+# own act, on its own ledger -- not a default this template supplies.
+#
+# This step is not folded into attavo-spec-gate.yml's job, for two
+# reasons: that job skips an ordinary pull request from any branch that
+# doesn't start with attavo/ (issue #12), and every step after its skip
+# step is skipped on a record-only commit. An approval push is a
+# record-only commit -- including a re-approval after a build, the exact
+# shape that broke the chain on tenant zero (approval-07, issue #62) --
+# so folding coherence into that job would skip the check on precisely
+# the commit most likely to need it. Coherence has neither restriction:
+# it runs on any pull request, record-only commit or not, and reports its
+# own required context so a tenant can gate the merge queue on it without
+# widening the spec-gate job's guards.
+#
+# actions/checkout@v4 takes no ref: -- the pull_request and merge_group
+# events default to the merge commit checkout already needs, the same
+# tree `attavo attest` reads git diff --name-only HEAD^1 HEAD against.
+# fetch-depth: 0 keeps that first parent reachable.
+#
+# No app token is minted and nothing is pushed: attest prints, it never
+# writes, and the signed statement lives in the forge's attestation
+# store, not in a commit this job makes.
+name: Attavo coherence
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  merge_group:
+
+jobs:
+  coherence:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: attavo/attavo@v0.17.1
+
+      - name: attavo attest
+        id: attest
+        run: |
+          attavo attest ${{ github.event_name == 'pull_request' && '--partial' || '' }} > "$RUNNER_TEMP/attestation.json"
+          if python3 -c "import json,sys; sys.exit(0 if isinstance(json.load(open(sys.argv[1])), dict) else 1)" "$RUNNER_TEMP/attestation.json" 2>/dev/null; then
+            echo "statement=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "statement=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute the merge commit's subject digest
+        id: subject
+        if: github.event_name == 'merge_group' && steps.attest.outputs.statement == 'true'
+        run: echo "digest=sha256:$(printf '%s' "${{ github.sha }}" | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Sign the attestation record
+        id: sign
+        if: github.event_name == 'merge_group' && steps.attest.outputs.statement == 'true'
+        uses: actions/attest@v2
+        with:
+          subject-name: ${{ github.sha }}
+          subject-digest: ${{ steps.subject.outputs.digest }}
+          predicate-type: https://attavo.dev/attestation/v1
+          predicate-path: ${{ runner.temp }}/attestation.json

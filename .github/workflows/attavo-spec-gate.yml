@@ -1,0 +1,99 @@
+# Template. Copy this file into your own .github/workflows/ and fill in
+# uses: <owner>/attavo@<tag> below. Not vendored or executed by Attavo's
+# own repository -- this is the tenant's workflow, not the product's.
+#
+# A push to a work item's PR runs `attavo spec-gate`, then commits and
+# pushes the resulting spec-NN.json -- the push is what binds the record to
+# the commit it graded. That push is itself a commit on the branch, so
+# without the skip step below it would retrigger this same workflow, which
+# would push another record, forever (issue #9). The skip step reads
+# `attavo record-only`'s exit code -- whether the *triggering* commit
+# touched anything outside paths.records, decided once in the product
+# rather than in this template's own shell (issue #19); a record-only
+# commit (the gate's own push) skips every step after it.
+#
+# The job only runs on a work item's attavo/N-* branch: this event fires on
+# every pull_request, and a PR from any other branch has no item id for the
+# gate to derive, so it would exit 2 and fail the required check on ordinary
+# PRs (issue #12). A branch that doesn't match skips the job, which
+# satisfies a required check rather than failing it.
+#
+# on: also declares merge_group, with the job's if: unchanged -- there is
+# no attavo/N-* head_ref on a merge group's own synthetic ref, so the job
+# skips there too, satisfying the required context on the queue the same
+# way it does on an ordinary pull request. The gate itself belongs on the
+# pull request, once, before the queue; the full suite runs again on the
+# merge group (issue #62's coherence template among them).
+#
+# The push authenticates as a GitHub App installation, not a bot account
+# with no login behind it: an app-token step mints an installation token
+# from the tenant's own app credentials, checkout uses it for the push,
+# and the commit's author and committer are read from the app's own bot
+# user at run time, never typed into the template. A push authenticated
+# this way is what creates the pull_request run on the record commit --
+# with the skip step above, that run completes instead of retriggering
+# the gate.
+#
+# The commit-and-push step carries if: always() -- a refusal is exactly
+# the record most worth having on the branch, and a step after a failed
+# one is skipped by default (issue #28: a refusal record existed only in
+# the run log, never reached the branch). The job's own conclusion still
+# tracks the gate: a failed `attavo spec-gate` step fails the job even
+# though the push step afterward succeeds, since nothing here sets
+# continue-on-error.
+name: Attavo spec gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  merge_group:
+
+jobs:
+  spec-gate:
+    if: startsWith(github.head_ref, 'attavo/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Mint an installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.ATTAVO_APP_ID }}
+          private-key: ${{ secrets.ATTAVO_APP_PRIVATE_KEY }}
+
+      - name: Resolve the app's bot identity
+        id: bot
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          login="${{ steps.app-token.outputs.app-slug }}[bot]"
+          id="$(gh api "/users/$login" --jq .id)"
+          echo "login=$login" >> "$GITHUB_OUTPUT"
+          echo "email=${id}+${login}@users.noreply.github.com" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - uses: attavo/attavo@v0.17.1
+
+      - name: Skip when the head commit only touches records
+        id: touch
+        run: attavo record-only && echo skip=true >> "$GITHUB_OUTPUT" || echo skip=false >> "$GITHUB_OUTPUT"
+
+      - name: attavo spec-gate
+        if: steps.touch.outputs.skip != 'true'
+        run: attavo spec-gate
+
+      - name: Commit and push the spec-gate record
+        if: always() && steps.touch.outputs.skip != 'true'
+        run: |
+          git config user.name "${{ steps.bot.outputs.login }}"
+          git config user.email "${{ steps.bot.outputs.email }}"
+          records_rel="$(python3 -c "import tomllib; print(tomllib.load(open('attavo.toml','rb'))['paths']['records'])")"
+          git add "$records_rel"
+          git commit -m "attavo: spec-gate record for #${{ github.event.pull_request.number }}"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
