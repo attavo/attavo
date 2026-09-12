@@ -115,8 +115,12 @@ def dry_run(tmp_path: Path, config: dict | None = None,
     return json.loads(run.stdout)["argv"]
 
 
-def run_with_response(tmp_path: Path, response: dict,
+def run_with_response(tmp_path: Path, response: dict | list[dict],
                       extra_env: dict | None = None) -> subprocess.CompletedProcess:
+    """response is a single canned result (repeats for every invocation
+    this adapter makes) or a list, one result per invocation in order,
+    its last element repeating once exhausted (issue #88: the
+    non-question retry is a second invocation inside one adapter run)."""
     response_file = tmp_path / "response.json"
     response_file.write_text(json.dumps(response))
     env = base_env(tmp_path)
@@ -427,6 +431,108 @@ def test_build_instruction_names_the_feedback_files_path_not_its_text(tmp_path):
     assert str(feedback_path) in instruction
     assert str(feedback_path.stat().st_size) in instruction
     assert "a failing test line" not in instruction
+
+
+def _response(question=None, status="done", subagent_stats=None) -> dict:
+    response = {
+        "is_error": False,
+        "structured_output": {"status": status, "question": question},
+        "usage": {"input_tokens": 5, "output_tokens": 9},
+        "total_cost_usd": 0.01,
+        "modelUsage": {"claude-sonnet-5": {"inputTokens": 5, "outputTokens": 9}},
+    }
+    if subagent_stats is not None:
+        response["subagent_stats"] = subagent_stats
+    return response
+
+
+REPORT_1 = ("I've traced the spec's 5 criteria against the tree and "
+           "dispatched an implementation agent to continue the work.")
+REPORT_2 = ("Running the acceptance suite in the background to find the "
+           "specific test failure that is blocking this item.")
+PROPER_QUESTION = ("Which of the two conflicting rulings on issue #12 "
+                  "applies to criterion 3?")
+
+
+def test_claude_code_disallowedtools_names_the_subagent_tools(tmp_path):
+    """Issue #88, rejection test 3 (part 1). Both build and verify carry
+    the subagent tool names in --disallowedTools -- confirmed live
+    (claude 2.1.269) that --allowedTools alone does not stop a spawn a
+    tenant-zero specimen made with neither tool in it at all.
+    """
+    build = dry_run(tmp_path)
+    assert build[build.index("--disallowedTools") + 1] == "Agent,Workflow"
+
+    verify = dry_run(tmp_path, extra_env={"ATTAVO_STAGE": "verify"})
+    assert verify[verify.index("--disallowedTools") + 1] == "Agent,Workflow"
+
+
+def test_claude_code_refuses_a_result_with_spawned_subagents(tmp_path):
+    """Issue #88, rejection test 3 (part 2). Specimen: tenant zero #659
+    build-01 -- subagent_stats.spawned: 3 with two killed at the tool's
+    own 600s ceiling, reported as done. A response carrying spawned work
+    is refused by name, with the counts, rather than accepted -- checked
+    on the response itself, not the flag that was supposed to forbid it.
+    """
+    response = _response(
+        subagent_stats={"spawned": 3, "completed": 1,
+                        "killed": {"parent": 0, "user": 0, "system": 2},
+                        "started_in_background": 3})
+    run = run_with_response(tmp_path, response)
+    assert run.returncode == 1
+    assert "subagent_stats.spawned=3" in run.stderr
+    assert "killed=2" in run.stderr
+
+
+def test_claude_code_report_without_question_mark_is_reinstructed_once(tmp_path):
+    """Issue #88, rejection test 1. A "question" with no "?" is a report,
+    not a question (five of tenant zero's twelve non-pass build
+    records): the adapter re-invokes once, appending REINSTRUCTION, and
+    a proper question on the retry is returned as the question -- no
+    halt on the first report at all.
+    """
+    responses = [_response(question=REPORT_1, status="question"),
+                _response(question=PROPER_QUESTION, status="question")]
+    run = run_with_response(tmp_path, responses)
+    assert run.returncode == 0, run.stderr
+    assert REPORT_1 in run.stdout
+    assert PROPER_QUESTION in run.stdout
+    line = json.loads(run.stdout.splitlines()[-1])
+    assert line["status"] == "question"
+    assert line["question"] == PROPER_QUESTION
+    assert "class" not in line
+
+
+def test_claude_code_report_without_question_mark_can_finish_done_on_retry(tmp_path):
+    """Issue #88, rejection test 1 (done on the retry). REINSTRUCTION
+    offers "continue to done" as the other way out of a report; this is
+    not itself in the acceptance table but is the plain reading of it.
+    """
+    responses = [_response(question=REPORT_1, status="question"),
+                _response(status="done")]
+    run = run_with_response(tmp_path, responses)
+    assert run.returncode == 0, run.stderr
+    line = json.loads(run.stdout.splitlines()[-1])
+    assert line["status"] == "done"
+    assert line["question"] is None
+
+
+def test_claude_code_two_reports_in_a_row_halts_with_class_non_question(tmp_path):
+    """Issue #88, rejection test 2. Two non-questions in a row still
+    halt -- someone must look -- but the report line names the class so
+    a reader can tell it apart from a genuine question, and both raw
+    results (not just the second, previously the only one kept) reach
+    the transcript.
+    """
+    responses = [_response(question=REPORT_1, status="question"),
+                _response(question=REPORT_2, status="question")]
+    run = run_with_response(tmp_path, responses)
+    assert run.returncode == 0, run.stderr
+    assert REPORT_1 in run.stdout
+    assert REPORT_2 in run.stdout
+    line = json.loads(run.stdout.splitlines()[-1])
+    assert line["status"] == "question"
+    assert line["class"] == "non-question"
 
 
 def test_claude_code_tokens_input_includes_cached_tokens(tmp_path):
