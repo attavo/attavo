@@ -3,6 +3,11 @@
   "response_env": "ATTAVO_ADAPTER_RESPONSE_FILE",
   "tool_binary": "claude",
   "reports": ["tokens", "cost_usd"],
+  "input_limit": {
+    "unit": null,
+    "value": null,
+    "reason": "claude code documents no numeric input-size ceiling anywhere in its own surface (--help, docs, or any config file, confirmed against claude 2.1.269) -- this adapter asserts its own instruction stays under a fixed 64 KB bound instead"
+  },
   "success_script": "#!/bin/sh\ngit commit -q --allow-empty -m 'adapter commit'\nprintf '{\"is_error\": false, \"structured_output\": {\"status\": \"done\", \"question\": null}, \"usage\": {\"input_tokens\": 1, \"output_tokens\": 1}, \"modelUsage\": {\"claude-sonnet-5\": {\"inputTokens\": 1, \"outputTokens\": 1}}}\\n'\n",
   "subagent_guard": {
     "supported": true,

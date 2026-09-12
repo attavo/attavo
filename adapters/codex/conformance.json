@@ -3,6 +3,11 @@
   "response_env": "ATTAVO_ADAPTER_RESPONSE_FILE",
   "tool_binary": "codex",
   "reports": ["tokens"],
+  "input_limit": {
+    "unit": "chars",
+    "value": 1048576,
+    "reason": null
+  },
   "subagent_guard": {
     "supported": false,
     "reason": "codex exec's --help, its JSONL event stream (thread.*, turn.*, item.*), and its --output-schema/--output-last-message response name no subagent or background-task concept at all (confirmed against codex-cli 0.153.4) -- codex drives sandboxed shell commands as a single agent, with no tool of its own that could spawn work outliving this invocation the way issue #88's claude-code specimen did"
