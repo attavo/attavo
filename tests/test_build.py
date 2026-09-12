@@ -488,6 +488,35 @@ def test_build_ceiling_error_line_carries_ceiling_stop(tmp_path):
     assert "input_too_large" in log
 
 
+def test_build_adapter_ceiling_refusal_on_a_declared_limit_carries_ceiling_stop(tmp_path):
+    """Issue #93 union with issue #89. adapters/claude-code/run now
+    refuses pre-emptively -- before claude is ever invoked -- when its
+    instruction exceeds its declared or fixed input limit, naming both
+    numbers and the word "ceiling" (ATTAVO_ADAPTER_INPUT_LIMIT_CHARS
+    overrides the bound here so the fixture's own small instruction is
+    enough to exceed it, standing in for a real oversized one). Unlike
+    issue #86's specimen -- a raw tool error line ("input_too_large")
+    caught by CEILING_MARKERS -- this refusal is the adapter's own text,
+    which must still derive ceiling/product through the real
+    derive_stop, not executor (issue #88's classes are executor
+    judgments; a ceiling is a fact about the tool, not one).
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    use_claude_code_adapter(root)
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1",
+                     env={"ATTAVO_ADAPTER_INPUT_LIMIT_CHARS": "10"})
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    assert rec["status"] == "failed"
+    assert rec["stop"] == {"class": "ceiling", "provenance": "product", "detail": None}
+    log = (root / "records" / "1" / "build-01.log").read_text()
+    assert "ceiling" in log
+    assert "10" in log
+
+
 def test_build_halted_on_a_plain_report_is_unclassed(tmp_path):
     """A halt whose question, refusal, and log name none of the
     enumerated classes -- the fixture adapter's own halt, which (unlike

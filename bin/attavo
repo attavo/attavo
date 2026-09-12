@@ -474,15 +474,27 @@ STOP_CLASSES = ("non-question", "outlived-invocation", "no-cause", "forge-unconc
 CLASS_TEXT_MARKERS: dict[str, tuple[str, ...]] = {
     "outlived-invocation": ("outlived-invocation", "outlive this invocation",
                             "can outlive this invocation"),
+    # Issue #93: ceiling's own text-based check is CEILING_MARKERS, below,
+    # with provenance "product" -- a fact about the tool, not an executor
+    # judgment like non-question/outlived-invocation are. Left at the
+    # default (the class's own name, "ceiling"), the generic match above
+    # would instead catch adapters/codex/run's and
+    # adapters/claude-code/run's own pre-emptive refusal -- which must
+    # carry the word "ceiling" by the same issue's own brief -- as
+    # provenance "executor", before CEILING_MARKERS is ever consulted.
+    "ceiling": (),
 }
 
 # Known tool error text for a declared ceiling -- issue #86's own specimen
 # (codex's "Input exceeds..." line on a diff too large to judge) is
 # "input_too_large"; a matching line anywhere in the log, not only its
 # last line, since cmd_build and cmd_verify both append "[adapter exited
-# N]" after whatever the tool itself printed.
+# N]" after whatever the tool itself printed. "ceiling exceeded" is issue
+# #93's own addition: both adapters now refuse pre-emptively, before the
+# tool is ever invoked, against a declared or fixed input limit, and
+# their refusal text is not caught by any of the three markers above.
 CEILING_MARKERS = ("input_too_large", "exceeds the maximum context length",
-                  "context_length_exceeded")
+                  "context_length_exceeded", "ceiling exceeded")
 
 
 def _log_last_line(log: str | None) -> str:
