@@ -13,7 +13,7 @@
     attavo attest [--partial] [N]
     attavo drive [N]
 
-The doctor is the definition of done. It asserts three proofs against a
+The doctor is the definition of done. It asserts four proofs against a
 tenant root and exits 1 until every proof holds:
 
   1. every-gate-rejects      every gate in the manifest's [gates] table,
@@ -29,6 +29,16 @@ tenant root and exits 1 until every proof holds:
                              paths.records (a record is committed with the
                              code it describes; an item's merge commit
                              carries its own record paths this way)
+  4. no-stop-lacks-cause     every build or verify record under
+                             paths.records at record_version 3 or later,
+                             with a status other than pass, carries a stop
+                             naming an enumerated class and provenance, a
+                             non-empty detail when unclassed, the gates
+                             heading when a build failed after running
+                             them, and the tool's own error line when an
+                             adapter exit ended the log -- records before
+                             record_version 3 are counted and reported,
+                             never refused
 
 Nothing in doctor is a gate. The doctor reads; it never writes and it never
 blocks a merge by itself. It is what CI runs to say whether the product
@@ -462,6 +472,7 @@ def write_record(records_dir: Path, stage: str, record: dict, m: dict, item: str
 
 STOP_CLASSES = ("non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
                "ceiling", "claims-boundary", "repeated-act", "unclassed")
+STOP_PROVENANCES = ("product", "tenant", "executor", "spec")
 
 # Beyond the enum spelling itself, the prose issue #88 actually shipped
 # (adapters/claude-code/run and adapters/codex/run, on main since
@@ -812,11 +823,106 @@ def proof_no_commit_lacks_record(root: Path, m: dict | None) -> Proof:
                   **extra)
 
 
+ADAPTER_EXIT_RE = re.compile(r"^\[adapter exited \d+\]$")
+
+
+def _log_owes_tool_error(log: str | None) -> bool:
+    """True when a log's last non-empty line is exactly an adapter-exit
+    marker and every line before it parses as JSON -- an adapter's own
+    event stream, never a tool's own words (issue #94's own specimen,
+    tenant zero's attest/records/659/verify-01.log: codex's
+    "thread.started" event, then nothing but "[adapter exited 1]" -- the
+    tool's real error line dropped before this reached the log, issue
+    #86's own bug in split_adapter_stdout). A log that is only the exit
+    marker, nothing before it at all, still owes the same line."""
+    if not log:
+        return False
+    lines = [l for l in log.splitlines() if l.strip()]
+    if not lines or not ADAPTER_EXIT_RE.match(lines[-1]):
+        return False
+    for l in lines[:-1]:
+        try:
+            json.loads(l)
+        except ValueError:
+            return False
+    return True
+
+
+def proof_no_stop_lacks_cause(root: Path, m: dict | None) -> Proof:
+    p = Proof("no-stop-lacks-cause", "no stop lacks its cause")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
+    records_rel = m.get("paths", {}).get("records", "")
+    records_dir = root / records_rel
+    if not records_dir.is_dir():
+        return p.fail(f"no records directory under {records_dir}")
+
+    # issue #89's own window lesson, proof three's already: a record
+    # before record_version 3 has no stop by construction (schema
+    # versions 1 and 2 predate it) -- counted here, never refused.
+    older = 0
+    checked = 0
+    problems: list[str] = []
+    for item_dir in sorted(d for d in records_dir.iterdir() if d.is_dir()):
+        for stage in STOP_STAGES:
+            for n, rec in sorted(parse_attempts(item_dir, stage).items()):
+                if rec.get("record_version", 1) < 3:
+                    older += 1
+                    continue
+                if rec.get("status") == "pass":
+                    continue
+                checked += 1
+                name = f"{stage}-{n:02d}"
+                stop = rec.get("stop")
+                if not stop:
+                    problems.append(f"item {item_dir.name} {name} carries no stop")
+                    continue
+                cls, provenance = stop.get("class"), stop.get("provenance")
+                if cls not in STOP_CLASSES:
+                    problems.append(f"item {item_dir.name} {name} stop.class {cls!r} names "
+                                    f"no enumerated class")
+                    continue
+                if provenance not in STOP_PROVENANCES:
+                    problems.append(f"item {item_dir.name} {name} stop.provenance "
+                                    f"{provenance!r} names no enumerated provenance")
+                    continue
+                if cls == "unclassed" and not stop.get("detail"):
+                    problems.append(f"item {item_dir.name} {name} is unclassed with no detail")
+                    continue
+                log_path = item_dir / f"{name}.log"
+                log = log_path.read_text() if log_path.is_file() else None
+                # Issue #89, rejection test 1's own specimen (tenant
+                # zero's #659 build-01): a failed build that actually ran
+                # the gates -- selected_tests is set only once cmd_build
+                # reaches them -- owes their heading in the log, whatever
+                # else stop already says.
+                if (stage == "build" and rec.get("status") == "failed"
+                        and rec.get("selected_tests") is not None
+                        and "--- attavo gates, iteration" not in (log or "")):
+                    problems.append(f"item {item_dir.name} {name} failed after the gates ran "
+                                    f"but its log carries no gates heading")
+                    continue
+                if _log_owes_tool_error(log):
+                    problems.append(f"item {item_dir.name} {name}'s log ends in an adapter "
+                                    f"exit with nothing before it but event lines; the tool's "
+                                    f"own error line is owed")
+
+    older_note = f"{older} record(s) before stop was recorded"
+    if problems:
+        return p.fail("; ".join(problems), older_records=older)
+    if checked == 0:
+        return p.fail(f"no non-pass build or verify record at record_version >= 3 to check "
+                      f"({older_note})", older_records=older)
+    return p.hold(f"{checked} non-pass record(s) carry stop with a cause ({older_note})",
+                 older_records=older)
+
+
 def doctor(root: Path) -> list[Proof]:
     m = read_manifest(root)
     return [proof_every_gate_rejects(root, m),
             proof_one_item_every_stage(root, m),
-            proof_no_commit_lacks_record(root, m)]
+            proof_no_commit_lacks_record(root, m),
+            proof_no_stop_lacks_cause(root, m)]
 
 
 def cmd_doctor(argv: list[str]) -> int:
@@ -831,7 +937,8 @@ def cmd_doctor(argv: list[str]) -> int:
         for i, p in enumerate(proofs, 1):
             print(f"proof {i} {p.key}: {'HOLDS' if p.holds else 'FAILS'}: {p.reason}")
         print("doctor: done" if all(p.holds for p in proofs)
-              else f"doctor: not done ({sum(not p.holds for p in proofs)} of 3 proofs fail)")
+              else f"doctor: not done ({sum(not p.holds for p in proofs)} of "
+                   f"{len(proofs)} proofs fail)")
     return 0 if all(p.holds for p in proofs) else 1
 
 

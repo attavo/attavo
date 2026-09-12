@@ -419,11 +419,13 @@ def test_only_load_record_parses_record_file_content():
     """Acceptance 6: _load_record is the one place in this repository
     that turns a <stage>-NN.json record's bytes into a dict; parse_attempts
     and load_records both read through it rather than calling json.loads
-    themselves. `git grep -n "json.loads(" bin/attavo` still finds three
-    other sites -- a schema file, an adapter's conformance.json, and an
-    adapter's own stdout report -- none of them a record."""
+    themselves. `git grep -n "json.loads(" bin/attavo` still finds four
+    other sites -- a schema file, an adapter's conformance.json, an
+    adapter's own stdout report, and proof four's own read of one log
+    line at a time to tell an adapter's JSON event stream from a tool's
+    plain-text error (issue #94) -- none of them a record."""
     text = ATTAVO.read_text()
-    assert text.count("json.loads(") == 4, (
+    assert text.count("json.loads(") == 5, (
         "a new json.loads( site was added; review it against issue #60 acceptance 6 "
         "and update this count")
     assert "data = json.loads(path.read_text())" in text
