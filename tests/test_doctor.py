@@ -619,6 +619,32 @@ def test_doctor_proof_four_reports_older_records_mixing_versions_2_and_3(tmp_pat
     assert p["older_records"] == 1
 
 
+def test_doctor_proof_four_holds_with_no_non_pass_records_to_check(tmp_path):
+    """A tenant found on a real v0.16.3 pin: no non-pass build or verify
+    record at record_version 3 or later exists to check -- every item
+    passed. The clause is "every failed or refused record carries its
+    cause", which holds vacuously on an empty set, the way proof three
+    holds when nothing is unrecorded. Proof four must hold, reporting
+    0 checked and the older-record count, not fail the tenant for having
+    nothing to check."""
+    root = tmp_path / "all_pass"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "build-01.json").write_text(json.dumps({"status": "failed", "record_version": 2}))
+    (records / "verify-01.json").write_text(json.dumps({"status": "pass", "record_version": 3}))
+    commit_all(root, "one older record before stop, one current record that passed")
+
+    p = run_doctor(root)["no-stop-lacks-cause"]
+    assert p["holds"], p["reason"]
+    assert "0 checked" in p["reason"]
+    assert "1 record(s) before stop was recorded" in p["reason"]
+    assert p["older_records"] == 1
+
+
 def test_doctor_proof_four_fails_when_gates_ran_but_the_log_lacks_their_heading(tmp_path):
     """Issue #94's own proposed fix: a failed build whose selected_tests
     is set -- gates definitely ran that iteration -- but whose log
