@@ -675,6 +675,76 @@ def test_claude_code_build_instruction_says_nothing_about_the_stub(tmp_path):
     assert "is not the intended change" not in instruction
 
 
+def counsel_extra_env(tmp_path: Path) -> dict:
+    """Issue #100: the record, its log, the diff, the tenant manifest,
+    and this product's own root, all handed by path."""
+    record_path = tmp_path / "build-01.json"
+    record_path.write_text(json.dumps({"status": "halted"}))
+    log_path = tmp_path / "build-01.log"
+    log_path.write_text("adapter transcript\n")
+    diff_path = tmp_path / "diff.patch"
+    diff_path.write_text("diff --git a/x.py b/x.py\n")
+    manifest_path = tmp_path / "attavo.toml"
+    manifest_path.write_text("schema_version = 1\n")
+    return {
+        "ATTAVO_STAGE": "counsel",
+        "ATTAVO_COUNSEL_RECORD": str(record_path),
+        "ATTAVO_COUNSEL_LOG": str(log_path),
+        "ATTAVO_COUNSEL_DIFF": str(diff_path),
+        "ATTAVO_MANIFEST": str(manifest_path),
+        "ATTAVO_PRODUCT_ROOT": str(ROOT),
+    }
+
+
+def test_claude_code_counsel_sandbox_is_read_only(tmp_path):
+    """Issue #100, acceptance row 4. counsel's command line runs under
+    the same read-only sandbox as verify: writes to the working directory
+    are denied, the network stays closed, and --allowedTools omits Edit
+    and Write."""
+    cmd = dry_run(tmp_path, extra_env=counsel_extra_env(tmp_path))
+    settings = json.loads(cmd[cmd.index("--settings") + 1])
+
+    assert settings["sandbox"]["enabled"] is True
+    assert settings["sandbox"]["network"]["allowedDomains"] == []
+    assert settings["sandbox"]["filesystem"]["denyWrite"] == [str(Path.cwd())]
+    assert cmd[cmd.index("--allowedTools") + 1] == "Read,Bash"
+    assert cmd[cmd.index("--disallowedTools") + 1] == "Agent,Workflow"
+
+
+def test_claude_code_counsel_names_the_product_root_and_the_record(tmp_path):
+    """Issue #100, acceptance row 4. The instruction names this product's
+    own root and the record path -- both handed by path, not inlined."""
+    extra = counsel_extra_env(tmp_path)
+    cmd = dry_run(tmp_path, extra_env=extra)
+    instruction = cmd[cmd.index("-p") + 1]
+
+    assert str(ROOT) in instruction
+    assert extra["ATTAVO_COUNSEL_RECORD"] in instruction
+    assert "bin/attavo" in instruction
+
+
+def test_claude_code_counsel_schema_requires_the_structured_answer(tmp_path):
+    cmd = dry_run(tmp_path, extra_env=counsel_extra_env(tmp_path))
+    schema_json = cmd[cmd.index("--json-schema") + 1]
+    schema = json.loads(schema_json)
+    assert set(schema["required"]) == {"class", "verdict", "citations", "proposal"}
+
+
+def test_claude_code_counsel_instruction_stays_under_the_bound_with_large_files(tmp_path):
+    """Issue #100, acceptance row 4 -- counsel handles a large record log
+    and diff the same way build and verify already do (issue #86): named
+    by path, never inlined, so the instruction's own size stays fixed."""
+    extra = counsel_extra_env(tmp_path)
+    large_log = make_diff(tmp_path, n_files=3, lines_per_file=30000)
+    extra["ATTAVO_COUNSEL_LOG"] = str(large_log)
+    assert large_log.stat().st_size > 2_000_000
+
+    cmd = dry_run(tmp_path, extra_env=extra)
+    instruction = cmd[cmd.index("-p") + 1]
+    assert len(instruction.encode()) < 65536
+    assert str(large_log) in instruction
+
+
 def test_claude_code_verify_instruction_says_nothing_about_a_stub_when_absent(tmp_path):
     """A spec with no stub/ (fixtures' prose_criterion/specs/1) gets no
     stub section at all -- the sentence is conditioned on the stub

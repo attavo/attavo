@@ -2,6 +2,7 @@
   "dry_run_env": "ATTAVO_ADAPTER_DRY_RUN",
   "response_env": "ATTAVO_ADAPTER_RESPONSE_FILE",
   "tool_binary": "claude",
+  "stages": ["build", "verify", "counsel"],
   "reports": ["tokens", "cost_usd"],
   "input_limit": {
     "unit": null,

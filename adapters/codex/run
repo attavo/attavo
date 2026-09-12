@@ -121,6 +121,54 @@ VERIFY_SCHEMA = {
     },
 }
 
+# The counsel objective (issue #100): a stop is read inside the product
+# first, before a person. Identical to claude-code's own COUNSEL_SCHEMA --
+# the counsel structured answer is the shared adapter contract, not
+# either tool's own shape.
+COUNSEL_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["class", "verdict", "citations", "proposal"],
+    "properties": {
+        "class": {"type": "string"},
+        "verdict": {"type": "string", "enum": ["answer", "patch", "person"]},
+        "citations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["kind", "path", "symbol", "ruling_id"],
+                "properties": {
+                    "kind": {"type": "string", "enum": ["instruction", "mechanism", "guard"]},
+                    "path": {"type": ["string", "null"]},
+                    "symbol": {"type": ["string", "null"]},
+                    "ruling_id": {"type": ["string", "null"]},
+                },
+            },
+        },
+        "proposal": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["ruling_text", "patch", "question"],
+            "properties": {
+                "ruling_text": {"type": ["string", "null"]},
+                "patch": {
+                    "type": ["object", "null"],
+                    "additionalProperties": False,
+                    "required": ["file", "symbol", "rejection_test", "diff"],
+                    "properties": {
+                        "file": {"type": "string", "minLength": 1},
+                        "symbol": {"type": "string", "minLength": 1},
+                        "rejection_test": {"type": "string", "minLength": 1},
+                        "diff": {"type": "string", "minLength": 1},
+                    },
+                },
+                "question": {"type": ["string", "null"]},
+            },
+        },
+    },
+}
+
 
 def read_text(path_env: str) -> str:
     path = os.environ.get(path_env)
@@ -261,6 +309,77 @@ def verify_instruction() -> str:
     return "\n\n".join(parts)
 
 
+def counsel_instruction() -> str:
+    """Issue #100: a stop is read inside the product first, before a
+    person. Identical to claude-code's own counsel_instruction -- the
+    record, its log, the diff, the tenant manifest, and this product's
+    own root are all handed by path, named rather than inlined, the same
+    discipline verify_instruction already applies to the diff (issue
+    #86)."""
+    parts = list(spec_sections())
+
+    rulings = read_text("ATTAVO_RULINGS")
+    if rulings.strip():
+        parts.append("## Rulings\n\n" + rulings.strip())
+
+    note = stub_note()
+    if note:
+        parts.append(note)
+
+    record_path = os.environ.get("ATTAVO_COUNSEL_RECORD")
+    record_text = read_text("ATTAVO_COUNSEL_RECORD")
+    if record_text.strip():
+        parts.append(
+            "## The stage record\n\n"
+            f"The record is at {describe_file(record_path, record_text, diff_like=False)}. "
+            "Read it yourself with your own tools.")
+
+    log_path = os.environ.get("ATTAVO_COUNSEL_LOG")
+    log_text = read_text("ATTAVO_COUNSEL_LOG")
+    if log_text.strip():
+        parts.append(
+            "## The record's log\n\n"
+            f"The log is at {describe_file(log_path, log_text, diff_like=False)}. "
+            "Read it yourself with your own tools.")
+
+    diff_path = os.environ.get("ATTAVO_COUNSEL_DIFF")
+    diff_text = read_text("ATTAVO_COUNSEL_DIFF")
+    if diff_text.strip():
+        parts.append(
+            "## The item's diff since approval\n\n"
+            f"The diff is at {describe_file(diff_path, diff_text, diff_like=True)}. "
+            "Read it yourself with your own tools.")
+
+    manifest_path = os.environ.get("ATTAVO_MANIFEST", "")
+    parts.append(f"## The tenant manifest\n\nThe manifest is at `{manifest_path}`. "
+                 "Read it yourself with your own tools.")
+
+    product_root = os.environ.get("ATTAVO_PRODUCT_ROOT", "")
+    parts.append(
+        "## The product's own root\n\n"
+        f"The product that ran this stage is at `{product_root}` "
+        "(`bin/attavo`, `adapters/`, `schema/`, `templates/`). A stop "
+        "whose cause is the product's own mechanism, not the tenant's, "
+        "is read here.")
+
+    parts.append(
+        "you are counseling a stop, read-only: make no edits, write no "
+        "files, commit nothing. Read the record, its log, the spec, the "
+        "rulings, the diff, the tenant manifest, and the product's own "
+        "root named above with your own tools, then answer with exactly "
+        "one class (the stop's class, or \"unclassed\"), one verdict -- "
+        "\"answer\" (the stop is answerable inside the rules: a ruling "
+        "text, in proposal.ruling_text, with three citations -- "
+        "instruction, mechanism, guard, each a path and symbol or a "
+        "ruling id), \"patch\" (the stop is a product defect: the "
+        "mechanism's file and symbol, a rejection test, and a unified "
+        "diff, in proposal.patch), or \"person\" (the answer would touch "
+        "the definition of done and no rule covers it: the question "
+        "restated in one line, in proposal.question) -- and citations "
+        "for whichever verdict you gave. You propose; you do not act.")
+    return "\n\n".join(parts)
+
+
 def load_config() -> dict:
     raw = os.environ.get("ATTAVO_ADAPTER_CONFIG")
     return json.loads(raw) if raw else {}
@@ -299,9 +418,10 @@ def ceiling_refusal(instruction: str) -> str | None:
 
 
 def build_argv(schema_path: Path, output_path: Path, config: dict, stage: str) -> list[str]:
-    # verify is mechanically read-only, not just instructed to be: the
-    # sandbox enforces "make no edits, write no files, commit nothing"
-    # rather than trusting the instruction alone.
+    # verify and counsel (issue #100) are mechanically read-only, not
+    # just instructed to be: the sandbox enforces "make no edits, write
+    # no files, commit nothing" rather than trusting the instruction
+    # alone. Any stage other than "build" gets the read-only sandbox.
     sandbox = "workspace-write" if stage == "build" else "read-only"
     return ["codex", "exec", "-",
            "--model", config["model"],
@@ -466,8 +586,13 @@ def main() -> int:
     config = load_config()
     stage = os.environ.get("ATTAVO_STAGE", "build")
     verifying = stage == "verify"
-    instruction = verify_instruction() if verifying else build_instruction()
-    schema = VERIFY_SCHEMA if verifying else STATUS_SCHEMA
+    counseling = stage == "counsel"
+    if verifying:
+        instruction, schema = verify_instruction(), VERIFY_SCHEMA
+    elif counseling:
+        instruction, schema = counsel_instruction(), COUNSEL_SCHEMA
+    else:
+        instruction, schema = build_instruction(), STATUS_SCHEMA
 
     model = config.get("model")
     if not model:
@@ -520,6 +645,16 @@ def main() -> int:
         line = {**common,
                "findings": final.get("findings"),
                "tests_named": final.get("tests_named")}
+        print(json.dumps(line))
+        return 0
+
+    if counseling:
+        common = report_fields(model, events)
+        line = {**common,
+               "class": final.get("class"),
+               "verdict": final.get("verdict"),
+               "citations": final.get("citations"),
+               "proposal": final.get("proposal")}
         print(json.dumps(line))
         return 0
 

@@ -2,6 +2,7 @@
   "dry_run_env": "ATTAVO_ADAPTER_DRY_RUN",
   "response_env": "ATTAVO_ADAPTER_RESPONSE_FILE",
   "tool_binary": "codex",
+  "stages": ["build", "verify", "counsel"],
   "reports": ["tokens"],
   "input_limit": {
     "unit": "chars",

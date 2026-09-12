@@ -19,6 +19,33 @@ echo "--- ATTAVO_FEEDBACK ---"
 cat "${ATTAVO_FEEDBACK:-/dev/null}" 2>/dev/null || true
 echo "--- end feedback ---"
 
+if [ "${ATTAVO_STAGE:-build}" = "counsel" ]; then
+  # issue #100: a read-only reading of a stop -- the record, its log, and
+  # the diff, all handed by path, plus the tenant manifest and this
+  # product's own root. Answers from a canned file
+  # (ATTAVO_FIXTURE_COUNSEL_RESPONSE) when one is set, so a test controls
+  # class/verdict/citations/proposal exactly; otherwise a canned "person"
+  # verdict, since a fixture has no rules of its own to answer from.
+  echo "--- ATTAVO_COUNSEL_RECORD ---"
+  cat "${ATTAVO_COUNSEL_RECORD:-/dev/null}" 2>/dev/null || true
+  echo "--- end record ---"
+  echo "--- ATTAVO_COUNSEL_LOG ---"
+  cat "${ATTAVO_COUNSEL_LOG:-/dev/null}" 2>/dev/null || true
+  echo "--- end log ---"
+  echo "--- ATTAVO_COUNSEL_DIFF ---"
+  cat "${ATTAVO_COUNSEL_DIFF:-/dev/null}" 2>/dev/null || true
+  echo "--- end diff ---"
+  echo "manifest: ${ATTAVO_MANIFEST:-}"
+  echo "product root: ${ATTAVO_PRODUCT_ROOT:-}"
+  if [ -n "${ATTAVO_FIXTURE_COUNSEL_RESPONSE:-}" ]; then
+    cat "${ATTAVO_FIXTURE_COUNSEL_RESPONSE}"
+    echo
+  else
+    printf '{"model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0,"class":"unclassed","verdict":"person","citations":[],"proposal":{"ruling_text":null,"patch":null,"question":"what should we do about this stop?"}}\n'
+  fi
+  exit 0
+fi
+
 if [ "${ATTAVO_STAGE:-build}" = "verify" ]; then
   echo "--- ATTAVO_DIFF ---"
   cat "${ATTAVO_DIFF:-/dev/null}" 2>/dev/null || true

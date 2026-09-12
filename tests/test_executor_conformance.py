@@ -406,6 +406,73 @@ def test_situation_14_input_limit_is_declared(adapter_name, tmp_path):
             f"{adapter_name}'s input_limit has no value and no reason")
 
 
+def counsel_extra_env(tmp_path: Path) -> dict:
+    """Issue #100: the record, its log, the diff, the tenant manifest,
+    and this product's own root, all handed by path -- the general
+    contract every adapter's counsel stage shares."""
+    record_path = tmp_path / "build-01.json"
+    record_path.write_text(json.dumps({"status": "halted"}))
+    log_path = tmp_path / "build-01.log"
+    log_path.write_text("adapter transcript\n")
+    diff_path = tmp_path / "diff.patch"
+    diff_path.write_text("diff --git a/x.py b/x.py\n")
+    manifest_path = tmp_path / "attavo.toml"
+    manifest_path.write_text("schema_version = 1\n")
+    return {
+        "ATTAVO_STAGE": "counsel",
+        "ATTAVO_COUNSEL_RECORD": str(record_path),
+        "ATTAVO_COUNSEL_LOG": str(log_path),
+        "ATTAVO_COUNSEL_DIFF": str(diff_path),
+        "ATTAVO_MANIFEST": str(manifest_path),
+        "ATTAVO_PRODUCT_ROOT": str(ROOT),
+    }
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_16_counsel_stage_is_declared(adapter_name):
+    """Issue #100, acceptance row 4. Every adapter's conformance.json
+    names "counsel" among its declared stages -- an adapter naming none
+    is not one this lane has pointed at the counsel stage."""
+    manifest = CONFORMANCE[adapter_name]
+    stages = manifest.get("stages")
+    assert stages is not None and "counsel" in stages, (
+        f"{adapter_name} declares no counsel stage")
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_17_counsel_names_the_product_root_and_the_record(adapter_name, tmp_path):
+    """Issue #100, acceptance row 4. The counsel instruction names this
+    product's own root and the record path handed to it, and its schema
+    requires the structured answer (class, verdict, citations, proposal)."""
+    extra = counsel_extra_env(tmp_path)
+    result = dry_run(adapter_name, tmp_path, extra_env=extra)
+    instruction = result["instruction"]
+
+    assert str(ROOT) in instruction
+    assert extra["ATTAVO_COUNSEL_RECORD"] in instruction
+    schema_required = set(result["schema"].get("required", []))
+    assert schema_required == {"class", "verdict", "citations", "proposal"}
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_18_counsel_instruction_stays_under_the_bound_with_large_files(
+        adapter_name, tmp_path):
+    """Issue #100, acceptance row 4. A 2 MB record log and diff both leave
+    the counsel instruction under the fixed bound -- the same guarantee
+    build and verify already carry (issue #86), so counsel does not
+    reintroduce the ceiling regression on its own new files."""
+    FIXED_BOUND_CHARS = 65536
+
+    extra = counsel_extra_env(tmp_path)
+    large_log = make_large_file(tmp_path / "build-01.log", diff_like=False)
+    large_diff = make_large_file(tmp_path / "diff.patch", diff_like=True)
+    extra["ATTAVO_COUNSEL_LOG"] = str(large_log)
+    extra["ATTAVO_COUNSEL_DIFF"] = str(large_diff)
+
+    result = dry_run(adapter_name, tmp_path, extra_env=extra)
+    assert len(result["instruction"].encode()) < FIXED_BOUND_CHARS
+
+
 def make_large_file(path: Path, diff_like: bool) -> Path:
     """A file over 2 MB: a diff-shaped one (3 files, unified-diff
     headers) or a flat feedback-shaped one, the same shapes issue #86's

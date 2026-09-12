@@ -9,6 +9,7 @@
     attavo verify [N]
     attavo file-findings [N]
     attavo file-stops [N]
+    attavo counsel [N]
     attavo record-only
     attavo attest [--partial] [N]
     attavo drive [N]
@@ -117,6 +118,23 @@ nothing filed) a stop whose class is unclassed and whose detail is
 empty -- a stop the product cannot even describe is not filed as if it
 could. See issue #89's lane for the full rules it enforces.
 
+counsel reads the item's latest non-pass build or verify record and asks
+the tenant's [executor].counsel adapter (defaulting to [executor].verify)
+a read-only question about it: the record, its log, the spec (problem,
+claims, criteria, stub), paths.rulings, the item's diff since approval,
+the tenant manifest, and this product's own root (bin/attavo, adapters/,
+schema/, templates/) by path, under the same sandbox verify runs under.
+The adapter answers with class (the stop enumeration, or unclassed),
+verdict (answer: a ruling text with citations; patch: a product defect's
+file, symbol, rejection test, and diff; person: a one-line question no
+rule covers), citations (instruction, mechanism, guard, each a path and
+symbol or a ruling id), and proposal (the ruling text, the patch, or the
+question). It writes the next counsel-NN.json under paths.records/N/,
+with the adapter's transcript beside it as counsel-NN.log, and commits
+nothing -- the caller commits, as with every stage. It refuses (exit 1,
+nothing written) when the item carries no non-pass build or verify
+record to counsel. See issue #100's lane for the full rules it enforces.
+
 record-only exits 0 when HEAD, against its first parent, touches only
 paths.records; 1 otherwise; 2 with no manifest. Core logic about a git
 checkout, not a forge's shell -- a workflow template's push-and-retrigger
@@ -161,11 +179,12 @@ that approval runs build; a passing build with the forge green on the
 branch head (polled for a bound, not the manifest) runs verify; a passing
 verify with the forge still green prints that the item is ready to merge
 and stops there -- the merge is never drive's own act, and it enqueues
-nothing. A record build or verify writes that is not pass is filed
-(file-stops, issue #89) before it is transported, so its .filed marker
-exists in time to be committed alongside it; drive then commits the
-record, its log, and that marker together with `git commit --only`,
-never sweeping the index, and pushes; a push a divergent remote rejects
+nothing. A record build or verify writes that is not pass is counseled (counsel,
+issue #100) and filed (file-stops, issue #89) before it is transported,
+so its .filed marker exists in time to be committed alongside it; drive
+then commits the stage record and the counsel record together -- each
+with its own log and marker -- with `git commit --only`, never sweeping
+the index, and pushes; a push a divergent remote rejects
 is retried once after `git pull --no-rebase --no-edit`, never a rebase,
 since the record already names the commit's sha. drive writes no record
 of its own: a second run in the same state repeats the same step or the
@@ -1225,7 +1244,7 @@ def cmd_approval_status(argv: list[str]) -> int:
 
 # --- build: adapter, claims boundary, criteria, and the tenant's tests ---
 
-STAGE_NAMES = ("build", "verify")
+STAGE_NAMES = ("build", "verify", "counsel")
 
 
 def merge_adapter_config(m: dict, adapter_name: str, stage: str) -> dict:
@@ -1609,6 +1628,32 @@ def read_forge_checks(root: Path, checks_command: str, sha: str) -> dict:
     return {"command": checks_command, "sha": sha, "conclusions": conclusions}, ok
 
 
+def diff_since_approval(root: Path, approval_sha: str | None) -> tuple[str, str | None]:
+    """(diff_text, refusal): the item's own work since approval, not
+    everything merged onto the branch since then (issue #52) -- a
+    three-dot diff against approval_sha itself is not enough, since
+    approval_sha is already an ancestor of HEAD in the normal flow and
+    merge-base(approval_sha, HEAD) is just approval_sha again (verified
+    empirically, see issue #52). Diffing from the merge-base of HEAD and
+    the remote's default branch instead excludes content that arrived by
+    merging that branch in, because that content is already present on
+    both sides of the merge base. refs/remotes/origin/HEAD is what names
+    the default branch without hard-coding "main"; when it is not set,
+    there is nothing to diff against and this refuses rather than guess.
+    ("", None) when approval_sha is falsy -- nothing to diff from at all.
+    Shared by cmd_verify and cmd_counsel, which both hand an adapter this
+    same diff."""
+    if not approval_sha:
+        return "", None
+    symref = subprocess.run(
+        ["git", "-C", str(root), "symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
+        capture_output=True, text=True, check=False)
+    if symref.returncode != 0:
+        return "", "refs/remotes/origin/HEAD is not set; run `git remote set-head origin -a`"
+    diff_base = git(root, "merge-base", symref.stdout.strip(), "HEAD").strip()
+    return git(root, "diff", diff_base, "HEAD"), None
+
+
 def cmd_verify(argv: list[str]) -> int:
     root = Path(".").resolve()
     item_id = argv[0] if argv else derive_item_id(root)
@@ -1692,28 +1737,10 @@ def cmd_verify(argv: list[str]) -> int:
     spec_dir = root / specs_rel / item_id
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
 
-    # The item's own work since approval, not everything merged onto the
-    # branch since then (issue #52): a three-dot diff against approval_sha
-    # itself is not enough, since approval_sha is already an ancestor of
-    # HEAD in the normal flow and merge-base(approval_sha, HEAD) is just
-    # approval_sha again -- verified empirically, see the issue comment.
-    # Diffing from the merge-base of HEAD and the remote's default branch
-    # instead excludes content that arrived by merging that branch in,
-    # because that content is already present on both sides of the merge
-    # base. refs/remotes/origin/HEAD is what names the default branch
-    # without hard-coding "main"; when it is not set, there is nothing
-    # to diff against and this refuses rather than guess.
-    diff_text = ""
-    if approval_sha:
-        symref = subprocess.run(
-            ["git", "-C", str(root), "symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
-            capture_output=True, text=True, check=False)
-        if symref.returncode != 0:
-            print("attavo verify: refused: refs/remotes/origin/HEAD is not set; "
-                  "run `git remote set-head origin -a`")
-            return 1
-        diff_base = git(root, "merge-base", symref.stdout.strip(), "HEAD").strip()
-        diff_text = git(root, "diff", diff_base, "HEAD")
+    diff_text, diff_refusal = diff_since_approval(root, approval_sha)
+    if diff_refusal:
+        print(f"attavo verify: refused: {diff_refusal}")
+        return 1
 
     with tempfile.TemporaryDirectory() as tmp:
         diff_path = Path(tmp) / "diff.patch"
@@ -1802,6 +1829,152 @@ def cmd_verify(argv: list[str]) -> int:
     return 0 if status_out == "pass" else 1
 
 
+# --- counsel: a stop is read inside the product first, before a person
+# (issue #100). Read-only -- it commits nothing and writes nothing outside
+# paths.records/<N>/ -- and it never acts: it proposes a ruling, a patch,
+# or names the one-line question a person must answer. ---
+
+COUNSEL_STAGES = ("build", "verify")
+
+
+def latest_non_pass_stage_record(records_dir: Path) -> tuple[str | None, dict | None, Path | None]:
+    """(stage, record, path) for the item's most recent non-pass build or
+    verify record, by its own "at" timestamp -- (None, None, None) when
+    neither stage carries one. "Most recent" rather than "build, else
+    verify" so a stop on the stage that ran later (typically verify,
+    bound to a build that already passed) is the one counseled."""
+    candidates: list[tuple[str, dict, Path]] = []
+    for stage in COUNSEL_STAGES:
+        path = latest_attempt_path(records_dir, stage)
+        if path is None:
+            continue
+        rec = latest_record(records_dir, stage)
+        if rec.get("status") == "pass":
+            continue
+        candidates.append((stage, rec, path))
+    if not candidates:
+        return None, None, None
+    candidates.sort(key=lambda c: c[1].get("at") or "")
+    return candidates[-1]
+
+
+def cmd_counsel(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attavo counsel: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo counsel: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    item_records_dir = root / records_rel / item_id
+
+    stage, stop_record, record_path = latest_non_pass_stage_record(item_records_dir)
+    if stop_record is None:
+        print(f"attavo counsel: refused: no non-pass build or verify record for item {item_id}")
+        return 1
+
+    executor = m.get("executor") or {}
+    adapter_name = executor.get("counsel") or executor.get("verify")
+    if not adapter_name:
+        print("attavo counsel: refused: no [executor].counsel or [executor].verify "
+              "in the manifest")
+        return 1
+    adapter_path = resolve_adapter(root, adapter_name)
+    if adapter_path is None:
+        print(f"attavo counsel: refused: no adapter named {adapter_name!r}")
+        return 1
+
+    adapter_config = merge_adapter_config(m, adapter_name, "counsel")
+    reports = adapter_reports(adapter_path)
+    spec_dir = root / specs_rel / item_id
+    log_path = record_path.with_suffix(".log")
+
+    diff_text, diff_refusal = diff_since_approval(root, stop_record.get("approval_sha"))
+    if diff_refusal:
+        print(f"attavo counsel: refused: {diff_refusal}")
+        return 1
+
+    started = time.monotonic()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        diff_path = Path(tmp) / "diff.patch"
+        diff_path.write_text(diff_text)
+
+        env = dict(os.environ)
+        env["ATTAVO_SPEC_DIR"] = str(spec_dir)
+        env["ATTAVO_RECORDS_DIR"] = str(item_records_dir)
+        env["ATTAVO_RULINGS"] = str(root / m["paths"]["rulings"])
+        env["ATTAVO_STAGE"] = "counsel"
+        env["ATTAVO_COUNSEL_RECORD"] = str(record_path)
+        env["ATTAVO_COUNSEL_LOG"] = str(log_path) if log_path.is_file() else ""
+        env["ATTAVO_COUNSEL_DIFF"] = str(diff_path)
+        env["ATTAVO_MANIFEST"] = str(root / MANIFEST)
+        env["ATTAVO_PRODUCT_ROOT"] = str(PRODUCT_ROOT)
+        env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(adapter_config)
+
+        run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
+                             capture_output=True, text=True, check=False)
+        transcript, payload = split_adapter_stdout(run.stdout)
+        if run.returncode != 0:
+            detail = f"[adapter exited {run.returncode}]"
+            if run.stderr.strip():
+                detail += "\n" + run.stderr.rstrip("\n")
+            transcript = (transcript + "\n" if transcript else "") + detail
+
+    status_out = "failed"
+    model = model_version = adapter_version_out = None
+    tokens = {"input": 0, "output": 0}
+    cost_usd = None
+    cls = verdict = None
+    citations: list = []
+    proposal = {"ruling_text": None, "patch": None, "question": None}
+
+    if (run.returncode == 0 and payload is not None
+            and payload.get("verdict") in ("answer", "patch", "person")):
+        status_out = "done"
+        model = payload.get("model")
+        model_version = payload.get("model_version")
+        adapter_version_out = payload.get("adapter_version")
+        tok = payload.get("tokens") or {}
+        tokens = {"input": tok.get("input", 0) or 0, "output": tok.get("output", 0) or 0}
+        cost_usd = payload.get("cost_usd")
+        cls = payload.get("class")
+        verdict = payload.get("verdict")
+        citations = payload.get("citations") or []
+        proposal = payload.get("proposal") or proposal
+
+    record = {
+        "sha": git(root, "rev-parse", "HEAD").strip(),
+        "record_stage": stage,
+        "record": record_path.stem,
+        "at": now_iso(),
+        "adapter": adapter_name,
+        "adapter_config": adapter_config,
+        "adapter_version": adapter_version_out,
+        "model": model,
+        "model_version": model_version,
+        "reports": reports,
+        "tokens": tokens,
+        "cost_usd": cost_usd,
+        "wall_clock_s": round(time.monotonic() - started, 3),
+        "status": status_out,
+        "class": cls,
+        "verdict": verdict,
+        "citations": citations,
+        "proposal": proposal,
+    }
+    record_out_path = write_record(item_records_dir, "counsel", record, m, item_id, log=transcript)
+
+    print(f"attavo counsel: {status_out} ({record_out_path.name})")
+    return 0 if status_out == "done" else 1
+
+
 # --- drive: the mechanical transitions between approval and ready-to-merge
 # (issue #84) -- one step per invocation, and only that step, until a
 # state that belongs to a person. Writes no record of its own; the stage
@@ -1841,22 +2014,29 @@ def poll_forge_checks(root: Path, checks_command: str, sha: str) -> tuple[dict, 
     return forge_checks, ok
 
 
-def commit_record(root: Path, record_path: Path, message: str) -> None:
-    """`git commit --only` on record_path and its .log and .filed, each if
-    one exists -- never the whole index. A transport commit that sweeps
-    the index is exactly the regression issue #46 already guards build
-    and verify against on the adapter side; drive must not reintroduce it
-    on the transport side. The .filed marker (issue #89) is committed
-    alongside the record it names, in the same commit and the same push,
-    so a second worktree or a fresh clone reads the same filed fact
-    rather than refiling every stop it finds with no marker of its own."""
-    paths = [str(record_path.relative_to(root))]
-    log_path = record_path.with_suffix(".log")
-    if log_path.is_file():
-        paths.append(str(log_path.relative_to(root)))
-    marker_path = record_path.with_suffix(".filed")
-    if marker_path.is_file():
-        paths.append(str(marker_path.relative_to(root)))
+def commit_record(root: Path, record_paths: Path | list[Path], message: str) -> None:
+    """`git commit --only` on every record path given, and each one's .log
+    and .filed, each if one exists -- never the whole index. A transport
+    commit that sweeps the index is exactly the regression issue #46
+    already guards build and verify against on the adapter side; drive
+    must not reintroduce it on the transport side. The .filed marker
+    (issue #89) is committed alongside the record it names, in the same
+    commit and the same push, so a second worktree or a fresh clone reads
+    the same filed fact rather than refiling every stop it finds with no
+    marker of its own. A single Path is accepted for the common one-record
+    case; issue #100 passes a list so the counsel record lands in the same
+    commit as the stage record it counsels."""
+    if isinstance(record_paths, Path):
+        record_paths = [record_paths]
+    paths: list[str] = []
+    for record_path in record_paths:
+        paths.append(str(record_path.relative_to(root)))
+        log_path = record_path.with_suffix(".log")
+        if log_path.is_file():
+            paths.append(str(log_path.relative_to(root)))
+        marker_path = record_path.with_suffix(".filed")
+        if marker_path.is_file():
+            paths.append(str(marker_path.relative_to(root)))
     git(root, "add", *paths)
     git(root, "commit", "--only", "-m", message, *paths)
 
@@ -1918,17 +2098,19 @@ def drive_state(root: Path, m: dict, item_id: str) -> tuple[str, str | None, Pat
 def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, item_id: str) -> int:
     """Runs build or verify in-process -- the same command `attavo build`
     or `attavo verify` would run, printing the same reason on a refusal,
-    failure, or halt. A non-pass record is filed (cmd_file_stops, issue
-    #89) before it is transported, so a stop's own .filed marker -- the
-    filing command's stdout, the issue file-stops just opened -- exists
-    on disk in time to be committed and pushed in the very same commit as
-    the record and its log; a marker written only after the push would
+    failure, or halt. A non-pass record is counseled (cmd_counsel, issue
+    #100) and filed (cmd_file_stops, issue #89) before it is transported,
+    so a stop's own counsel record and .filed marker -- the filing
+    command's stdout, the issue file-stops just opened -- exist on disk
+    in time to be committed and pushed in the very same commit as the
+    stage record and its log; a marker written only after the push would
     never reach the ledger at all, and a second worktree or a fresh clone
-    would refile every stop it finds with no marker beside it. The record
-    is then transported: committed with commit_record and pushed with
-    push_record_commit, whatever its status -- the record pushes stay the
-    same pushes, made by drive in the run that produced the record
-    (issue #84's rule 42 row)."""
+    would refile every stop it finds with no marker beside it. The stage
+    record and the counsel record (when one was written) are then
+    transported together: committed with commit_record and pushed with
+    push_record_commit, whatever the stage record's status -- the record
+    pushes stay the same pushes, made by drive in the run that produced
+    the record (issue #84's rule 42 row)."""
     before = latest_attempt_path(records_dir, stage)
     rc = cmd_build([item_id]) if stage == "build" else cmd_verify([item_id])
     after = latest_attempt_path(records_dir, stage)
@@ -1940,7 +2122,13 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, ite
 
     record = latest_record(records_dir, stage)
     status_out = record.get("status")
+    to_commit = [after]
     if status_out != "pass":
+        counsel_before = latest_attempt_path(records_dir, "counsel")
+        cmd_counsel([item_id])
+        counsel_after = latest_attempt_path(records_dir, "counsel")
+        if counsel_after is not None and counsel_after != counsel_before:
+            to_commit.append(counsel_after)
         # file-stops is its own idempotent read of the item's records, so
         # calling it here on every run that wrote a non-pass record is
         # safe to call again on a later run: an already-filed stop's own
@@ -1949,7 +2137,7 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, ite
 
     message = f"attavo: {stage} record for item {item_id} ({after.stem})"
     try:
-        commit_record(root, after, message)
+        commit_record(root, to_commit, message)
     except RuntimeError as exc:
         print(f"attavo drive: stopped: could not commit the {stage} record: {exc}")
         return 1
@@ -2080,6 +2268,17 @@ STOP_STAGES = ("build", "verify")
 FILE_STOPS_LOG_TAIL_LINES = 20
 
 
+def counsel_record_for(item_records_dir: Path, stage: str, n: int) -> dict | None:
+    """The latest counsel-NN.json (issue #100) whose own "record" field
+    names f"{stage}-{n:02d}" -- the counsel invocation, if any, that read
+    this exact stage record -- or None when counsel never ran against it
+    (e.g. file-stops run standalone, outside drive)."""
+    target = f"{stage}-{n:02d}"
+    attempts = parse_attempts(item_records_dir, "counsel")
+    matches = [rec for _, rec in sorted(attempts.items()) if rec.get("record") == target]
+    return matches[-1] if matches else None
+
+
 def cmd_file_stops(argv: list[str]) -> int:
     root = Path(".").resolve()
     item_id = argv[0] if argv else derive_item_id(root)
@@ -2138,11 +2337,15 @@ def cmd_file_stops(argv: list[str]) -> int:
         log_path = record_path.with_suffix(".log")
         log_tail = ("\n".join(log_path.read_text().splitlines()[-FILE_STOPS_LOG_TAIL_LINES:])
                    if log_path.is_file() else "")
+        counsel = counsel_record_for(item_records_dir, stage, n)
         body = {
             "class": stop["class"],
             "provenance": stop["provenance"],
             "record": str(record_path.relative_to(root)),
             "log_tail": log_tail,
+            "counsel_verdict": counsel.get("verdict") if counsel else None,
+            "counsel_citations": counsel.get("citations") if counsel else [],
+            "counsel_proposal": counsel.get("proposal") if counsel else None,
         }
         run = subprocess.run(file_issue_command, shell=True, cwd=str(root),
                              input=json.dumps(body) + "\n", capture_output=True,
@@ -2367,6 +2570,8 @@ def main(argv: list[str]) -> int:
         return cmd_file_findings(argv[1:])
     if argv[0] == "file-stops":
         return cmd_file_stops(argv[1:])
+    if argv[0] == "counsel":
+        return cmd_counsel(argv[1:])
     if argv[0] == "record-only":
         return cmd_record_only(argv[1:])
     if argv[0] == "attest":
@@ -2374,8 +2579,8 @@ def main(argv: list[str]) -> int:
     if argv[0] == "drive":
         return cmd_drive(argv[1:])
     print(f"attavo: unknown subcommand {argv[0]!r}; only doctor, spec-gate, approve, "
-          f"approval-status, build, verify, file-findings, file-stops, record-only, attest, "
-          f"drive exist at this commit", file=sys.stderr)
+          f"approval-status, build, verify, file-findings, file-stops, counsel, record-only, "
+          f"attest, drive exist at this commit", file=sys.stderr)
     return 2
 
 
