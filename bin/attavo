@@ -1047,19 +1047,24 @@ def commits_since(root: Path, start_sha: str) -> list[dict]:
 
 def split_adapter_stdout(stdout: str) -> tuple[str, dict | None]:
     """(transcript, payload): the adapter's last non-empty stdout line is
-    its JSON report; everything before it is transcript. payload is None
-    if stdout carried no line, or the last line does not parse as JSON.
+    its JSON report, and everything before it is transcript, only when
+    that last line actually parses as JSON. When it does not -- a tool's
+    own error line printed last on a non-zero exit (issue #86: tenant
+    zero attest/records/659/verify-01.log, codex's own "Input exceeds..."
+    line, dropped because it was mistaken for an attempted payload) --
+    nothing here is a report, and the whole stdout is the transcript, so
+    that last line is not silently lost.
     """
     lines = stdout.splitlines()
     non_empty = [i for i, l in enumerate(lines) if l.strip()]
     if not non_empty:
         return stdout, None
     last = non_empty[-1]
-    transcript = "\n".join(lines[:last])
     try:
         payload = json.loads(lines[last])
     except ValueError:
-        payload = None
+        return stdout, None
+    transcript = "\n".join(lines[:last])
     return transcript, payload
 
 
