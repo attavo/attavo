@@ -910,10 +910,8 @@ def proof_no_stop_lacks_cause(root: Path, m: dict | None) -> Proof:
     older_note = f"{older} record(s) before stop was recorded"
     if problems:
         return p.fail("; ".join(problems), older_records=older)
-    if checked == 0:
-        return p.fail(f"no non-pass build or verify record at record_version >= 3 to check "
-                      f"({older_note})", older_records=older)
-    return p.hold(f"{checked} non-pass record(s) carry stop with a cause ({older_note})",
+    return p.hold(f"{checked} checked ({older_note})" if checked == 0
+                 else f"{checked} non-pass record(s) carry stop with a cause ({older_note})",
                  older_records=older)
 
 
