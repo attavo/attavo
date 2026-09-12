@@ -239,6 +239,94 @@ def test_drive_prints_ready_to_merge_from_a_passed_verify(tmp_path):
     assert len(record_files(root, "build")) == 1
 
 
+def test_drive_until_ready_runs_build_then_verify_to_ready_in_one_call(tmp_path):
+    """Issue #100's own followups. --until-ready repeats step-and-wait in
+    the same process: one call, from an approved item with the forge
+    green, builds, verifies, and prints ready to merge -- both records
+    written and pushed, without the caller invoking drive again after
+    each passing step."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    bare = add_bare_remote(root, tmp_path)
+    approve_item(root)
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+
+    run = run_attavo(root, "drive", "1", "--until-ready")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "ready to merge" in run.stdout
+
+    assert len(record_files(root, "build")) == 1
+    assert len(record_files(root, "verify")) == 1
+    assert latest_record(root, "build")["status"] == "pass"
+    assert latest_record(root, "verify")["status"] == "pass"
+    assert remote_head(bare, branch) == head_of(root)
+
+    # Idempotence, same as the single-step form: a further --until-ready
+    # call repeats exactly the same ready-to-merge result, writing nothing.
+    run2 = run_attavo(root, "drive", "1", "--until-ready")
+    assert run2.returncode == 0
+    assert "ready to merge" in run2.stdout
+    assert len(record_files(root, "build")) == 1
+    assert len(record_files(root, "verify")) == 1
+
+
+def test_drive_without_the_flag_still_takes_one_step_at_a_time(tmp_path):
+    """Regression: --until-ready is additive. With no flag, an approved
+    item with the forge green still needs two separate calls -- build,
+    then verify -- exactly as before this issue."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_bare_remote(root, tmp_path)
+    approve_item(root)
+
+    run = run_attavo(root, "drive", "1")
+    assert run.returncode == 0
+    assert record_files(root, "build") and not record_files(root, "verify")
+
+    run2 = run_attavo(root, "drive", "1")
+    assert run2.returncode == 0
+    assert record_files(root, "verify")
+
+
+def test_drive_until_ready_stops_on_a_halt(tmp_path):
+    """A step that stops on its own account -- here, a halted build --
+    stops the --until-ready loop exactly where the single-step form
+    would, printing the same thing; it does not retry the halted step."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    bare = add_bare_remote(root, tmp_path)
+    approve_item(root)
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+
+    run = run_attavo(root, "drive", "1", "--until-ready",
+                     env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    assert run.returncode == 3
+    assert "which overlay wins?" in run.stdout
+
+    assert len(record_files(root, "build")) == 1
+    assert latest_record(root, "build")["status"] == "halted"
+    assert record_files(root, "verify") == []
+    assert remote_head(bare, branch) == head_of(root)
+
+
+def test_drive_until_ready_stops_when_the_forge_goes_red_after_a_build(tmp_path):
+    """A build that passes, then a forge that concludes red for verify's
+    own gate, stops the loop there -- one record written (the pass), no
+    verify record, no retry of the forge read."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, RED_FORGE)
+    add_bare_remote(root, tmp_path)
+    approve_item(root)
+
+    run = run_attavo(root, "drive", "1", "--until-ready")
+    assert run.returncode != 0
+    assert "ci" in run.stdout and "failure" in run.stdout
+
+    assert len(record_files(root, "build")) == 1
+    assert latest_record(root, "build")["status"] == "pass"
+    assert record_files(root, "verify") == []
+
+
 def test_drive_stops_when_the_forge_is_red(tmp_path):
     """Acceptance row 4. A forge read where the one check has already
     concluded and failed is not polled at all -- there is nothing left to

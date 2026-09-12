@@ -517,14 +517,14 @@ def test_build_adapter_ceiling_refusal_on_a_declared_limit_carries_ceiling_stop(
     assert "10" in log
 
 
-def test_build_halted_on_a_plain_report_is_unclassed(tmp_path):
-    """A halt whose question, refusal, and log name none of the
-    enumerated classes -- the fixture adapter's own halt, which (unlike
-    claude-code and codex since issue #88) never names a class at all --
-    falls to unclassed/product, with the log's last line as its detail;
-    the fixture's own question line parses as the adapter's report rather
-    than transcript, so that last line is the feedback marker the fixture
-    prints ahead of it."""
+def test_build_halted_on_a_genuine_question_carries_question_stop(tmp_path):
+    """Issue #100's own followups. A halt carrying a real question -- the
+    fixture adapter's own halt, which (unlike claude-code and codex since
+    issue #88) never names a class at all -- is question/spec, with the
+    question's own first line as detail: exactly the specimen issue #100
+    itself retires (tenant zero #663 build-01), previously classed
+    unclassed/product and filed with the wrong provenance -- a question
+    is about the definition of done, not the product's own mechanism."""
     root = make_tenant(tmp_path, "build_valid")
     approve_item(root)
 
@@ -534,10 +534,69 @@ def test_build_halted_on_a_plain_report_is_unclassed(tmp_path):
 
     rec = latest_build(root)
     assert rec["status"] == "halted"
-    assert rec["stop"]["class"] == "unclassed"
-    assert rec["stop"]["provenance"] == "product"
-    log = (root / "records" / "1" / "build-01.log").read_text()
-    assert rec["stop"]["detail"] == log.splitlines()[-1]
+    assert rec["stop"] == {"class": "question", "provenance": "spec",
+                           "detail": "which overlay wins?"}
+
+
+def test_build_halted_question_detail_is_only_the_first_line(tmp_path):
+    """A real question's own account of the conflict is often long (the
+    tenant zero specimen runs to several paragraphs); stop.detail holds
+    only its first line -- the whole question still reaches a person
+    through halted.question, and, once counseled, proposal.question."""
+    root = make_tenant(tmp_path, "build_valid")
+    use_claude_code_adapter(root)
+    approve_item(root)
+
+    question = ("Which overlay wins here?\n\nContext: the base tree and "
+               "the tenant's own overlay disagree on three files, and the "
+               "spec does not say which should be preferred.")
+    response_file = tmp_path / "response.json"
+    response_file.write_text(json.dumps(_canned_response(question=question, status="question")))
+
+    run = run_attavo(root, "build", "1",
+                     env={"ATTAVO_ADAPTER_RESPONSE_FILE": str(response_file)})
+    assert run.returncode == 3
+
+    rec = latest_build(root)
+    assert rec["status"] == "halted"
+    assert rec["stop"] == {"class": "question", "provenance": "spec",
+                           "detail": "Which overlay wins here?"}
+
+
+def attavo_module():
+    """bin/attavo imported in-process, for a direct unit test of
+    derive_stop -- getting a tool's own event JSON or error text onto the
+    literal last line of a real build's transcript is not something any
+    adapter hook here controls; the cap is a fact about derive_stop
+    itself."""
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader("attavo_build_under_test", str(ATTAVO))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def test_unclassed_detail_is_capped_at_200_characters():
+    """Issue #100's own followups. An unclassed detail -- the log's last
+    line -- is capped at 200 characters: some tool's own event JSON or
+    error text on that line can run to thousands of characters, and the
+    full picture already lives in the log itself (and, for a stop
+    file-stops files, its own log_tail)."""
+    attavo = attavo_module()
+    long_line = "x" * 500
+    stop = attavo.derive_stop("failed", log=f"first line\n{long_line}")
+    assert stop == {"class": "unclassed", "provenance": "product", "detail": long_line[:200]}
+    assert len(stop["detail"]) == 200
+
+
+def test_unclassed_detail_under_the_cap_is_unchanged():
+    """The cap truncates; it does not pad or otherwise alter a detail
+    already under it."""
+    attavo = attavo_module()
+    stop = attavo.derive_stop("failed", log="first line\nshort last line")
+    assert stop["detail"] == "short last line"
 
 
 def _canned_response(question=None, status="done", subagent_stats=None,

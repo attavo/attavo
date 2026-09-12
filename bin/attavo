@@ -12,7 +12,7 @@
     attavo counsel [N]
     attavo record-only
     attavo attest [--partial] [N]
-    attavo drive [N]
+    attavo drive [N] [--until-ready]
 
 The doctor is the definition of done. It asserts four proofs against a
 tenant root and exits 1 until every proof holds:
@@ -192,6 +192,15 @@ same stop, reading exactly what the prior run left behind -- the marker
 included, so a stop already filed is never filed again, from this
 worktree or a fresh one. See issue #84's lane for the full rules it
 enforces.
+
+--until-ready (issue #100's own followups) repeats step-and-wait --
+step, the forge poll already inside a step, step again -- in the same
+process, rather than making the caller invoke drive again after every
+passing step, until the item is ready to merge or a step stops on its
+own account (a refusal, a halted or failed or refused record, or the
+forge never going green); a step that stops still prints exactly what
+the same step would print without the flag. Without --until-ready,
+drive is unchanged: one step, then stop, exactly as before.
 """
 from __future__ import annotations
 
@@ -490,7 +499,7 @@ def write_record(records_dir: Path, stage: str, record: dict, m: dict, item: str
 # itself after the fact. ---
 
 STOP_CLASSES = ("non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
-               "ceiling", "claims-boundary", "repeated-act", "unclassed")
+               "ceiling", "claims-boundary", "repeated-act", "unclassed", "question")
 STOP_PROVENANCES = ("product", "tenant", "executor", "spec")
 
 # Beyond the enum spelling itself, the prose issue #88 actually shipped
@@ -516,6 +525,14 @@ CLASS_TEXT_MARKERS: dict[str, tuple[str, ...]] = {
     # carry the word "ceiling" by the same issue's own brief -- as
     # provenance "executor", before CEILING_MARKERS is ever consulted.
     "ceiling": (),
+    # A genuine question (issue #100's own followups) is read structurally
+    # -- status "halted" carrying a non-empty halted.question -- not by
+    # scanning for the literal word "question", which the question's own
+    # text very often contains regardless of what it is actually asking.
+    # Left at the default, the generic match above would misclassify any
+    # question that happens to use the word "question" as executor
+    # provenance, before the structural check in derive_stop is reached.
+    "question": (),
 }
 
 # Known tool error text for a declared ceiling -- issue #86's own specimen
@@ -530,9 +547,20 @@ CEILING_MARKERS = ("input_too_large", "exceeds the maximum context length",
                   "context_length_exceeded", "ceiling exceeded")
 
 
+# Issue #100's followups: an unclassed detail is the log's last line
+# verbatim, and that line is sometimes an adapter's own event JSON or a
+# tool's full error text -- thousands of characters wide. Capped here,
+# at write time, so a filed issue's own summary of it (file-stops'
+# log_tail already carries the full picture) stays short; the class
+# itself, "unclassed", already says the full explanation lives in the
+# log, not in this field.
+UNCLASSED_DETAIL_MAX_CHARS = 200
+
+
 def _log_last_line(log: str | None) -> str:
     lines = [l for l in (log or "").splitlines() if l.strip()]
-    return lines[-1] if lines else ""
+    last = lines[-1] if lines else ""
+    return last[:UNCLASSED_DETAIL_MAX_CHARS]
 
 
 def _carries_a_known_class(text: str | None) -> str | None:
@@ -574,12 +602,21 @@ def derive_stop(status: str, *, refusal: str | None = None, halted: dict | None 
         report line at all -- falls to unclassed below, same as any
         other unnamed cause, until the adapter that raises it puts a
         class on the line the way non-question already does.
-      - failing that, a refusal, a halt question, or the log itself that
-        already names its class in text (issue #88, #93 for ceiling's
-        own pre-emptive refusal) is that class, provenance "executor" --
-        the log is checked because neither adapter's halt or refusal
-        *field* carries the class today; the class-naming line each
-        adapter prints reaches only the transcript
+      - a halt carrying a non-empty halted.question, once it is not a
+        non-question caught above, is a genuine question -- question/spec,
+        with the question's own first line as detail (issue #100's
+        followups). This is the specimen issue #100 itself was built to
+        retire: tenant zero's #663 build-01, a proper question, classed
+        unclassed/product and filed as a product defect with the wrong
+        provenance -- a question is about the definition of done, which is
+        a person's or a ruling's to answer, never the product's own
+        mechanism.
+      - failing that, a refusal or the log itself that already names its
+        class in text (issue #88, #93 for ceiling's own pre-emptive
+        refusal) is that class, provenance "executor" -- the log is
+        checked because neither adapter's refusal *field* carries the
+        class today; the class-naming line each adapter prints reaches
+        only the transcript
       - a refusal that is not that -- the write-outside-claims path
         itself, not the "commit ... not authored by the executor" shape
         -- is claims-boundary/spec
@@ -587,10 +624,11 @@ def derive_stop(status: str, *, refusal: str | None = None, halted: dict | None 
         forge-unconcluded/tenant
       - an adapter exit whose log carries a declared-ceiling error line is
         ceiling/product
-      - anything else is unclassed/product, with the log's last line as
-        its detail -- the one class that carries a detail at all, since
-        every other class's evidence already lives in refusal, halted,
-        forge_checks, or the log itself.
+      - anything else is unclassed/product, with the log's last line
+        (capped at UNCLASSED_DETAIL_MAX_CHARS) as its detail -- the other
+        class that carries a detail, since every remaining class's
+        evidence already lives in refusal, halted, forge_checks, or the
+        log itself.
     """
     if status == "pass":
         return None
@@ -598,9 +636,11 @@ def derive_stop(status: str, *, refusal: str | None = None, halted: dict | None 
         return {"class": "forge-unconcluded", "provenance": "tenant", "detail": None}
     if report_class in STOP_CLASSES:
         return {"class": report_class, "provenance": "executor", "detail": None}
-    known = (_carries_a_known_class(refusal)
-            or _carries_a_known_class((halted or {}).get("question"))
-            or _carries_a_known_class(log))
+    question = (halted or {}).get("question")
+    if status == "halted" and question:
+        return {"class": "question", "provenance": "spec",
+               "detail": question.splitlines()[0]}
+    known = _carries_a_known_class(refusal) or _carries_a_known_class(log)
     if known:
         return {"class": known, "provenance": "executor", "detail": None}
     if status == "refused" and refusal is not None and not refusal.startswith("commit "):
@@ -2160,9 +2200,56 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, ite
     return rc
 
 
+def _drive_step(root: Path, m: dict, item_id: str) -> tuple[int, bool]:
+    """One mechanical step, exactly as a single `attavo drive` call always
+    has -- and whether repetition under --until-ready should stop here:
+    True for every refusal or stop (no valid approval, no
+    [forge].checks_command, the forge not green, or a stage that wrote a
+    non-pass record) and for the ready-to-merge terminal state; False
+    only when a stage just passed, so drive_state may have a further
+    stage to pursue on the next call."""
+    try:
+        stage, extra, records_dir = drive_state(root, m, item_id)
+    except ShallowCheckoutError as exc:
+        print(f"attavo drive: refused: {exc}", file=sys.stderr)
+        return 2, True
+
+    if stage == "no-approval":
+        print(f"attavo drive: refused: approval is {extra}")
+        return 1, True
+
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+
+    if stage == "build":
+        rc = _drive_run_stage(root, records_dir, branch, "build", item_id)
+        return rc, rc != 0
+
+    checks_command = (m.get("forge") or {}).get("checks_command")
+    if not checks_command:
+        print("attavo drive: refused: no [forge].checks_command in the manifest")
+        return 1, True
+    head_sha = git(root, "rev-parse", "HEAD").strip()
+    forge_checks, ok = poll_forge_checks(root, checks_command, head_sha)
+    if not ok:
+        conclusions = (", ".join(f"{c['name']} {c['conclusion']}"
+                                 for c in forge_checks["conclusions"])
+                      or "no checks reported")
+        print(f"attavo drive: stopped: forge checks not green on {head_sha[:12]}: {conclusions}")
+        return 1, True
+
+    if stage == "verify":
+        rc = _drive_run_stage(root, records_dir, branch, "verify", item_id)
+        return rc, rc != 0
+
+    print(f"attavo drive: item {item_id} is ready to merge")
+    return 0, True
+
+
 def cmd_drive(argv: list[str]) -> int:
+    until_ready = "--until-ready" in argv
+    positional = [a for a in argv if a != "--until-ready"]
     root = Path(".").resolve()
-    item_id = argv[0] if argv else derive_item_id(root)
+    item_id = positional[0] if positional else derive_item_id(root)
     if not item_id:
         print("attavo drive: cannot derive item id; pass N or run on an attavo/N-* branch",
               file=sys.stderr)
@@ -2172,39 +2259,16 @@ def cmd_drive(argv: list[str]) -> int:
         print(f"attavo drive: no {MANIFEST} at {root}", file=sys.stderr)
         return 2
 
-    try:
-        stage, extra, records_dir = drive_state(root, m, item_id)
-    except ShallowCheckoutError as exc:
-        print(f"attavo drive: refused: {exc}", file=sys.stderr)
-        return 2
-
-    if stage == "no-approval":
-        print(f"attavo drive: refused: approval is {extra}")
-        return 1
-
-    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
-
-    if stage == "build":
-        return _drive_run_stage(root, records_dir, branch, "build", item_id)
-
-    checks_command = (m.get("forge") or {}).get("checks_command")
-    if not checks_command:
-        print("attavo drive: refused: no [forge].checks_command in the manifest")
-        return 1
-    head_sha = git(root, "rev-parse", "HEAD").strip()
-    forge_checks, ok = poll_forge_checks(root, checks_command, head_sha)
-    if not ok:
-        conclusions = (", ".join(f"{c['name']} {c['conclusion']}"
-                                 for c in forge_checks["conclusions"])
-                      or "no checks reported")
-        print(f"attavo drive: stopped: forge checks not green on {head_sha[:12]}: {conclusions}")
-        return 1
-
-    if stage == "verify":
-        return _drive_run_stage(root, records_dir, branch, "verify", item_id)
-
-    print(f"attavo drive: item {item_id} is ready to merge")
-    return 0
+    # Without --until-ready this is exactly one call to _drive_step,
+    # letter for letter what cmd_drive always did: `not until_ready`
+    # returns on the very first iteration regardless of `done`. With it,
+    # a step that just passed (done False) repeats -- step, wait (the
+    # forge poll already inside _drive_step), step, wait -- until the
+    # item is ready to merge or a step stops on its own account.
+    while True:
+        rc, done = _drive_step(root, m, item_id)
+        if done or not until_ready:
+            return rc
 
 
 # --- file-findings: one tenant issue per finding, nothing filed silently ---
