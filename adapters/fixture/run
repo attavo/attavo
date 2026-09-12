@@ -43,8 +43,16 @@ if [ "${ATTAVO_STAGE:-build}" = "verify" ]; then
 fi
 
 if [ -n "${ATTAVO_FIXTURE_QUESTION:-}" ]; then
-  printf '{"status":"question","question":"%s","model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":0,"output":0},"cost_usd":0.0}\n' \
-    "$ATTAVO_FIXTURE_QUESTION"
+  # ATTAVO_FIXTURE_REPORT_CLASS (issue #94): an optional "class" field on
+  # this report line, for a rejection test proving derive_stop reads
+  # payload.get("class") itself rather than scanning refusal/halted/log
+  # text for it -- the question text carries no such wording.
+  class_field=""
+  if [ -n "${ATTAVO_FIXTURE_REPORT_CLASS:-}" ]; then
+    class_field=",\"class\":\"${ATTAVO_FIXTURE_REPORT_CLASS}\""
+  fi
+  printf '{"status":"question","question":"%s","model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":0,"output":0},"cost_usd":0.0%s}\n' \
+    "$ATTAVO_FIXTURE_QUESTION" "$class_field"
   exit 0
 fi
 

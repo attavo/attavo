@@ -20,6 +20,19 @@ def test_help_lists_attest_and_record_only():
     assert "attavo attest" in run.stdout
 
 
+def test_help_names_all_four_doctor_proofs():
+    """Issue #94, acceptance row 5: the doctor's own help text names all
+    four proofs, no-stop-lacks-cause included -- a proof the help text
+    forgets is one a reader would never know to expect from doctor: done."""
+    run = subprocess.run([sys.executable, str(ATTAVO), "--help"],
+                         capture_output=True, text=True, check=False)
+    assert run.returncode == 0
+    assert "every-gate-rejects" in run.stdout
+    assert "one-item-every-stage" in run.stdout
+    assert "no-commit-lacks-record" in run.stdout
+    assert "no-stop-lacks-cause" in run.stdout
+
+
 def test_unknown_subcommand_message_names_attest_and_record_only():
     run = subprocess.run([sys.executable, str(ATTAVO), "not-a-real-subcommand"],
                          capture_output=True, text=True, check=False)

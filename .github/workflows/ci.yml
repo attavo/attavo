@@ -18,8 +18,9 @@ jobs:
           --deselect tests/test_doctor.py::test_every_gate_rejects
           --deselect tests/test_doctor.py::test_one_item_traversed_every_stage
           --deselect tests/test_doctor.py::test_no_commit_lacks_a_record
-      - name: doctor's three proofs (expected to still fail against this repo's own root)
-        run: python3 -m pytest tests/test_doctor.py -q -k "every_gate_rejects or one_item_traversed_every_stage or no_commit_lacks_a_record" || true
+          --deselect tests/test_doctor.py::test_no_stop_lacks_cause
+      - name: doctor's four proofs (expected to still fail against this repo's own root)
+        run: python3 -m pytest tests/test_doctor.py -q -k "every_gate_rejects or one_item_traversed_every_stage or no_commit_lacks_a_record or no_stop_lacks_cause" || true
 
   action-self-check:
     runs-on: ubuntu-latest

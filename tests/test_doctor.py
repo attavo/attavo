@@ -1,6 +1,6 @@
-"""The doctor's three proofs, as tests written before the capability.
+"""The doctor's four proofs, as tests written before the capability.
 
-Each test asserts that one proof holds against this repository. All three
+Each test asserts that one proof holds against this repository. All four
 fail at the first commit and must fail: that is the definition of done,
 stated before anything exists to satisfy it. A test here turns green only
 when the capability it names has landed and been used for real.
@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from helpers import FIXTURES, commit_all, init_repo
+from helpers import FIXTURES, commit_all, init_repo, make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
@@ -48,6 +48,13 @@ def test_no_commit_lacks_a_record():
     """Proof 3. Every commit on the default branch after the manifest was
     introduced is named by a record's sha or commits list."""
     p = run_doctor(ROOT)["no-commit-lacks-record"]
+    assert p["holds"], p["reason"]
+
+
+def test_no_stop_lacks_cause():
+    """Proof 4, issue #94. Every non-pass build or verify record at
+    record_version 3 or later carries a stop naming its class and cause."""
+    p = run_doctor(ROOT)["no-stop-lacks-cause"]
     assert p["holds"], p["reason"]
 
 
@@ -547,3 +554,141 @@ def test_doctor_proof_one_runs_the_gate_without_an_item_argument(tmp_path):
     record = json.loads(
         (outer / "rejections" / "spec" / "records" / "1" / "spec-01.json").read_text())
     assert record["refusal"] == "criterion is prose: missing.sh"
+
+
+def test_doctor_proof_four_fails_on_a_failed_record_with_no_stop(tmp_path):
+    """Acceptance row 1, issue #94: a failed build record at
+    record_version 3 with a two-line log and no stop at all -- a stop
+    the product forgot to write, the way tenant zero's #576 build-11
+    (before record_version 3 existed) was diagnosed only by a person
+    rerunning it by hand. Fails today: no proof four exists."""
+    root = make_tenant(tmp_path, "no_stop_lacks_cause")
+
+    p = run_doctor(root)["no-stop-lacks-cause"]
+    assert not p["holds"]
+    assert "build-01" in p["reason"]
+    assert "no stop" in p["reason"]
+
+
+def test_doctor_proof_four_holds_on_a_fixture_with_stop_and_gates_heading(tmp_path):
+    """Acceptance row 2, issue #94: a failed build record whose stop is
+    present and valid, and whose log carries the gates heading since
+    gates actually ran (selected_tests is set) -- proof four holds."""
+    root = tmp_path / "stop_holds"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    build = {
+        "status": "failed", "record_version": 3,
+        "selected_tests": {"select": "cat", "run": "cat", "count": 1, "exit": 1},
+        "stop": {"class": "unclassed", "provenance": "product", "detail": "1 failed, 0 passed"},
+    }
+    (records / "build-01.json").write_text(json.dumps(build))
+    (records / "build-01.log").write_text(
+        "--- attavo gates, iteration 1 ---\ncriterion x: exit 1\n1 failed, 0 passed")
+    commit_all(root, "a failed build record with a proper stop and gates heading")
+
+    p = run_doctor(root)["no-stop-lacks-cause"]
+    assert p["holds"], p["reason"]
+
+
+def test_doctor_proof_four_reports_older_records_mixing_versions_2_and_3(tmp_path):
+    """Acceptance row 3, issue #94: a record_version 2 record predates
+    stop by construction (proof three's own window lesson) and is
+    counted, never refused; a record_version 3 record alongside it is
+    checked as usual. Proof four holds, reporting the older count."""
+    root = tmp_path / "mixed_versions"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "build-01.json").write_text(json.dumps({"status": "failed", "record_version": 2}))
+    (records / "verify-01.json").write_text(json.dumps({
+        "status": "returned", "record_version": 3,
+        "stop": {"class": "forge-unconcluded", "provenance": "tenant", "detail": None}}))
+    commit_all(root, "one older record before stop, one current record with a stop")
+
+    p = run_doctor(root)["no-stop-lacks-cause"]
+    assert p["holds"], p["reason"]
+    assert "1 record(s) before stop was recorded" in p["reason"]
+    assert p["older_records"] == 1
+
+
+def test_doctor_proof_four_fails_when_gates_ran_but_the_log_lacks_their_heading(tmp_path):
+    """Issue #94's own proposed fix: a failed build whose selected_tests
+    is set -- gates definitely ran that iteration -- but whose log
+    carries no gates heading at all. Tenant zero's #659 build-01 was
+    exactly this before issue #89's own fix landed: the gate output that
+    failed it lived only in a temporary directory the product deleted."""
+    root = tmp_path / "missing_gates_heading"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    build = {
+        "status": "failed", "record_version": 3,
+        "selected_tests": {"select": "cat", "run": "cat", "count": 1, "exit": 1},
+        "stop": {"class": "unclassed", "provenance": "product", "detail": "1 failed, 0 passed"},
+    }
+    (records / "build-01.json").write_text(json.dumps(build))
+    (records / "build-01.log").write_text("1 failed, 0 passed")
+    commit_all(root, "a failed build with gates run but no gates heading in the log")
+
+    p = run_doctor(root)["no-stop-lacks-cause"]
+    assert not p["holds"]
+    assert "gates heading" in p["reason"]
+
+
+def test_doctor_proof_four_fails_when_a_log_ends_in_an_adapter_exit_after_only_event_lines(
+        tmp_path):
+    """Issue #94's own proposed fix, tenant zero's #659 verify-01
+    specimen: a log whose last line is a bare adapter-exit marker with
+    nothing before it but the adapter's own JSON event stream -- the
+    tool's real error line never reached it (issue #86's own
+    split_adapter_stdout bug, now guarded against at read time too)."""
+    root = tmp_path / "owed_tool_error"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    verify = {
+        "status": "failed", "record_version": 3,
+        "stop": {"class": "unclassed", "provenance": "product", "detail": "[adapter exited 1]"},
+    }
+    (records / "verify-01.json").write_text(json.dumps(verify))
+    (records / "verify-01.log").write_text(
+        '{"type":"thread.started","thread_id":"x"}\n[adapter exited 1]')
+    commit_all(root, "a failed verify whose tool error line was dropped")
+
+    p = run_doctor(root)["no-stop-lacks-cause"]
+    assert not p["holds"]
+    assert "tool's own error line is owed" in p["reason"]
+
+
+def test_doctor_proof_four_fails_on_an_unclassed_stop_with_no_detail(tmp_path):
+    """An unclassed stop's whole contract is its detail (issue #89):
+    with none, the record is exactly as unexplained as no stop at all."""
+    root = tmp_path / "unclassed_no_detail"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    build = {"status": "failed", "record_version": 3,
+            "stop": {"class": "unclassed", "provenance": "product", "detail": None}}
+    (records / "build-01.json").write_text(json.dumps(build))
+    commit_all(root, "an unclassed stop with no detail")
+
+    p = run_doctor(root)["no-stop-lacks-cause"]
+    assert not p["holds"]
+    assert "unclassed with no detail" in p["reason"]
