@@ -82,6 +82,8 @@ appending a line asking it to either continue to done or ask a real
 question, before ever reporting a halt. A second report in a row still
 halts, but its report line carries `"class": "non-question"` and both
 raw results already reached the transcript above it — see `../README.md`.
+`tokens` and `cost_usd` on that line sum both calls; `model`,
+`model_version`, and `adapter_version` come from the second call only.
 
 ## Work that can outlive the invocation (issue #88)
 

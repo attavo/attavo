@@ -80,6 +80,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from helpers import FIXTURES
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -433,13 +435,15 @@ def test_build_instruction_names_the_feedback_files_path_not_its_text(tmp_path):
     assert "a failing test line" not in instruction
 
 
-def _response(question=None, status="done", subagent_stats=None) -> dict:
+def _response(question=None, status="done", subagent_stats=None,
+             input_tokens=5, output_tokens=9, cost_usd=0.01) -> dict:
     response = {
         "is_error": False,
         "structured_output": {"status": status, "question": question},
-        "usage": {"input_tokens": 5, "output_tokens": 9},
-        "total_cost_usd": 0.01,
-        "modelUsage": {"claude-sonnet-5": {"inputTokens": 5, "outputTokens": 9}},
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+        "total_cost_usd": cost_usd,
+        "modelUsage": {"claude-sonnet-5": {"inputTokens": input_tokens,
+                                          "outputTokens": output_tokens}},
     }
     if subagent_stats is not None:
         response["subagent_stats"] = subagent_stats
@@ -533,6 +537,35 @@ def test_claude_code_two_reports_in_a_row_halts_with_class_non_question(tmp_path
     line = json.loads(run.stdout.splitlines()[-1])
     assert line["status"] == "question"
     assert line["class"] == "non-question"
+
+
+@pytest.mark.parametrize("second_status,second_question", [
+    ("done", None),
+    ("question", PROPER_QUESTION),
+    ("question", REPORT_2),
+])
+def test_claude_code_retry_sums_tokens_and_cost_across_both_invocations(
+        tmp_path, second_status, second_question):
+    """A non-question costs two executor turns, not one -- the report
+    line must sum both, whatever the retry's own outcome (done, a
+    proper question, or a second report), or the cost row a person reads
+    off the record undercounts by exactly the first, discarded call.
+    adapter_version/model/model_version still come from the second call
+    only (issue #77: model is never picked by size across calls any
+    more than within one).
+    """
+    responses = [
+        _response(question=REPORT_1, status="question",
+                 input_tokens=5, output_tokens=9, cost_usd=0.01),
+        _response(question=second_question, status=second_status,
+                 input_tokens=7, output_tokens=3, cost_usd=0.02),
+    ]
+    run = run_with_response(tmp_path, responses)
+    assert run.returncode == 0, run.stderr
+    line = json.loads(run.stdout.splitlines()[-1])
+    assert line["tokens"]["input"] == 5 + 7
+    assert line["tokens"]["output"] == 9 + 3
+    assert line["cost_usd"] == pytest.approx(0.01 + 0.02)
 
 
 def test_claude_code_tokens_input_includes_cached_tokens(tmp_path):

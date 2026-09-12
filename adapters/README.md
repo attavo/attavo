@@ -62,6 +62,11 @@ already reached the transcript above it. No record field changes: the
 class lives in the transcript and the report line, not in
 `build-NN.json`.
 
+The report line's own `tokens` and `cost_usd` sum both calls, whatever
+the retry's outcome — the record's cost matches the two executor turns
+actually spent, not just the second one; only `model`/`model_version`/
+`adapter_version` come from the second call.
+
 Work can also outlive the invocation that started it: a tool that spawns
 its own background subagents can report `"done"` and exit while those
 subagents are still running or still being torn down, so the checks

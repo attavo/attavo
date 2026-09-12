@@ -457,6 +457,29 @@ def invoke_once(cmd: list[str], responses: list[dict] | None, call_index: int
     return None, response
 
 
+def usage_fields(response: dict) -> tuple[int, int, float | None]:
+    """(tokens.input, tokens.output, cost_usd) for one response, pulled
+    straight off usage/total_cost_usd -- independent of model derivation,
+    so a retry's first, discarded call still counts (issue #88: a
+    non-question costs two executor turns, and a report line built from
+    the second call alone undercounts by exactly the first one)."""
+    usage = response.get("usage") or {}
+    tokens_input = ((usage.get("input_tokens", 0) or 0)
+                    + (usage.get("cache_read_input_tokens", 0) or 0)
+                    + (usage.get("cache_creation_input_tokens", 0) or 0))
+    tokens_output = usage.get("output_tokens", 0) or 0
+    return tokens_input, tokens_output, response.get("total_cost_usd")
+
+
+def add_cost(a: float | None, b: float | None) -> float | None:
+    """None when neither call reported a cost; otherwise the sum,
+    treating an absent figure as 0 -- mirrors bin/attavo's own
+    cost_usd accumulation across build iterations."""
+    if a is None and b is None:
+        return None
+    return (a or 0) + (b or 0)
+
+
 def report_fields(response: dict, requested_model: str | None) -> dict | None:
     """The fields common to every final report line, derived from one
     tool response; None when no model id can be derived at all (the
@@ -475,18 +498,13 @@ def report_fields(response: dict, requested_model: str | None) -> dict | None:
             "matches no modelUsage canonicalModel -- model_version left "
             "null\n")
 
-    usage = response.get("usage") or {}
+    tokens_input, tokens_output, cost = usage_fields(response)
     return {
         "model": model,
         "model_version": model_version,
         "adapter_version": adapter_version(),
-        "tokens": {
-            "input": (usage.get("input_tokens", 0) or 0)
-                     + (usage.get("cache_read_input_tokens", 0) or 0)
-                     + (usage.get("cache_creation_input_tokens", 0) or 0),
-            "output": usage.get("output_tokens", 0),
-        },
-        "cost_usd": response.get("total_cost_usd"),
+        "tokens": {"input": tokens_input, "output": tokens_output},
+        "cost_usd": cost,
     }
 
 
@@ -580,6 +598,15 @@ def main() -> int:
         common2 = report_fields(response2, config.get("model"))
         if common2 is None:
             return 1
+        # A non-question costs two executor turns, not one: sum both
+        # calls' tokens and cost into the one report line this
+        # invocation gets, whatever the retry's own outcome -- only
+        # adapter_version/model/model_version stay the second call's.
+        tokens1_input, tokens1_output, cost1 = usage_fields(response)
+        common2["tokens"]["input"] += tokens1_input
+        common2["tokens"]["output"] += tokens1_output
+        common2["cost_usd"] = add_cost(common2["cost_usd"], cost1)
+
         if cls2 == "report":
             # Two reports in a row: still a halt (someone must look),
             # but the transcript above already carries both raw

@@ -381,21 +381,28 @@ def question_class(status: str, question: str | None) -> str:
     return "question"
 
 
+def usage_fields(events: list[dict]) -> tuple[int, int]:
+    """(tokens.input, tokens.output) for one call's own event stream --
+    split out from report_fields so a retry's first, discarded call
+    still counts (issue #88: a non-question costs two executor turns,
+    and a report line built from the second call alone undercounts by
+    exactly the first one)."""
+    term = terminal_event(events)
+    usage = (term or {}).get("usage") or {}
+    return usage.get("input_tokens", 0) or 0, usage.get("output_tokens", 0) or 0
+
+
 def report_fields(model: str, events: list[dict]) -> dict:
     """The fields common to every final report line, derived from one
     call's own event stream -- model is always the configured id (issue
     #41: codex reports none of its own), cost_usd always null (issue
     #41's auth addendum)."""
-    term = terminal_event(events)
-    usage = (term or {}).get("usage") or {}
+    tokens_input, tokens_output = usage_fields(events)
     return {
         "model": model,
         "model_version": None,
         "adapter_version": adapter_version(),
-        "tokens": {
-            "input": usage.get("input_tokens", 0) or 0,
-            "output": usage.get("output_tokens", 0) or 0,
-        },
+        "tokens": {"input": tokens_input, "output": tokens_output},
         "cost_usd": None,
     }
 
@@ -486,6 +493,14 @@ def main() -> int:
             return 1
 
         common2 = report_fields(model, events2)
+        # A non-question costs two executor turns, not one: sum both
+        # calls' tokens into the one report line this invocation gets,
+        # whatever the retry's own outcome. cost_usd stays null (issue
+        # #41): null plus null is still null.
+        tokens1_input, tokens1_output = usage_fields(events)
+        common2["tokens"]["input"] += tokens1_input
+        common2["tokens"]["output"] += tokens1_output
+
         if cls2 == "report":
             # Two reports in a row: still a halt (someone must look),
             # but the transcript above already carries both raw

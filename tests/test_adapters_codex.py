@@ -27,6 +27,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from helpers import FIXTURES
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -332,6 +334,42 @@ def test_codex_two_reports_in_a_row_halts_with_class_non_question(tmp_path):
     line = json.loads(run.stdout.splitlines()[-1])
     assert line["status"] == "question"
     assert line["class"] == "non-question"
+
+
+def _events_with_usage(question, status, input_tokens, output_tokens
+                       ) -> tuple[list[dict], dict]:
+    events = [
+        {"type": "thread.started", "thread_id": "t1"},
+        {"type": "turn.started"},
+        {"type": "turn.completed",
+         "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens}},
+    ]
+    return events, {"status": status, "question": question}
+
+
+@pytest.mark.parametrize("second_status,second_question", [
+    ("done", None),
+    ("question", PROPER_QUESTION),
+    ("question", REPORT_2),
+])
+def test_codex_retry_sums_tokens_across_both_invocations(
+        tmp_path, second_status, second_question):
+    """Issue #88 (codex). A non-question costs two executor turns, not
+    one: the report line must sum both calls' tokens, whatever the
+    retry's own outcome, or the record undercounts by exactly the
+    first, discarded call. cost_usd stays null on codex regardless
+    (issue #41): summing null with null is still null.
+    """
+    events1, final1 = _events_with_usage(REPORT_1, "question", 5, 9)
+    events2, final2 = _events_with_usage(second_question, second_status, 7, 3)
+    canned = [{"events": events1, "final": final1, "exit_code": 0},
+             {"events": events2, "final": final2, "exit_code": 0}]
+    run = run_with_responses(tmp_path, canned, config={"model": "gpt-test"})
+    assert run.returncode == 0, run.stderr
+    line = json.loads(run.stdout.splitlines()[-1])
+    assert line["tokens"]["input"] == 5 + 7
+    assert line["tokens"]["output"] == 9 + 3
+    assert line["cost_usd"] is None
 
 
 def test_codex_declares_it_cannot_check_the_subagent_guard(tmp_path):

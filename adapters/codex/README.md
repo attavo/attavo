@@ -80,7 +80,10 @@ this adapter re-invokes `codex exec` once more (the same reinstruction
 text appended to the instruction) before ever reporting a halt. A second
 report in a row still halts, but its report line carries `"class":
 "non-question"` and both calls' raw results -- events and the parsed
-output file alike -- already reached the transcript above it.
+output file alike -- already reached the transcript above it. `tokens`
+on that line sums both calls; `cost_usd` stays null regardless (issue
+#41: null plus null is still null), and `model`/`adapter_version` come
+from the second call only.
 
 ## No subagent concept to guard (issue #88)
 
