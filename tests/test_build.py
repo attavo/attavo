@@ -489,9 +489,9 @@ def test_build_ceiling_error_line_carries_ceiling_stop(tmp_path):
 
 
 def test_build_halted_on_a_plain_report_is_unclassed(tmp_path):
-    """A halt whose question names none of the enumerated classes -- every
-    adapter today, since embedding a class in the question text is issue
-    #88's own fix, a concurrent sibling lane this one does not touch --
+    """A halt whose question, refusal, and log name none of the
+    enumerated classes -- the fixture adapter's own halt, which (unlike
+    claude-code and codex since issue #88) never names a class at all --
     falls to unclassed/product, with the log's last line as its detail;
     the fixture's own question line parses as the adapter's report rather
     than transcript, so that last line is the feedback marker the fixture
@@ -509,6 +509,99 @@ def test_build_halted_on_a_plain_report_is_unclassed(tmp_path):
     assert rec["stop"]["provenance"] == "product"
     log = (root / "records" / "1" / "build-01.log").read_text()
     assert rec["stop"]["detail"] == log.splitlines()[-1]
+
+
+def _canned_response(question=None, status="done", subagent_stats=None,
+                     input_tokens=5, output_tokens=9, cost_usd=0.01) -> dict:
+    """A real `claude --output-format json` shape (mirrors
+    tests/test_adapters.py's own _response()): is_error and
+    structured_output both present, so the response reaches model
+    derivation instead of failing before it (issue #34)."""
+    response = {
+        "is_error": False,
+        "structured_output": {"status": status, "question": question},
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+        "total_cost_usd": cost_usd,
+        "modelUsage": {"claude-sonnet-5": {"inputTokens": input_tokens,
+                                          "outputTokens": output_tokens}},
+    }
+    if subagent_stats is not None:
+        response["subagent_stats"] = subagent_stats
+    return response
+
+
+def use_claude_code_adapter(root: Path) -> None:
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace('build = "fixture"', 'build = "claude-code"'))
+    commit_all(root, "use the claude-code adapter")
+
+
+def test_build_halt_naming_non_question_in_its_report_line_carries_that_stop_class(tmp_path):
+    """Issue #89 union with issue #88 (merged to main as v0.16.0, tag
+    dedebef). Two non-questions in a row halt adapters/claude-code/run
+    with a report line carrying "class": "non-question"; build.schema.json
+    is untouched by #88 on purpose -- the class lives only in the
+    transcript and the report line, not a structured field cmd_build
+    forwards -- so derive_stop must pick it up from the log.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    use_claude_code_adapter(root)
+    approve_item(root)
+
+    report_1 = ("I've traced the spec's 5 criteria against the tree and "
+               "dispatched an implementation agent to continue the work.")
+    report_2 = ("Running the acceptance suite in the background to find "
+               "the specific test failure that is blocking this item.")
+    response_file = tmp_path / "responses.json"
+    response_file.write_text(json.dumps([
+        _canned_response(question=report_1, status="question"),
+        _canned_response(question=report_2, status="question"),
+    ]))
+
+    run = run_attavo(root, "build", "1",
+                     env={"ATTAVO_ADAPTER_RESPONSE_FILE": str(response_file)})
+    assert run.returncode == 3
+
+    rec = latest_build(root)
+    assert rec["status"] == "halted"
+    assert rec["stop"] == {"class": "non-question", "provenance": "executor", "detail": None}
+
+    log = (root / "records" / "1" / "build-01.log").read_text()
+    assert "class non-question" in log
+
+
+def test_build_subagent_refusal_carries_outlived_invocation_stop_class(tmp_path):
+    """Issue #89 union with issue #88. claude-code refuses (exit 1, not a
+    halt) a result whose subagent_stats.spawned is not zero; the record
+    ends up failed with the refusal text only in the log (build's own
+    refusal field, set by cmd_build's own claims/identity checks, is
+    untouched by this adapter-side path). The refusal's exact wording --
+    "...spawned work that can outlive this invocation..." -- never spells
+    the enum name itself, which is why CLASS_TEXT_MARKERS carries it as a
+    synonym for outlived-invocation rather than relying on the bare
+    substring match that already covers non-question.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    use_claude_code_adapter(root)
+    approve_item(root)
+
+    response_file = tmp_path / "response.json"
+    response_file.write_text(json.dumps(_canned_response(
+        subagent_stats={"spawned": 3, "completed": 1,
+                        "killed": {"parent": 0, "user": 0, "system": 2},
+                        "started_in_background": 3})))
+
+    run = run_attavo(root, "build", "1",
+                     env={"ATTAVO_ADAPTER_RESPONSE_FILE": str(response_file)})
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    assert rec["status"] == "failed"
+    assert rec["stop"] == {"class": "outlived-invocation", "provenance": "executor",
+                          "detail": None}
+
+    log = (root / "records" / "1" / "build-01.log").read_text()
+    assert "subagent_stats.spawned=3" in log
 
 
 def test_build_refuses_a_commit_not_authored_by_the_executor(tmp_path):
