@@ -2352,6 +2352,19 @@ STOP_STAGES = ("build", "verify")
 FILE_STOPS_LOG_TAIL_LINES = 20
 
 
+def compose_stop_title(item_id: str, stage: str, n: int, stop: dict) -> str:
+    """`stop <class>/<provenance> on item <N>: <stage>-<NN>` -- the title
+    the tenant's file-issue script would otherwise fall back to
+    <untitled> for. An empty class or provenance is a record defect, not
+    a filing: this returns "" rather than a title with a blank half, so
+    the caller can refuse on it."""
+    cls = stop.get("class")
+    provenance = stop.get("provenance")
+    if not cls or not provenance:
+        return ""
+    return f"stop {cls}/{provenance} on item {item_id}: {stage}-{n:02d}"
+
+
 def counsel_record_for(item_records_dir: Path, stage: str, n: int) -> dict | None:
     """The latest counsel-NN.json (issue #100) whose own "record" field
     names f"{stage}-{n:02d}" -- the counsel invocation, if any, that read
@@ -2416,6 +2429,12 @@ def cmd_file_stops(argv: list[str]) -> int:
                   f"nothing filed")
             return 1
 
+    for stage, n, stop, _marker in pending:
+        if not compose_stop_title(item_id, stage, n, stop):
+            print(f"attavo file-stops: refused: {stage}-{n:02d} composes an empty title; "
+                  f"nothing filed")
+            return 1
+
     for stage, n, stop, marker in pending:
         record_path = item_records_dir / f"{stage}-{n:02d}.json"
         log_path = record_path.with_suffix(".log")
@@ -2423,6 +2442,7 @@ def cmd_file_stops(argv: list[str]) -> int:
                    if log_path.is_file() else "")
         counsel = counsel_record_for(item_records_dir, stage, n)
         body = {
+            "title": compose_stop_title(item_id, stage, n, stop),
             "class": stop["class"],
             "provenance": stop["provenance"],
             "record": str(record_path.relative_to(root)),

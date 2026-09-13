@@ -237,6 +237,41 @@ def test_file_stops_leaves_counsel_fields_null_with_no_counsel_record(tmp_path):
     assert filed_bodies[0]["counsel_proposal"] is None
 
 
+def test_file_stops_composes_a_title_naming_class_provenance_item_and_record(tmp_path):
+    """Issue #114, acceptance row 1. The filed body carries a non-empty
+    title naming class, provenance, item, and record -- not the tenant
+    side's <untitled> fallback."""
+    root = make_tenant(tmp_path, "build_valid")
+    filed = tmp_path / "filed.jsonl"
+    configure_filing(root, filed)
+
+    write_build_record(root, "1", 1, "refused",
+                       {"class": "claims-boundary", "provenance": "spec", "detail": None})
+
+    run = run_attavo(root, "file-stops", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+
+    filed_bodies = [json.loads(l) for l in filed.read_text().splitlines() if l.strip()]
+    assert filed_bodies[0]["title"] == "stop claims-boundary/spec on item 1: build-01"
+
+
+def test_file_stops_refuses_a_stop_whose_composed_title_would_be_empty(tmp_path):
+    """Issue #114, acceptance row 2. An empty class is a record defect,
+    not a filing: file-stops refuses by name and files nothing."""
+    root = make_tenant(tmp_path, "build_valid")
+    filed = tmp_path / "filed.jsonl"
+    configure_filing(root, filed)
+
+    write_build_record(root, "1", 1, "failed",
+                       {"class": "", "provenance": "product", "detail": None})
+
+    run = run_attavo(root, "file-stops", "1")
+    assert run.returncode == 1
+    assert "empty title" in run.stdout
+    assert not filed.exists()
+    assert not (root / "records" / "1" / "build-01.filed").exists()
+
+
 def test_file_stops_refuses_without_a_file_issue_command(tmp_path):
     root = make_tenant(tmp_path, "build_valid")
     write_build_record(root, "1", 1, "failed",
