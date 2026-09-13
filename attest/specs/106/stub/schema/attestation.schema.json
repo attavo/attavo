@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://attavo.dev/attestation/v2",
+  "title": "The attestation statement `attavo attest` prints on a coherent chain",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sha",
+    "merge_sha",
+    "item",
+    "spec",
+    "spec_sha",
+    "approval",
+    "approval_sha",
+    "build",
+    "build_sha",
+    "verify",
+    "verify_sha",
+    "at",
+    "interventions",
+    "acts",
+    "tokens_by_stage",
+    "cost_by_stage_usd",
+    "wall_clock_by_stage_s",
+    "product_version",
+    "product_pin"
+  ],
+  "properties": {
+    "sha": {
+      "type": "string",
+      "minLength": 1
+    },
+    "merge_sha": {
+      "type": "string",
+      "minLength": 1
+    },
+    "item": {
+      "type": "string",
+      "minLength": 1
+    },
+    "spec": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "spec_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "approval": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "approval_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "build": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "build_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "verify": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "verify_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "interventions": {
+      "type": "array",
+      "description": "Corrections or amendments made during the item's traversal. Nothing populates this yet.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "at",
+          "class",
+          "by"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "minLength": 1
+          },
+          "class": {
+            "type": "string",
+            "minLength": 1
+          },
+          "by": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "acts": {
+      "type": "array",
+      "description": "Operator acts on the item: approve, rule, merge. Nothing populates this yet.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "at",
+          "act",
+          "by"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "minLength": 1
+          },
+          "act": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "rule",
+              "merge"
+            ]
+          },
+          "by": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "tokens_by_stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "build",
+        "verify"
+      ],
+      "properties": {
+        "build": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "verify": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    },
+    "cost_by_stage_usd": {
+      "type": "object",
+      "description": "Never summed across stages -- a stage's own executor may report no cost at all.",
+      "additionalProperties": false,
+      "required": [
+        "build",
+        "verify"
+      ],
+      "properties": {
+        "build": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "verify": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "wall_clock_by_stage_s": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "build",
+        "verify"
+      ],
+      "properties": {
+        "build": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "verify": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "product_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "product_pin": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

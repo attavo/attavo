@@ -1,0 +1,66 @@
+{
+  "sha": "6c1ddbd4d199a7a585ea14352332dea481df1c4b",
+  "start_sha": "99fd3d6402ca5f6e5b27d5aded7d17e46395c9bb",
+  "spec_sha": "dbff340f33d8f21c1d200f0b1dbb0f7d7788e22b",
+  "approval_sha": "f51bbf93410c24fcc4b6026f60b6a3f84a5c315a",
+  "at": "2026-09-13T15:54:01Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.270 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 3,
+  "criteria": [
+    {
+      "name": "no-ci-runs.sh",
+      "exit": 0
+    },
+    {
+      "name": "attestation-schema-v2.sh",
+      "exit": 0
+    },
+    {
+      "name": "driver-identity.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause",
+    "count": 1,
+    "exit": 1
+  },
+  "checks": {
+    "command": "python3 -m pytest tests -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause",
+    "exit": 2
+  },
+  "tokens": {
+    "input": 5419270,
+    "output": 34873
+  },
+  "cost_usd": 1.9786878000000003,
+  "wall_clock_s": 939.518,
+  "status": "failed",
+  "refusal": null,
+  "halted": null,
+  "stop": {
+    "class": "unclassed",
+    "provenance": "product",
+    "detail": "4 deselected, 4 errors in 0.11s"
+  },
+  "record_version": 4,
+  "item": "106",
+  "product_version": "v0.17.1-8-ge72112f",
+  "product_pin": "v0.17.1"
+}

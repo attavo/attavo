@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""Stub for the spec gate: proves the criteria are reachable, runs nothing."""
+
+
+def executor_identity(adapter_name: str) -> dict:
+    return {"name": f"attavo executor ({adapter_name})",
+            "email": f"executor+{adapter_name}@attavo.invalid"}
+
+
+def driver_identity() -> dict:
+    """The driver's identity for the record commits it makes: set by the
+    product, never the tenant's git config, so a transport commit is never
+    indistinguishable from an operator's own."""
+    return {"name": "attavo driver", "email": "driver@attavo.invalid"}

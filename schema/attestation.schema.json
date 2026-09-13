@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/attestation/v1",
+  "$id": "https://attavo.dev/attestation/v2",
   "title": "The attestation statement `attavo attest` prints on a coherent chain",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "sha", "merge_sha", "item", "spec", "spec_sha", "approval", "approval_sha",
     "build", "build_sha", "verify", "verify_sha", "at", "interventions", "acts",
-    "tokens_by_stage", "cost_by_stage_usd", "wall_clock_by_stage_s", "ci_runs",
+    "tokens_by_stage", "cost_by_stage_usd", "wall_clock_by_stage_s",
     "product_version", "product_pin"
   ],
   "properties": {
@@ -79,7 +79,6 @@
         "verify": {"type": ["number", "null"]}
       }
     },
-    "ci_runs": {"type": "integer", "minimum": 0},
     "product_version": {"type": "string", "minLength": 1},
     "product_pin": {"type": ["string", "null"]}
   }

@@ -1,0 +1,91 @@
+{
+  "sha": "7c777a9058147e7c569a6c16d27bcbedff5f5fbd",
+  "build_sha": "e91548b973bf0f24107bf5a932bb8338feb6be76",
+  "build_record": "build-03",
+  "approval_sha": "fa165c2ba6ae68fe6f77ee403556aeba69674d31",
+  "at": "2026-09-13T20:39:36Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "7c777a9058147e7c569a6c16d27bcbedff5f5fbd",
+    "conclusions": [
+      {
+        "name": "doctor",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "The coherence workflow still signs v2 statements as the v1 predicate type",
+      "specimen": "templates/workflows/attavo-coherence.yml (unchanged by 6c1ddbd; lines 40 and 118 still use https://attavo.dev/attestation/v1), while schema/attestation.schema.json declares https://attavo.dev/attestation/v2",
+      "retires": "The build\u2019s implicit claim that changing the schema $id alone completes the attestation-v2 migration; it also closes the stale v1 predicate-type contract preserved by test_predicate_type_is_the_ruled_url.",
+      "rejection_test": "tests/test_coherence_template.py::test_predicate_type_matches_attestation_schema_id \u2014 load schema/attestation.schema.json, read its $id, and assert the workflow\u2019s predicate-type equals it (replacing the current test that explicitly requires /v1).",
+      "severity": "Blocking when a schema-v2 attestation reaches the merge_group signing step: it is published under the v1 predicate type; harmless only while no v2 statement is signed through that workflow."
+    }
+  ],
+  "tests_named": [
+    "tests/test_coherence_template.py::test_predicate_type_matches_attestation_schema_id"
+  ],
+  "commits": [],
+  "mutation": null,
+  "weak_stub": false,
+  "stub_ratio": null,
+  "tokens": {
+    "input": 222723,
+    "output": 2001
+  },
+  "cost_usd": null,
+  "wall_clock_s": 62.96,
+  "status": "pass",
+  "stop": null,
+  "record_version": 4,
+  "item": "106",
+  "product_version": "v0.17.2-4-g6841305",
+  "product_pin": "v0.17.2"
+}

@@ -1,0 +1,34 @@
+{
+  "sha": "debf866aff8af5abcc526290d5d8a93466e25f1f",
+  "spec_sha": "debf866aff8af5abcc526290d5d8a93466e25f1f",
+  "at": "2026-09-13T16:10:45Z",
+  "status": "built",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "no-ci-runs.sh",
+      "on_tree": 0,
+      "on_stub": 0
+    },
+    {
+      "name": "attestation-schema-v2.sh",
+      "on_tree": 0,
+      "on_stub": 0
+    },
+    {
+      "name": "driver-identity.sh",
+      "on_tree": 0,
+      "on_stub": 0
+    },
+    {
+      "name": "doctor-job-main-only.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "106",
+  "product_version": "v0.17.1",
+  "product_pin": "v0.17.1"
+}

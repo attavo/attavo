@@ -178,6 +178,34 @@ def test_drive_builds_from_an_approved_spec_with_no_build(tmp_path):
     assert remote_head(bare, branch) == head_of(root)
 
 
+def test_drive_commits_the_record_as_the_driver_not_the_tenants_own_identity(tmp_path):
+    """The driver's identity (driver_identity, beside executor_identity):
+    set by the product, never the tenant's git config, so a driven item's
+    record commits are never indistinguishable from an operator's own.
+    The fixture tenant's user.name is set to another value here, so a
+    commit carrying it would prove commit_record fell back to the
+    tenant's git config instead."""
+    root = make_tenant(tmp_path, "build_valid")
+    git(root, "config", "user.name", "Some Operator")
+    git(root, "config", "user.email", "operator@example.com")
+    add_forge(root, GREEN_FORGE)
+    add_bare_remote(root, tmp_path)
+    approve_item(root)
+
+    run = run_attavo(root, "drive", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+
+    author_name = git(root, "log", "-1", "--format=%an").strip()
+    author_email = git(root, "log", "-1", "--format=%ae").strip()
+    committer_name = git(root, "log", "-1", "--format=%cn").strip()
+    committer_email = git(root, "log", "-1", "--format=%ce").strip()
+
+    assert author_name == "attavo driver"
+    assert author_email == "driver@attavo.invalid"
+    assert committer_name == "attavo driver"
+    assert committer_email == "driver@attavo.invalid"
+
+
 def test_drive_verifies_from_a_passed_build_with_the_forge_green(tmp_path):
     """Acceptance row 2. From a passed build with the fake forge green,
     one run produces a verify record, commits only the record and its log,

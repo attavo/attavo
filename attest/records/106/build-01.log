@@ -1,0 +1,321 @@
+{"duration_api_ms":175686,"stop_reason":"tool_use","session_id":"d6ad0b4a-4118-432c-a707-3a8e5a6b96fa","total_cost_usd":1.0884094000000002,"usage":{"input_tokens":120,"cache_creation_input_tokens":76935,"cache_read_input_tokens":3122907,"output_tokens":15397,"output_tokens_details":{"thinking_tokens":3665},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":76935,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":120,"cache_read_input_tokens":76368,"cache_creation_input_tokens":567,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":567},"type":"message"}],"speed":"standard"},"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":1773,"outputTokens":21,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"webSearchRequests":0,"costUSD":0.0018780000000000001,"contextWindow":200000,"maxOutputTokens":32000,"thinkingTokens":0,"canonicalModel":"claude-haiku-4-5","provider":"firstParty","costBasis":"list"},"claude-sonnet-5":{"inputTokens":120,"outputTokens":15397,"cacheReadInputTokens":3122907,"cacheCreationInputTokens":76935,"webSearchRequests":0,"costUSD":1.0865314000000001,"contextWindow":1000000,"maxOutputTokens":64000,"thinkingTokens":3665,"canonicalModel":"claude-sonnet-5","provider":"firstParty","costBasis":"list"}},"permission_denials":[],"terminal_reason":"completed","fast_mode_state":"off","fast_mode_disabled_reason":"sdk_opt_in_required","subagent_stats":{"spawned":0,"requested":{"background":0,"foreground":0,"unset":0},"started_in_background":0,"max_depth":0,"spawned_by_subagents":0,"completed":0,"failed":0,"killed":{"parent":0,"user":0,"system":0},"refused":{"depth_limit":0,"concurrency_limit":0,"budget":0},"by_type":{}},"is_error":false,"num_turns":61,"subtype":"success","api_error_status":null,"result":"{\"status\":\"done\",\"question\":null}","structured_output":{"status":"done","question":null},"ttft_ms":1537,"type":"result","duration_ms":351174,"uuid":"d35b1a33-fe20-4f3e-9991-cdac6c3ba7b5","ttft_stream_ms":982,"time_to_request_ms":28,"first_content_frame_ms":1266,"queued_turn_count":0,"result_index":0}
+--- attavo gates, iteration 1 ---
+criterion no-ci-runs.sh: exit 0
+criterion attestation-schema-v2.sh: exit 0
+criterion driver-identity.sh: exit 0
+selected tests (1): exit 1
+--- selected tests stdout ---
+
+==================================== ERRORS ====================================
+____________________ ERROR collecting tests/test_attest.py _____________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_attest.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_attest.py:24: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+____________________ ERROR collecting tests/test_counsel.py ____________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_counsel.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_counsel.py:20: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+________________ ERROR collecting tests/test_record_schemas.py _________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_record_schemas.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_record_schemas.py:17: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+_________________ ERROR collecting tests/test_self_tenancy.py __________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_self_tenancy.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_self_tenancy.py:18: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+=========================== short test summary info ============================
+ERROR tests/test_attest.py
+ERROR tests/test_counsel.py
+ERROR tests/test_record_schemas.py
+ERROR tests/test_self_tenancy.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 4 errors during collection !!!!!!!!!!!!!!!!!!!!
+4 deselected, 4 errors in 0.12s
+tenant checks: exit 2
+--- checks output (tail) ---
+
+==================================== ERRORS ====================================
+____________________ ERROR collecting tests/test_attest.py _____________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_attest.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_attest.py:24: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+____________________ ERROR collecting tests/test_counsel.py ____________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_counsel.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_counsel.py:20: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+________________ ERROR collecting tests/test_record_schemas.py _________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_record_schemas.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_record_schemas.py:17: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+_________________ ERROR collecting tests/test_self_tenancy.py __________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_self_tenancy.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_self_tenancy.py:18: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+=========================== short test summary info ============================
+ERROR tests/test_attest.py
+ERROR tests/test_counsel.py
+ERROR tests/test_record_schemas.py
+ERROR tests/test_self_tenancy.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 4 errors during collection !!!!!!!!!!!!!!!!!!!!
+4 deselected, 4 errors in 0.12s
+{"duration_api_ms":184107,"stop_reason":"tool_use","session_id":"6acbc96e-ff15-4a90-91ad-0af939e713d5","total_cost_usd":0.6110348,"usage":{"input_tokens":70,"cache_creation_input_tokens":41471,"cache_read_input_tokens":1564589,"output_tokens":13014,"output_tokens_details":{"thinking_tokens":8166},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":41471,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":1772,"cache_read_input_tokens":60276,"cache_creation_input_tokens":218,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":218},"type":"message"}],"speed":"standard"},"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":1863,"outputTokens":18,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"webSearchRequests":0,"costUSD":0.001953,"contextWindow":200000,"maxOutputTokens":32000,"thinkingTokens":0,"canonicalModel":"claude-haiku-4-5","provider":"firstParty","costBasis":"list"},"claude-sonnet-5":{"inputTokens":70,"outputTokens":13014,"cacheReadInputTokens":1564589,"cacheCreationInputTokens":41471,"webSearchRequests":0,"costUSD":0.6090817999999999,"contextWindow":1000000,"maxOutputTokens":64000,"thinkingTokens":8166,"canonicalModel":"claude-sonnet-5","provider":"firstParty","costBasis":"list"}},"permission_denials":[],"terminal_reason":"completed","fast_mode_state":"off","fast_mode_disabled_reason":"sdk_opt_in_required","subagent_stats":{"spawned":0,"requested":{"background":0,"foreground":0,"unset":0},"started_in_background":0,"max_depth":0,"spawned_by_subagents":0,"completed":0,"failed":0,"killed":{"parent":0,"user":0,"system":0},"refused":{"depth_limit":0,"concurrency_limit":0,"budget":0},"by_type":{}},"is_error":false,"num_turns":37,"subtype":"success","api_error_status":null,"result":"{\"status\":\"done\",\"question\":null}","structured_output":{"status":"done","question":null},"ttft_ms":1991,"type":"result","duration_ms":358078,"uuid":"a5fe3e8a-3a43-4644-b556-bd5e74d01a62","ttft_stream_ms":1468,"time_to_request_ms":26,"first_content_frame_ms":1817,"queued_turn_count":0,"result_index":0}
+--- attavo gates, iteration 2 ---
+criterion no-ci-runs.sh: exit 0
+criterion attestation-schema-v2.sh: exit 0
+criterion driver-identity.sh: exit 0
+selected tests (1): exit 1
+--- selected tests stdout ---
+
+==================================== ERRORS ====================================
+____________________ ERROR collecting tests/test_attest.py _____________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_attest.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_attest.py:24: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+____________________ ERROR collecting tests/test_counsel.py ____________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_counsel.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_counsel.py:20: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+________________ ERROR collecting tests/test_record_schemas.py _________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_record_schemas.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_record_schemas.py:17: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+_________________ ERROR collecting tests/test_self_tenancy.py __________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_self_tenancy.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_self_tenancy.py:18: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+=========================== short test summary info ============================
+ERROR tests/test_attest.py
+ERROR tests/test_counsel.py
+ERROR tests/test_record_schemas.py
+ERROR tests/test_self_tenancy.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 4 errors during collection !!!!!!!!!!!!!!!!!!!!
+4 deselected, 4 errors in 0.12s
+tenant checks: exit 2
+--- checks output (tail) ---
+
+==================================== ERRORS ====================================
+____________________ ERROR collecting tests/test_attest.py _____________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_attest.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_attest.py:24: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+____________________ ERROR collecting tests/test_counsel.py ____________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_counsel.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_counsel.py:20: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+________________ ERROR collecting tests/test_record_schemas.py _________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_record_schemas.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_record_schemas.py:17: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+_________________ ERROR collecting tests/test_self_tenancy.py __________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_self_tenancy.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_self_tenancy.py:18: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+=========================== short test summary info ============================
+ERROR tests/test_attest.py
+ERROR tests/test_counsel.py
+ERROR tests/test_record_schemas.py
+ERROR tests/test_self_tenancy.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 4 errors during collection !!!!!!!!!!!!!!!!!!!!
+4 deselected, 4 errors in 0.11s
+{"duration_api_ms":71587,"stop_reason":"tool_use","session_id":"6db1cd2a-f7e1-411e-88c9-d31c611a19ef","total_cost_usd":0.2792436,"usage":{"input_tokens":34,"cache_creation_input_tokens":23676,"cache_read_input_tokens":589468,"output_tokens":6462,"output_tokens_details":{"thinking_tokens":2613},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":23676,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":664,"cache_read_input_tokens":42277,"cache_creation_input_tokens":422,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":422},"type":"message"}],"speed":"standard"},"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":1863,"outputTokens":19,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"webSearchRequests":0,"costUSD":0.001958,"contextWindow":200000,"maxOutputTokens":32000,"thinkingTokens":0,"canonicalModel":"claude-haiku-4-5","provider":"firstParty","costBasis":"list"},"claude-sonnet-5":{"inputTokens":34,"outputTokens":6462,"cacheReadInputTokens":589468,"cacheCreationInputTokens":23676,"webSearchRequests":0,"costUSD":0.27728559999999997,"contextWindow":1000000,"maxOutputTokens":64000,"thinkingTokens":2613,"canonicalModel":"claude-sonnet-5","provider":"firstParty","costBasis":"list"}},"permission_denials":[],"terminal_reason":"completed","fast_mode_state":"off","fast_mode_disabled_reason":"sdk_opt_in_required","subagent_stats":{"spawned":0,"requested":{"background":0,"foreground":0,"unset":0},"started_in_background":0,"max_depth":0,"spawned_by_subagents":0,"completed":0,"failed":0,"killed":{"parent":0,"user":0,"system":0},"refused":{"depth_limit":0,"concurrency_limit":0,"budget":0},"by_type":{}},"is_error":false,"num_turns":21,"subtype":"success","api_error_status":null,"result":"{\"status\":\"done\",\"question\":null}","structured_output":{"status":"done","question":null},"ttft_ms":1242,"type":"result","duration_ms":217640,"uuid":"29999cd2-0a27-4506-817f-fbfe910db471","ttft_stream_ms":724,"time_to_request_ms":26,"first_content_frame_ms":932,"queued_turn_count":0,"result_index":0}
+--- attavo gates, iteration 3 ---
+criterion no-ci-runs.sh: exit 0
+criterion attestation-schema-v2.sh: exit 0
+criterion driver-identity.sh: exit 0
+selected tests (1): exit 1
+--- selected tests stdout ---
+
+==================================== ERRORS ====================================
+____________________ ERROR collecting tests/test_attest.py _____________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_attest.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_attest.py:24: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+____________________ ERROR collecting tests/test_counsel.py ____________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_counsel.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_counsel.py:20: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+________________ ERROR collecting tests/test_record_schemas.py _________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_record_schemas.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_record_schemas.py:17: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+_________________ ERROR collecting tests/test_self_tenancy.py __________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_self_tenancy.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_self_tenancy.py:18: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+=========================== short test summary info ============================
+ERROR tests/test_attest.py
+ERROR tests/test_counsel.py
+ERROR tests/test_record_schemas.py
+ERROR tests/test_self_tenancy.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 4 errors during collection !!!!!!!!!!!!!!!!!!!!
+4 deselected, 4 errors in 0.12s
+tenant checks: exit 2
+--- checks output (tail) ---
+
+==================================== ERRORS ====================================
+____________________ ERROR collecting tests/test_attest.py _____________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_attest.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_attest.py:24: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+____________________ ERROR collecting tests/test_counsel.py ____________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_counsel.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_counsel.py:20: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+________________ ERROR collecting tests/test_record_schemas.py _________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_record_schemas.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_record_schemas.py:17: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+_________________ ERROR collecting tests/test_self_tenancy.py __________________
+ImportError while importing test module '/Users/davidbean/Projects/attest-item-106/tests/test_self_tenancy.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_self_tenancy.py:18: in <module>
+    import jsonschema
+E   ModuleNotFoundError: No module named 'jsonschema'
+=========================== short test summary info ============================
+ERROR tests/test_attest.py
+ERROR tests/test_counsel.py
+ERROR tests/test_record_schemas.py
+ERROR tests/test_self_tenancy.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 4 errors during collection !!!!!!!!!!!!!!!!!!!!
+4 deselected, 4 errors in 0.11s
