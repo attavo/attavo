@@ -304,18 +304,20 @@ def test_partial_still_refuses_a_stale_build_sha_on_verify(tmp_path):
     assert "build_sha" in run.stderr
 
 
-def test_partial_does_not_read_ci_runs(tmp_path, monkeypatch):
-    """A not-yet exit prints no statement, so ATTAVO_CI_RUNS -- read only
-    while building one -- must not affect it."""
+def test_statement_carries_no_ci_runs_key(tmp_path):
+    """The product does not count a forge's own CI runs; a forge-read
+    producer for the number is Phase 4's, if a decision ever needs it."""
     root = make_tenant(tmp_path, "build_valid")
     configure_forge(root)
-    build_missing_verify_record(root)
+    git(root, "checkout", "-b", "improve-thing")
+    traverse_item(root, "1")
+    merge_into_main(root, "improve-thing")
 
-    before = records_snapshot(root)
-    monkeypatch.setenv("ATTAVO_CI_RUNS", "7")
-    run = run_attavo(root, "attest", "--partial")
-    assert run.returncode == 0, run.stderr
-    assert records_snapshot(root) == before
+    run = run_attavo(root, "attest")
+    assert run.returncode == 0, run.stdout + run.stderr
+
+    statement = json.loads(run.stdout)
+    assert "ci_runs" not in statement
 
 
 # --- row 3: --dry-run no longer exists ---

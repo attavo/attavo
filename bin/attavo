@@ -279,9 +279,9 @@ def read_manifest(root: Path) -> dict | None:
         return tomllib.load(fh)
 
 
-def git(root: Path, *args: str) -> str:
+def git(root: Path, *args: str, env: dict | None = None) -> str:
     out = subprocess.run(["git", "-C", str(root), *args],
-                         capture_output=True, text=True, check=False)
+                         capture_output=True, text=True, check=False, env=env)
     if out.returncode != 0:
         raise RuntimeError(out.stderr.strip() or "git failed")
     return out.stdout
@@ -1354,6 +1354,17 @@ def executor_identity(adapter_name: str) -> dict:
             "email": f"executor+{adapter_name}@attavo.invalid"}
 
 
+def driver_identity() -> dict:
+    """The driver's identity: set by the product, never the tenant's git
+    config, so a driver's own transport commit -- a record commit
+    `commit_record` makes on the driver's behalf -- is never
+    indistinguishable from an operator's own; `git log --author='attavo
+    driver'` on a driven item lists exactly those commits. Distinct from
+    executor_identity: that names an adapter invocation's own commits,
+    this names the transport that carries a stage's record."""
+    return {"name": "attavo driver", "email": "driver@attavo.invalid"}
+
+
 def commits_since(root: Path, start_sha: str) -> list[dict]:
     """(sha, name, email) for every commit after start_sha, oldest first."""
     out = git(root, "log", "--format=%H\x1f%an\x1f%ae", f"{start_sha}..HEAD")
@@ -2065,7 +2076,10 @@ def commit_record(root: Path, record_paths: Path | list[Path], message: str) -> 
     the same filed fact rather than refiling every stop it finds with no
     marker of its own. A single Path is accepted for the common one-record
     case; issue #100 passes a list so the counsel record lands in the same
-    commit as the stage record it counsels."""
+    commit as the stage record it counsels. Authored and committed as
+    driver_identity(), set by the product and never the tenant's git
+    config, so a driven item's record commits are never indistinguishable
+    from an operator's own."""
     if isinstance(record_paths, Path):
         record_paths = [record_paths]
     paths: list[str] = []
@@ -2077,8 +2091,14 @@ def commit_record(root: Path, record_paths: Path | list[Path], message: str) -> 
         marker_path = record_path.with_suffix(".filed")
         if marker_path.is_file():
             paths.append(str(marker_path.relative_to(root)))
+    identity = driver_identity()
+    env = dict(os.environ)
+    env["GIT_AUTHOR_NAME"] = identity["name"]
+    env["GIT_AUTHOR_EMAIL"] = identity["email"]
+    env["GIT_COMMITTER_NAME"] = identity["name"]
+    env["GIT_COMMITTER_EMAIL"] = identity["email"]
     git(root, "add", *paths)
-    git(root, "commit", "--only", "-m", message, *paths)
+    git(root, "commit", "--only", "-m", message, *paths, env=env)
 
 
 def push_record_commit(root: Path, branch: str) -> tuple[bool, str | None]:
@@ -2604,9 +2624,6 @@ def cmd_attest(argv: list[str]) -> int:
         "cost_by_stage_usd": {"build": latest_build.get("cost_usd"), "verify": latest_verify.get("cost_usd")},
         "wall_clock_by_stage_s": {"build": latest_build.get("wall_clock_s"),
                                   "verify": latest_verify.get("wall_clock_s")},
-        # The product does not count a forge's own CI runs; a template
-        # that wants this reported sets ATTAVO_CI_RUNS from its own read.
-        "ci_runs": int(os.environ.get("ATTAVO_CI_RUNS") or 0),
         "product_version": product_version(),
         "product_pin": (m.get("attavo") or {}).get("version"),
     }
