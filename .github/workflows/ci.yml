@@ -27,7 +27,13 @@ jobs:
   # stage (proof one-item-every-stage): this job is expected red on main
   # until the first item merges, so it is not yet a required check --
   # the operator makes it required once that item lands.
+  #
+  # #106: proof two (a driven item's forge is green) has no vacuous case,
+  # so this job is red on every pull request until this tenant's first
+  # item has merged. Conditioned on pushes to main only until then; a
+  # later item returns it to pull requests and merge groups.
   doctor:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
