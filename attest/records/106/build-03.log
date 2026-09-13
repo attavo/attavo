@@ -1,0 +1,15 @@
+{"duration_api_ms":29374,"stop_reason":"tool_use","session_id":"9e5c1634-17fe-4288-b787-bb650d17ea5a","total_cost_usd":0.23592660000000004,"usage":{"input_tokens":26,"cache_creation_input_tokens":33960,"cache_read_input_tokens":367798,"output_tokens":2439,"output_tokens_details":{"thinking_tokens":479},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":33960,"ephemeral_5m_input_tokens":0},"inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":161,"cache_read_input_tokens":33650,"cache_creation_input_tokens":310,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":310},"type":"message"}],"speed":"standard"},"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":1990,"outputTokens":19,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"webSearchRequests":0,"costUSD":0.002085,"contextWindow":200000,"maxOutputTokens":32000,"thinkingTokens":0,"canonicalModel":"claude-haiku-4-5","provider":"firstParty","costBasis":"list"},"claude-sonnet-5":{"inputTokens":26,"outputTokens":2439,"cacheReadInputTokens":367798,"cacheCreationInputTokens":33960,"webSearchRequests":0,"costUSD":0.23384160000000004,"contextWindow":1000000,"maxOutputTokens":64000,"thinkingTokens":479,"canonicalModel":"claude-sonnet-5","provider":"firstParty","costBasis":"list"}},"permission_denials":[],"terminal_reason":"completed","fast_mode_state":"off","fast_mode_disabled_reason":"sdk_opt_in_required","subagent_stats":{"spawned":0,"requested":{"background":0,"foreground":0,"unset":0},"started_in_background":0,"max_depth":0,"spawned_by_subagents":0,"completed":0,"failed":0,"killed":{"parent":0,"user":0,"system":0},"refused":{"depth_limit":0,"concurrency_limit":0,"budget":0},"by_type":{}},"is_error":false,"num_turns":14,"subtype":"success","api_error_status":null,"result":"{\"status\":\"done\",\"question\":null}","structured_output":{"status":"done","question":null},"ttft_ms":1324,"type":"result","duration_ms":74129,"uuid":"3964f5e2-0690-4128-9c23-d1b24f87d5b0","ttft_stream_ms":903,"time_to_request_ms":30,"first_content_frame_ms":1090,"queued_turn_count":0,"result_index":0}
+--- attavo gates, iteration 1 ---
+criterion no-ci-runs.sh: exit 0
+criterion attestation-schema-v2.sh: exit 0
+criterion driver-identity.sh: exit 0
+criterion doctor-job-main-only.sh: exit 0
+selected tests (0): exit 0
+tenant checks: exit 0
+--- checks output (tail) ---
+........................................................................ [ 24%]
+........................................................................ [ 48%]
+........................................................................ [ 72%]
+........................................................................ [ 96%]
+...........                                                              [100%]
+299 passed, 4 deselected in 147.41s (0:02:27)

@@ -1,0 +1,66 @@
+{
+  "sha": "e91548b973bf0f24107bf5a932bb8338feb6be76",
+  "start_sha": "b7b94963f99dac5b38c274667566b4e22de4992c",
+  "spec_sha": "debf866aff8af5abcc526290d5d8a93466e25f1f",
+  "approval_sha": "fa165c2ba6ae68fe6f77ee403556aeba69674d31",
+  "at": "2026-09-13T19:35:47Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.270 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "no-ci-runs.sh",
+      "exit": 0
+    },
+    {
+      "name": "attestation-schema-v2.sh",
+      "exit": 0
+    },
+    {
+      "name": "driver-identity.sh",
+      "exit": 0
+    },
+    {
+      "name": "doctor-job-main-only.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause",
+    "count": 0,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m pytest tests -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 401784,
+    "output": 2439
+  },
+  "cost_usd": 0.23592660000000004,
+  "wall_clock_s": 225.026,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "stop": null,
+  "record_version": 4,
+  "item": "106",
+  "product_version": "v0.17.1-8-ge72112f",
+  "product_pin": "v0.17.1"
+}
