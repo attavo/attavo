@@ -78,6 +78,30 @@ def test_manifest_declares_every_key_issue_103_lists():
     assert m["checks"]["command"]
 
 
+DESELECT_FLAGS = (
+    "--deselect tests/test_doctor.py::test_every_gate_rejects",
+    "--deselect tests/test_doctor.py::test_one_item_traversed_every_stage",
+    "--deselect tests/test_doctor.py::test_no_commit_lacks_a_record",
+    "--deselect tests/test_doctor.py::test_no_stop_lacks_cause",
+)
+
+
+def test_checks_and_tests_run_deselect_the_four_dogfood_doctor_tests():
+    """[checks].command and [tests].run must never run the four doctor
+    tests that fail until an item has traversed every stage: the first
+    item's own build would fail its own checks on a doctor proof no
+    item has satisfied yet. [checks].command is ci.yml's test job
+    command verbatim, deselects included; [tests].run carries the same
+    four flags after `python3 -m pytest -q`. The doctor job in ci.yml is
+    the only place the four run without them. Written and run red once
+    by dropping one flag from [checks].command, confirmed it failed,
+    then restored."""
+    m = load_manifest()
+    for flag in DESELECT_FLAGS:
+        assert flag in m["checks"]["command"], m["checks"]["command"]
+        assert flag in m["tests"]["run"], m["tests"]["run"]
+
+
 def run_select_tests(stdin_text: str) -> list[str]:
     run = subprocess.run([sys.executable, str(SELECT_TESTS)], input=stdin_text,
                          capture_output=True, text=True, check=True)
