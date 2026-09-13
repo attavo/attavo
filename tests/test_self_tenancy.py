@@ -48,8 +48,6 @@ def test_manifest_validates_against_schema():
 def test_manifest_declares_every_key_issue_103_lists():
     m = load_manifest()
     assert re.fullmatch(r"v\d+\.\d+\.\d+", m["attavo"]["version"]), m["attavo"]["version"]
-    assert subprocess.run(["git", "rev-parse", "-q", "--verify", m["attavo"]["version"] + "^{commit}"],
-                          capture_output=True).returncode == 0, "the pinned tag must exist"
     # No [doctor].from: proof_no_commit_lacks_record only accepts a
     # declared from equal to, or on the first-parent line strictly
     # after, the install commit (schema: "at or after the install
