@@ -53,24 +53,33 @@ def test_skip_step_reads_record_only_exit_code():
     assert "tomllib" not in touch_block
 
 
-def test_template_pushes_on_refusal():
-    """Issue #28, acceptance 5. A step after a failed one is skipped by
-    default -- PR #600's specimen: `attavo spec-gate` refused, and the
-    refusal record never reached the branch because the push step
-    afterward never ran, existing only in the run log. The push step
-    must carry if: always() (still gated on the skip check, so the
-    anti-loop protection from issue #9 holds), and nothing upstream may
-    swallow the gate's own failure with continue-on-error.
+def test_template_pushes_after_the_gate_ran_whatever_it_said():
+    """Issue #116, acceptance rows 1-2. `always()` (issue #28's fix) also
+    ran the commit step after a mint or checkout failure, with no bot
+    identity to commit as -- on 2026-09-13 that produced a second, unrelated
+    exit-128 failure on top of the real one, naming the wrong step. The
+    step must instead run whenever the gate itself ran, whatever it said
+    (`steps.gate.outcome` is 'success' or 'failure'), and not when the gate
+    never ran. A step condition with no status function implies success(),
+    so the failure branch needs `!cancelled()` to run at all:
+    https://docs.github.com/en/actions/learn-github-actions/expressions#status-check-functions
+    Reintroducing `always()` recreates the exit-128 second failure; dropping
+    the failure branch recreates issue #28 (a refusal record that never
+    reaches the branch).
     """
     text = TEMPLATE.read_text()
 
+    gate_block = step_block(text, "- name: attavo spec-gate")
+    assert "id: gate" in gate_block
+    assert "continue-on-error" not in gate_block
+
     push_block = step_block(text, "- name: Commit and push the spec-gate record")
     if_line = next(l for l in push_block.splitlines() if l.strip().startswith("if:"))
-    assert "always()" in if_line
+    assert "always()" not in if_line
+    assert "!cancelled()" in if_line
     assert "steps.touch.outputs.skip" in if_line
-
-    gate_block = step_block(text, "- name: attavo spec-gate")
-    assert "continue-on-error" not in gate_block
+    assert "steps.gate.outcome == 'success'" in if_line
+    assert "steps.gate.outcome == 'failure'" in if_line
 
 
 def test_template_declares_merge_group_alongside_pull_request():
