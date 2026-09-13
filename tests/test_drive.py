@@ -210,6 +210,42 @@ def test_drive_verifies_from_a_passed_build_with_the_forge_green(tmp_path):
     assert remote_head(bare, branch) == head_of(root)
 
 
+def test_drive_verifies_again_when_the_latest_verify_is_superseded_by_a_later_build(tmp_path):
+    """Acceptance row 4, issue #109. A verify record can only name a build
+    that existed when it was written, so a later build makes the latest
+    verify superseded, never a mismatch -- drive derives the next stage
+    as verify, not build, and never refuses.
+
+    Regression: on main before this lane, drive_state's own inline
+    staleness check already treats this as 'verify', so this test does
+    not fail against current code -- it is here to lock the behavior
+    check_attest_chain's fix must not disturb (the acceptance table's
+    'never refuses' row)."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_bare_remote(root, tmp_path)
+    approve_item(root)
+
+    assert run_attavo(root, "drive", "1").returncode == 0  # builds
+    assert run_attavo(root, "drive", "1").returncode == 0  # verifies
+
+    # A second build record, minted by hand -- a real re-run of the
+    # fixture adapter is not idempotent against its own tree -- naming a
+    # sha the existing verify-01 does not: verify-01 is now superseded.
+    build_01 = json.loads(record_files(root, "build")[-1].read_text())
+    build_01["sha"] = "f" * 40
+    (records_dir(root) / "build-02.json").write_text(json.dumps(build_01))
+    commit_all(root, "attavo: second build record for #1, minted by hand")
+
+    run = run_attavo(root, "drive", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert len(record_files(root, "build")) == 2
+    assert len(record_files(root, "verify")) == 2
+    rec = latest_record(root, "verify")
+    assert rec["status"] == "pass"
+    assert rec["build_sha"] == build_01["sha"]
+
+
 def test_drive_prints_ready_to_merge_from_a_passed_verify(tmp_path):
     """Acceptance row 3. From a passed verify with the forge green, one
     run prints ready-to-merge, exits 0, writes nothing, enqueues nothing
