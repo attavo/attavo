@@ -1,0 +1,81 @@
+# Template. Copy this file into your own .github/workflows/ and fill in
+# uses: <owner>/attavo@<tag> below. Not vendored or executed by Attavo's
+# own repository -- this is the tenant's workflow, not the product's.
+#
+# An operator comments "/approve" on the work item's PR. This workflow
+# checks out the PR's branch, runs `attavo approve --by <actor>` (the item
+# id is the issue number, not the PR number -- attavo derives it from the
+# attavo/N-* branch), and commits and pushes the resulting approval-NN.json
+# -- the push is what binds the approval to a commit.
+#
+# The push authenticates as a GitHub App installation, not a bot account
+# with no login behind it: an app-token step mints an installation token
+# from the tenant's own app credentials, checkout uses it for the push,
+# and the commit's author and committer are read from the app's own bot
+# user at run time, never typed into the template. A push authenticated
+# this way is what creates the pull_request run on the record commit; the
+# default GITHUB_TOKEN does not.
+name: Attavo approval
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  approve:
+    if: >
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/approve')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Resolve the PR's branch
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            })
+            core.setOutput('ref', pr.data.head.ref)
+
+      - name: Mint an installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.ATTAVO_APP_ID }}
+          private-key: ${{ secrets.ATTAVO_APP_PRIVATE_KEY }}
+
+      - name: Resolve the app's bot identity
+        id: bot
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          login="${{ steps.app-token.outputs.app-slug }}[bot]"
+          id="$(gh api "/users/$login" --jq .id)"
+          echo "login=$login" >> "$GITHUB_OUTPUT"
+          echo "email=${id}+${login}@users.noreply.github.com" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.ref }}
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - uses: attavo/attavo@v0.17.1
+
+      - name: attavo approve
+        run: attavo approve --by "${{ github.event.comment.user.login }}"
+
+      - name: Commit and push the approval record
+        run: |
+          git config user.name "${{ steps.bot.outputs.login }}"
+          git config user.email "${{ steps.bot.outputs.email }}"
+          records_rel="$(python3 -c "import tomllib; print(tomllib.load(open('attavo.toml','rb'))['paths']['records'])")"
+          git add "$records_rel"
+          git commit -m "attavo: approval record for #${{ github.event.issue.number }}"
+          git push origin "HEAD:${{ steps.pr.outputs.ref }}"

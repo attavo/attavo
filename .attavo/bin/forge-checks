@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""forge-checks: [forge].checks_command for attavo verify (issue #103).
+
+Prints one line per GitHub check-run on `sha` as "<name> <conclusion>";
+a check that has not concluded prints its status in place of a
+conclusion -- attavo verify's own read of these lines decides whether
+that is green, not this script. Exits non-zero, printing nothing to
+stdout, when the sha cannot be read at all (the forge does not know it,
+or the API call otherwise fails): attavo verify appends the sha to this
+command string and runs it under a shell, and reads a nonzero exit alone
+as "not green."
+
+Written from schema/manifest.schema.json's own description of
+[forge].checks_command and from `gh`, independently of tenant zero's
+equivalent script.
+
+Usage: forge-checks <sha>
+Requires: `gh`, authenticated, run inside this repository's checkout.
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 1:
+        print("usage: forge-checks <sha>", file=sys.stderr)
+        return 2
+    sha = argv[0]
+    run = subprocess.run(
+        ["gh", "api", f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs?per_page=100"],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    if run.returncode != 0:
+        print(run.stderr.strip() or f"forge-checks: sha {sha} not found", file=sys.stderr)
+        return 1
+    try:
+        payload = json.loads(run.stdout)
+    except json.JSONDecodeError:
+        print(f"forge-checks: unexpected response for sha {sha}", file=sys.stderr)
+        return 1
+    for check in payload.get("check_runs", []):
+        state = check.get("conclusion") or check.get("status")
+        print(f"{check['name']} {state}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
