@@ -1,0 +1,81 @@
+{
+  "sha": "d82c9a3e6eb1ef7cc39600e1389f208f8578d6de",
+  "build_sha": "7cef73bbf325147c3155b88034ac52e411d0791c",
+  "build_record": "build-02",
+  "approval_sha": "f51bbf93410c24fcc4b6026f60b6a3f84a5c315a",
+  "at": "2026-09-13T16:08:51Z",
+  "adapter": null,
+  "adapter_config": {},
+  "adapter_version": null,
+  "model": null,
+  "model_version": null,
+  "reports": [],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "d82c9a3e6eb1ef7cc39600e1389f208f8578d6de",
+    "conclusions": [
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "failure"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "failure"
+      }
+    ]
+  },
+  "findings": null,
+  "tests_named": [],
+  "commits": [],
+  "mutation": null,
+  "weak_stub": false,
+  "stub_ratio": null,
+  "tokens": {
+    "input": 0,
+    "output": 0
+  },
+  "cost_usd": null,
+  "wall_clock_s": 0.674,
+  "status": "returned",
+  "stop": {
+    "class": "forge-unconcluded",
+    "provenance": "tenant",
+    "detail": null
+  },
+  "record_version": 4,
+  "item": "106",
+  "product_version": "v0.17.1-8-ge72112f",
+  "product_pin": "v0.17.1"
+}
