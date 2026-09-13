@@ -1,0 +1,54 @@
+{
+  "sha": "6c1ddbd4d199a7a585ea14352332dea481df1c4b",
+  "record_stage": "build",
+  "record": "build-01",
+  "at": "2026-09-13T15:55:14Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 248654,
+    "output": 2376
+  },
+  "cost_usd": null,
+  "wall_clock_s": 72.366,
+  "status": "done",
+  "class": "unclassed",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": ".github/workflows/ci.yml",
+      "symbol": "jobs.test.steps: pip install pytest jsonschema",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/bin/attavo",
+      "symbol": "cmd_build",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "attest/records/106/build-01.log",
+      "symbol": "selected tests and tenant checks collection tracebacks",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "The item did not fail its criteria: all three criteria passed on every iteration. The stop occurred because the environment running the tenant-declared pytest commands lacked `jsonschema`, although the tenant's CI instruction explicitly installs that dependency. `cmd_build` correctly executes the manifest's selected-test and whole-tree commands in the tenant's current environment; it does not provision tenant test dependencies. Re-run the build in the tenant's provisioned test environment. This remains `unclassed`: no existing stop class names a missing tenant runtime dependency, and the incident does not establish a defect in the proposed item or Attavo's build mechanism.",
+    "patch": null,
+    "question": null
+  },
+  "record_version": 1,
+  "item": "106",
+  "product_version": "v0.17.1-8-ge72112f",
+  "product_pin": "v0.17.1"
+}
