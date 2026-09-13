@@ -2476,45 +2476,74 @@ NOT_YET = object()
 
 
 def check_attest_chain(records_dir: Path, item_id: str, partial: bool = False):
-    """The three assertions attavo attest refuses on: the latest spec,
-    approval, build, and verify records for item_id all exist, build's
-    approval_sha names the latest approval -- a re-approval after a build
-    must force a re-run of what changed -- and verify's build_sha names
-    that build. Returns (None, message) on any of them, the message being
-    the same text attest prints, not a copy of it a caller re-types
-    (issue #74: proof two reuses it); returns ((spec, approval, build,
-    verify), None) when the chain holds.
+    """The two assertions attavo attest refuses on: the latest spec,
+    approval, build, and verify records for item_id all exist, and
+    build's approval_sha names the latest approval -- a re-approval after
+    a build must force a re-run of what changed. Returns (None, message)
+    on either of them, the message being the same text attest prints, not
+    a copy of it a caller re-types (issue #74: proof two reuses it);
+    returns ((spec, approval, build, verify), None) when the chain holds.
+
+    A verify record can only name a build that existed when it was
+    written (issue #109), so a latest verify whose build_sha is not the
+    latest build's sha is never a corrupt chain -- it is a verify
+    superseded by a later build, and is treated as absent: the next
+    stage is verify, not a refusal, exactly as if no verify record
+    existed yet.
 
     partial (issue #67) is for a pull request, where a later stage's
     record cannot exist yet because the stage that would produce it is
-    itself waiting on this check. Under partial, a missing record is not
-    a refusal -- the two chain assertions still run over whatever records
-    exist, and (NOT_YET, message) is returned, the message naming the
-    item and the stages present and absent, when a stage is still missing
-    once those assertions hold."""
+    itself waiting on this check. Under partial, a missing (or
+    superseded) record is not a refusal -- the chain assertion still
+    runs over whatever records exist, and (NOT_YET, message) is
+    returned, the message naming the item and the stages present and
+    absent -- or, for a superseded verify, the superseded record and the
+    build it named -- when a stage is still missing once that assertion
+    holds."""
     latest_spec = latest_record(records_dir, "spec")
     latest_approval = latest_record(records_dir, "approval")
     latest_build = latest_record(records_dir, "build")
     latest_verify = latest_record(records_dir, "verify")
+
+    # A verify naming a sha other than the latest build's is superseded:
+    # treated as absent for the chain, never as a mismatch.
+    superseded = None
+    if latest_build is not None and latest_verify is not None:
+        named_sha = latest_verify.get("build_sha")
+        if named_sha != latest_build.get("sha"):
+            verify_n = max(parse_attempts(records_dir, "verify"))
+            build_attempts = parse_attempts(records_dir, "build")
+            named_build_n = next((n for n, rec in build_attempts.items()
+                                  if rec.get("sha") == named_sha), None)
+            named_build = f"build-{named_build_n:02d}" if named_build_n is not None else named_sha
+            superseded = (verify_n, named_sha, named_build, max(build_attempts))
+            latest_verify = None
+
     stages = (("spec", latest_spec), ("approval", latest_approval),
               ("build", latest_build), ("verify", latest_verify))
 
     if not partial:
         for stage, rec in stages:
             if rec is None:
+                if stage == "verify" and superseded is not None:
+                    verify_n, named_sha, _, _ = superseded
+                    return None, (f"no verify names the latest build "
+                                 f"(verify-{verify_n:02d} names {named_sha})")
                 return None, f"no {stage} record for item {item_id}"
 
     if latest_approval is not None and latest_build is not None:
         if latest_build.get("approval_sha") != latest_approval.get("sha"):
             return None, ("build's approval_sha does not name the latest approval; a "
                           "re-approval after the build must force a re-run")
-    if latest_build is not None and latest_verify is not None:
-        if latest_verify.get("build_sha") != latest_build.get("sha"):
-            return None, "verify's build_sha does not name the latest build"
 
     missing = [stage for stage, rec in stages if rec is None]
     if partial and missing:
         present = [stage for stage, rec in stages if rec is not None]
+        if missing == ["verify"] and superseded is not None:
+            verify_n, _, named_build, latest_build_n = superseded
+            return NOT_YET, (f"item {item_id} not yet (present: {', '.join(present) or 'none'}; "
+                             f"verify-{verify_n:02d} names {named_build}, "
+                             f"superseded by build-{latest_build_n:02d})")
         return NOT_YET, (f"item {item_id} not yet (present: {', '.join(present) or 'none'}; "
                          f"absent: {', '.join(missing)})")
 
