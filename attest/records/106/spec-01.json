@@ -1,0 +1,29 @@
+{
+  "sha": "dbff340f33d8f21c1d200f0b1dbb0f7d7788e22b",
+  "spec_sha": "dbff340f33d8f21c1d200f0b1dbb0f7d7788e22b",
+  "at": "2026-09-13T09:06:34Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "no-ci-runs.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "attestation-schema-v2.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "driver-identity.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "106",
+  "product_version": "v0.17.1",
+  "product_pin": "v0.17.1"
+}
