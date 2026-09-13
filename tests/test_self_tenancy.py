@@ -10,6 +10,8 @@ Run: python3 -m pytest tests -q
 """
 from __future__ import annotations
 
+import re
+
 import subprocess
 import sys
 import tomllib
@@ -45,7 +47,7 @@ def test_manifest_validates_against_schema():
 
 def test_manifest_declares_every_key_issue_103_lists():
     m = load_manifest()
-    assert m["attavo"]["version"] == "v0.17.1"
+    assert re.fullmatch(r"v\d+\.\d+\.\d+", m["attavo"]["version"]), m["attavo"]["version"]
     # No [doctor].from: proof_no_commit_lacks_record only accepts a
     # declared from equal to, or on the first-parent line strictly
     # after, the install commit (schema: "at or after the install
@@ -128,9 +130,10 @@ def test_select_tests_maps_an_unrelated_path_to_nothing():
     assert run_select_tests("README.md\n") == []
 
 
-def test_copied_workflows_pin_the_release():
+def test_copied_workflows_pin_the_release_the_manifest_declares():
+    pin = load_manifest()["attavo"]["version"]
     for path in COPIED_WORKFLOWS:
-        assert "uses: attavo/attavo@v0.17.1" in path.read_text(), path.name
+        assert f"uses: attavo/attavo@{pin}" in path.read_text(), (path.name, pin)
 
 
 def test_schema_version_job_reports_on_merge_group():

@@ -190,7 +190,8 @@ def build_missing_verify_record(root: Path) -> None:
 def build_stale_verify_build_sha(root: Path) -> None:
     """A second build record, minted by hand rather than a real re-run --
     the fixture adapter's build is not idempotent against its own tree --
-    naming a sha the existing verify record does not."""
+    naming a sha the existing verify record does not: verify-01 names
+    build-01, and build-02 then passes, so verify-01 is superseded."""
     git(root, "checkout", "-b", "attavo/1-x")
     traverse_item(root, "1")
     records_dir = root / "records" / "1"
@@ -198,6 +199,28 @@ def build_stale_verify_build_sha(root: Path) -> None:
     build_01["sha"] = "f" * 40
     (records_dir / "build-02.json").write_text(json.dumps(build_01))
     commit_all(root, "attavo: second build record for #1")
+    merge_into_main(root, "attavo/1-x")
+
+
+def build_second_verify_names_second_build(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real re-approval, re-build, and re-verify: build-02 names the
+    second approval, verify-02 names build-02, and the chain holds --
+    the ordinary case a superseded verify must never be confused with.
+    ATTAVO_FIXTURE_WRITE points the second build at a second file, its
+    path added to the tenant's own boundary, since the fixture adapter's
+    build is not idempotent against its own tree -- a second real build
+    committing the same file as the first has nothing left to commit."""
+    git(root, "checkout", "-b", "attavo/1-x")
+    traverse_item(root, "1")
+    assert run_attavo(root, "approve", "1", "--by", "alice").returncode == 0
+    commit_all(root, "attavo: second approval record for #1")
+    spec = root / "specs" / "1" / "spec.md"
+    spec.write_text(spec.read_text().replace("- built.txt", "- built.txt\n- built2.txt"))
+    monkeypatch.setenv("ATTAVO_FIXTURE_WRITE", "built2.txt")
+    assert run_attavo(root, "build", "1").returncode == 0
+    commit_all(root, "attavo: second build record for #1")
+    assert run_attavo(root, "verify", "1").returncode == 0
+    commit_all(root, "attavo: second verify record for #1")
     merge_into_main(root, "attavo/1-x")
 
 
@@ -228,16 +251,15 @@ def build_missing_verify_after_reapproval(root: Path) -> None:
 
 
 OTHER_REFUSALS = [
-    pytest.param(build_stale_verify_build_sha, "build_sha", id="verify-build-sha-stale"),
     pytest.param(build_two_items, None, id="two-items"),
 ]
 
 
 @pytest.mark.parametrize("build, needle", OTHER_REFUSALS)
 def test_attest_refusals_are_unaffected_by_partial(tmp_path, build, needle):
-    """--partial only forgives a *missing* record; every other refusal --
-    a stale build_sha or approval_sha, or two items in the merge diff --
-    is identical with or without it."""
+    """--partial only forgives a missing (or superseded-verify) record;
+    every other refusal -- a stale approval_sha, or two items in the
+    merge diff -- is identical with or without it."""
     root = make_tenant(tmp_path, "build_valid")
     configure_forge(root)
     build(root)
@@ -293,15 +315,67 @@ def test_without_partial_the_missing_verify_fixture_still_refuses(tmp_path):
     assert "no verify record" in run.stderr
 
 
-def test_partial_still_refuses_a_stale_build_sha_on_verify(tmp_path):
+def test_partial_exits_0_naming_the_superseded_verify_and_the_build_it_named(tmp_path):
+    """Acceptance row 1, issue #109: spec, approval, build-01 pass,
+    verify-01 (naming build-01), build-02 pass. A verify record can only
+    name a build that existed when it was written, so verify-01 is
+    superseded by build-02, not a mismatch -- --partial exits 0 with the
+    not-yet line naming verify-01 and build-02, and writes nothing.
+
+    Regression: on main before this lane, this fixture makes --partial
+    refuse with 'verify's build_sha does not name the latest build'."""
     root = make_tenant(tmp_path, "build_valid")
     configure_forge(root)
     build_stale_verify_build_sha(root)
 
+    before = records_snapshot(root)
     run = run_attavo(root, "attest", "--partial")
 
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "item 1 not yet" in run.stdout
+    assert "verify-01 names build-01, superseded by build-02" in run.stdout
+    assert records_snapshot(root) == before
+    assert git(root, "status", "--porcelain") == ""
+
+
+def test_attest_full_refuses_the_same_records_naming_the_superseded_verify(tmp_path):
+    """Acceptance row 2, issue #109: the same records without --partial
+    refuse -- a superseded verify is still not a verify for the latest
+    build -- with the new message, never the retired mismatch wording.
+
+    Regression: on main before this lane, this exits 1 with
+    'verify's build_sha does not name the latest build' instead."""
+    root = make_tenant(tmp_path, "build_valid")
+    configure_forge(root)
+    build_stale_verify_build_sha(root)
+
+    run = run_attavo(root, "attest")
+
     assert run.returncode == 1
-    assert "build_sha" in run.stderr
+    assert "no verify names the latest build" in run.stderr
+    assert "verify-01 names" in run.stderr
+    assert "verify's build_sha does not name the latest build" not in run.stderr
+
+
+def test_attest_and_partial_agree_when_verify_two_names_build_two(tmp_path, monkeypatch):
+    """Acceptance row 3, issue #109: verify-02 names build-02 and passes
+    -- the chain holds, so attest and attest --partial behave exactly as
+    they did before this lane, both printing the same statement."""
+    root = make_tenant(tmp_path, "build_valid")
+    configure_forge(root)
+    build_second_verify_names_second_build(root, monkeypatch)
+
+    plain = run_attavo(root, "attest")
+    partial = run_attavo(root, "attest", "--partial")
+
+    assert plain.returncode == 0, plain.stdout + plain.stderr
+    assert partial.returncode == 0, partial.stdout + partial.stderr
+    plain_statement = json.loads(plain.stdout)
+    partial_statement = json.loads(partial.stdout)
+    # "at" is generated fresh on each call, so it alone may differ between
+    # the two invocations; every other field must still agree.
+    assert {**plain_statement, "at": None} == {**partial_statement, "at": None}
+    jsonschema.validate(plain_statement, STATEMENT_SCHEMA)
 
 
 def test_statement_carries_no_ci_runs_key(tmp_path):

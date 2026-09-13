@@ -191,9 +191,11 @@ def test_proof_two_fails_naming_the_item_and_refusal_text_on_approval_sha_mismat
     assert "approval_sha does not name the latest approval" in p["reason"]
 
 
-def test_proof_two_fails_naming_the_item_and_refusal_text_on_build_sha_mismatch(tmp_path):
-    """Acceptance row 2, issue #74. verify-01's build_sha does not name
-    the latest build's sha; fails likewise."""
+def test_proof_two_fails_naming_the_item_and_the_superseded_verify(tmp_path):
+    """Acceptance row 5, issue #109. verify-01's build_sha does not name
+    the latest build's sha, so verify-01 is superseded by that later
+    build, not a mismatch -- proof two fails, naming it, with the new
+    message, never the retired mismatch wording."""
     root = tmp_path / "build_sha_mismatch"
     root.mkdir()
     (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
@@ -215,7 +217,9 @@ def test_proof_two_fails_naming_the_item_and_refusal_text_on_build_sha_mismatch(
     p = run_doctor(root)["one-item-every-stage"]
     assert not p["holds"]
     assert "item 1" in p["reason"]
-    assert "verify's build_sha does not name the latest build" in p["reason"]
+    assert "no verify names the latest build" in p["reason"]
+    assert "verify-01 names" in p["reason"]
+    assert "verify's build_sha does not name the latest build" not in p["reason"]
 
 
 def test_proof_two_holds_naming_only_the_held_item_when_another_is_refused(tmp_path):
