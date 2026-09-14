@@ -13,6 +13,7 @@
     attavo record-only
     attavo attest [--partial] [N]
     attavo drive [N] [--until-ready]
+    attavo ledger [N] [--json]
 
 The doctor is the definition of done. It asserts four proofs against a
 tenant root and exits 1 until every proof holds:
@@ -201,6 +202,23 @@ own account (a refusal, a halted or failed or refused record, or the
 forge never going green); a step that stops still prints exactly what
 the same step would print without the flag. Without --until-ready,
 drive is unchanged: one step, then stop, exactly as before.
+
+ledger reads, never writes. For item N (or every item under
+paths.records when N is omitted), it walks the commits from the item's
+first spec commit to its merge (the same derivation doctor's proof two
+and attest use) or to HEAD when the item has not merged, and prints one
+row per act: the sha, the identity as git names it, and a class from a
+closed list -- spec, amend, approve, launch, record, change, transport,
+merge -- derived from who committed it and, for an approval, build, or
+verify record, what the record itself says. A summary line follows:
+operator acts (approve, amend, launch, transport, merge), product acts
+(record), executor commits (change), stops (non-pass records), and
+since (the product version on the first record). A build or verify
+record's own commit, from before v0.18.0 gave the driver and the
+executor their own identities, prints as record-or-launch with a note,
+counted toward neither total, rather than guessed. --json prints the
+rows and the summary as one object. See issue #128's lane for the full
+rules it enforces.
 """
 from __future__ import annotations
 
@@ -1374,9 +1392,16 @@ def driver_identity() -> dict:
     return {"name": "attavo driver", "email": "driver@attavo.invalid"}
 
 
-def commits_since(root: Path, start_sha: str) -> list[dict]:
-    """(sha, name, email) for every commit after start_sha, oldest first."""
-    out = git(root, "log", "--format=%H\x1f%an\x1f%ae", f"{start_sha}..HEAD")
+def commits_since(root: Path, start_sha: str, end: str = "HEAD") -> list[dict]:
+    """(sha, name, email) for every commit after start_sha up to and
+    including end, first-parent only, oldest first. cmd_build's own call
+    (start_sha at the invocation, end left at the default HEAD) never sees
+    a merge in that window, so --first-parent changes nothing there;
+    issue #128's ledger is the caller that needs it, to walk one branch's
+    own line without a concurrent merge to main expanding into every
+    commit main gained meanwhile."""
+    out = git(root, "log", "--first-parent", "--reverse",
+             "--format=%H\x1f%an\x1f%ae", f"{start_sha}..{end}")
     commits = []
     for line in out.splitlines():
         if not line.strip():
@@ -2732,6 +2757,224 @@ def cmd_attest(argv: list[str]) -> int:
     return 0
 
 
+# --- ledger: every act on an item by identity and class (issue #128) ---
+
+# operator acts (a person's own decisions and transport) vs. product acts
+# (the driver's or the records app's own automated commits) vs. the
+# executor's own code changes -- the three totals the plan's status table
+# and every reviewing session used to count by hand. record-or-launch
+# (below) contributes to neither: an honest count never guesses which
+# side of that line a pre-v0.18.0 commit falls on.
+LEDGER_OPERATOR_CLASSES = ("approve", "amend", "launch", "transport", "merge")
+LEDGER_V018_CUTOFF = (0, 18, 0)
+
+
+def _semver_tuple(version: str | None) -> tuple[int, int, int] | None:
+    m = re.match(r"^v(\d+)\.(\d+)\.(\d+)", version or "")
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
+def _is_records_app(name: str) -> bool:
+    """The forge's own app-bot login -- exactly the identity the
+    attavo-spec-gate and attavo-approve templates commit spec-gate and
+    approval records as (an app-token step mints it at run time from the
+    tenant's own app credentials): "<app-slug>[bot]". Never a name this
+    product can name in advance, so the one fact it can check is the
+    shape the forge itself gives every app identity, not a specific one."""
+    return name.endswith("[bot]")
+
+
+def first_commit_touching(root: Path, relpath: str) -> str | None:
+    """The earliest commit touching relpath -- the mirror of
+    last_commit_touching, which answers the latest. Ledger's own walk
+    starts here: the item's first spec commit."""
+    out = git(root, "log", "--reverse", "--format=%H", "--", relpath)
+    lines = out.split()
+    return lines[0] if lines else None
+
+
+def _commit_touches(root: Path, sha: str) -> list[str]:
+    return git(root, "diff", "--name-only", f"{sha}^1", sha).splitlines()
+
+
+def _record_at(root: Path, sha: str, relpath: str, item_id: str) -> dict:
+    """A record's own dict at a past commit, not the working tree --
+    ledger's only need for one (issue #128). Read through _load_record
+    (issue #60, acceptance 6: the one place a record's bytes become a
+    dict) by spilling the blob to a throwaway file, rather than a second
+    json.loads of its own: `git show` has no path on disk to hand
+    _load_record directly."""
+    out = subprocess.run(["git", "-C", str(root), "show", f"{sha}:{relpath}"],
+                         capture_output=True, text=True, check=False)
+    if out.returncode != 0:
+        return {}
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        fh.write(out.stdout)
+        blob_path = Path(fh.name)
+    try:
+        return _load_record(blob_path, item_id)
+    except json.JSONDecodeError:
+        return {}
+    finally:
+        blob_path.unlink(missing_ok=True)
+
+
+def item_ledger(root: Path, m: dict, item_id: str) -> dict:
+    """{"item", "rows", "summary"}: one row per act between item_id's first
+    spec commit and its merge (merge_introducing_records, the same
+    derivation doctor's proof two and attest both already read) or HEAD
+    when the item has not merged yet.
+
+    Each commit gets exactly one class, in this order: the merge commit
+    itself is "merge"; a commit authored by the executor identity
+    (executor_identity) is "change"; a commit introducing an approval
+    record is "approve", whoever committed it -- an operator's decision,
+    however it reached git; a commit introducing a spec-gate, build, or
+    verify record, authored by the driver identity (driver_identity) or
+    the records app, is "record"; the same, authored by a person, is
+    "launch" for build or verify (spec-gate records the app always
+    commits, in every template this product ships) -- unless that
+    record's own product_version predates v0.18.0, when driver_identity
+    did not yet exist to tell the two apart, and the row is
+    "record-or-launch" with a note, counted in neither summary total
+    rather than guessed; a person's commit touching the spec is "spec"
+    before the first approval record and "amend" after; anything else by
+    a person is "transport" (a merge of main among them)."""
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    specs_prefix = f"{specs_rel.rstrip('/')}/{item_id}/"
+    records_prefix = f"{records_rel.rstrip('/')}/{item_id}/"
+    empty_summary = {"operator_acts": 0, "product_acts": 0, "executor_commits": 0,
+                     "stops": 0, "since": None}
+
+    first_spec_sha = first_commit_touching(root, str(Path(specs_rel) / item_id))
+    if first_spec_sha is None:
+        return {"item": item_id, "rows": [], "summary": empty_summary}
+
+    merge_sha = merge_introducing_records(root, records_rel, item_id, STAGES)
+    if merge_sha is not None:
+        branch_tip = git(root, "rev-parse", f"{merge_sha}^2").strip()
+        commits = commits_since(root, f"{first_spec_sha}^", end=branch_tip)
+        commits += commits_since(root, f"{merge_sha}^1", end=merge_sha)
+    else:
+        commits = commits_since(root, f"{first_spec_sha}^", end="HEAD")
+
+    driver = driver_identity()
+    rows: list[dict] = []
+    operator_acts = product_acts = executor_commits = stops = 0
+    since = None
+    approval_seen = False
+
+    for c in commits:
+        sha, name, email = c["sha"], c["name"], c["email"]
+
+        if merge_sha is not None and sha == merge_sha:
+            rows.append({"sha": sha, "identity": name, "class": "merge"})
+            operator_acts += 1
+            continue
+
+        if email.startswith("executor+") and email.endswith("@attavo.invalid"):
+            rows.append({"sha": sha, "identity": name, "class": "change"})
+            executor_commits += 1
+            continue
+
+        touched = _commit_touches(root, sha)
+        record_touch = None
+        for p in touched:
+            if not p.startswith(records_prefix):
+                continue
+            rm = RECORD_RE.match(Path(p).name)
+            if rm and rm.group(1) in STAGES:
+                record_touch = (rm.group(1), p)
+                break
+
+        if record_touch is not None:
+            stage, relpath = record_touch
+            content = _record_at(root, sha, relpath, item_id)
+            if since is None:
+                since = content.get("product_version")
+
+            if stage == "approval":
+                rows.append({"sha": sha, "identity": name, "class": "approve"})
+                operator_acts += 1
+                approval_seen = True
+                continue
+
+            if stage in ("build", "verify") and content.get("status") not in (None, "pass"):
+                stops += 1
+
+            is_driver = name == driver["name"] and email == driver["email"]
+            is_records_app = _is_records_app(name)
+            if stage == "spec" or is_driver or is_records_app:
+                rows.append({"sha": sha, "identity": name, "class": "record"})
+                product_acts += 1
+                continue
+
+            version = _semver_tuple(content.get("product_version"))
+            if version is not None and version < LEDGER_V018_CUTOFF:
+                rows.append({"sha": sha, "identity": name, "class": "record-or-launch",
+                            "note": "not distinguishable before v0.18.0"})
+                continue
+
+            rows.append({"sha": sha, "identity": name, "class": "launch"})
+            operator_acts += 1
+            continue
+
+        if any(p.startswith(specs_prefix) for p in touched):
+            cls = "amend" if approval_seen else "spec"
+            rows.append({"sha": sha, "identity": name, "class": cls})
+            if cls == "amend":
+                operator_acts += 1
+            continue
+
+        rows.append({"sha": sha, "identity": name, "class": "transport"})
+        operator_acts += 1
+
+    summary = {"operator_acts": operator_acts, "product_acts": product_acts,
+              "executor_commits": executor_commits, "stops": stops, "since": since}
+    return {"item": item_id, "rows": rows, "summary": summary}
+
+
+def cmd_ledger(argv: list[str]) -> int:
+    as_json = "--json" in argv
+    positional = [a for a in argv if a != "--json"]
+    root = Path(".").resolve()
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo ledger: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    records_rel = m["paths"]["records"]
+    if positional:
+        item_ids = [positional[0]]
+    else:
+        records_root = root / records_rel
+        item_ids = (sorted((p.name for p in records_root.iterdir() if p.is_dir()))
+                   if records_root.is_dir() else [])
+
+    ledgers = [item_ledger(root, m, item_id) for item_id in item_ids]
+
+    if as_json:
+        if positional:
+            print(json.dumps(ledgers[0], indent=2))
+        else:
+            print(json.dumps({"items": ledgers}, indent=2))
+        return 0
+
+    for entry in ledgers:
+        print(f"attavo ledger: item {entry['item']}")
+        for row in entry["rows"]:
+            note = f"  ({row['note']})" if "note" in row else ""
+            print(f"  {row['sha'][:12]}  {row['identity']:<32}  {row['class']}{note}")
+        s = entry["summary"]
+        print(f"  operator acts: {s['operator_acts']}  product acts: {s['product_acts']}  "
+             f"executor commits: {s['executor_commits']}  stops: {s['stops']}  "
+             f"since: {s['since']}")
+    if not ledgers:
+        print(f"attavo ledger: no item found under {records_rel}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__.strip())
@@ -2760,9 +3003,11 @@ def main(argv: list[str]) -> int:
         return cmd_attest(argv[1:])
     if argv[0] == "drive":
         return cmd_drive(argv[1:])
+    if argv[0] == "ledger":
+        return cmd_ledger(argv[1:])
     print(f"attavo: unknown subcommand {argv[0]!r}; only doctor, spec-gate, approve, "
           f"approval-status, build, verify, file-findings, file-stops, counsel, record-only, "
-          f"attest, drive exist at this commit", file=sys.stderr)
+          f"attest, drive, ledger exist at this commit", file=sys.stderr)
     return 2
 
 
