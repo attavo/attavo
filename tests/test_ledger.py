@@ -1,0 +1,162 @@
+"""attavo ledger: every act on an item by identity and class (issue #128).
+
+Regression tests, written and run red first: on `main` before this change
+there was no `ledger` subcommand, so every one of these failed with
+"unknown subcommand".
+
+Run: python3 -m pytest tests -q
+"""
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from helpers import git, make_tenant
+
+ROOT = Path(__file__).resolve().parent.parent
+ATTAVO = ROOT / "bin" / "attavo"
+
+# The four identities issue #128 names: a person (writes the spec, in the
+# real templates also the one who comments /approve), the records app (a
+# GitHub App's own bot login -- "<app-slug>[bot]" -- that commits
+# spec-gate and approval records in attavo-spec-gate.yml and
+# attavo-approve.yml), the driver (drive's own record commits), and the
+# executor (an adapter invocation's own commits).
+PERSON = {"name": "Alice Author", "email": "alice@example.com"}
+RECORDS_APP = {"name": "attavo-bot[bot]", "email": "123+attavo-bot[bot]@users.noreply.github.com"}
+DRIVER = {"name": "attavo driver", "email": "driver@attavo.invalid"}
+EXECUTOR = {"name": "attavo executor (fixture)", "email": "executor+fixture@attavo.invalid"}
+
+
+def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
+                          capture_output=True, text=True, check=False)
+
+
+def commit_as(root: Path, identity: dict, message: str, paths: list[str]) -> str:
+    """Stage exactly paths and commit as identity, both author and
+    committer -- the same shape commit_record and the tenant's own CI
+    templates set (never the tenant's ambient git config)."""
+    git(root, "add", *paths)
+    env = dict(os.environ)
+    env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = identity["name"]
+    env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = identity["email"]
+    subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", message],
+                   check=True, env=env)
+    return git(root, "rev-parse", "HEAD").strip()
+
+
+def write_record(root: Path, item: str, stage: str, n: int, content: dict) -> str:
+    records_dir = root / "records" / item
+    records_dir.mkdir(parents=True, exist_ok=True)
+    path = records_dir / f"{stage}-{n:02d}.json"
+    path.write_text(json.dumps(content))
+    return str(path.relative_to(root))
+
+
+def add_spec(root: Path, item: str = "1") -> str:
+    spec_dir = root / "specs" / item
+    spec_dir.mkdir(parents=True)
+    (spec_dir / "spec.md").write_text("## Problem\n\nsomething.\n")
+    return commit_as(root, PERSON, f"spec: item {item}", [f"specs/{item}"])
+
+
+def build_merged_item(tmp_path: Path, item: str = "1") -> Path:
+    """The order #651 had: a person's spec commit, the records app's
+    spec-gate and approval records, the executor's own change, the
+    driver's build and verify records, then the merge landing all of it
+    on main."""
+    root = make_tenant(tmp_path, "ledger_base")
+    git(root, "checkout", "-b", "item")
+
+    spec_sha = add_spec(root, item)
+
+    rel = write_record(root, item, "spec", 1,
+                       {"status": "pass", "spec_sha": spec_sha, "product_version": "v0.19.1"})
+    commit_as(root, RECORDS_APP, f"attavo: spec-gate record for item {item}", [rel])
+
+    rel = write_record(root, item, "approval", 1,
+                       {"approved_by": "alice", "sha": spec_sha, "spec_sha": spec_sha,
+                        "product_version": "v0.19.1"})
+    commit_as(root, RECORDS_APP, f"attavo: approval record for item {item}", [rel])
+
+    (root / "built.txt").write_text("built\n")
+    commit_as(root, EXECUTOR, f"fixture: build item {item}", ["built.txt"])
+
+    rel = write_record(root, item, "build", 1, {"status": "pass", "product_version": "v0.19.1"})
+    commit_as(root, DRIVER, f"attavo: build record for item {item} (build-01)", [rel])
+
+    rel = write_record(root, item, "verify", 1, {"status": "pass", "product_version": "v0.19.1"})
+    commit_as(root, DRIVER, f"attavo: verify record for item {item} (verify-01)", [rel])
+
+    git(root, "checkout", "main")
+    subprocess.run(["git", "-C", str(root), "merge", "--no-ff", "item",
+                    "-m", f"Merge pull request #{item} from x/item"], check=True)
+    return root
+
+
+def test_ledger_classifies_every_commit_and_counts_operator_acts(tmp_path):
+    """Acceptance row 1: on a fixture with the four identities, every
+    commit gets exactly one class and the summary counts operator acts 2
+    -- the same shape tenant zero's own #651 reads (1 approve, 1 merge)."""
+    root = build_merged_item(tmp_path)
+
+    run = run_attavo(root, "ledger", "1", "--json")
+    assert run.returncode == 0, run.stdout + run.stderr
+    data = json.loads(run.stdout)
+
+    classes = [row["class"] for row in data["rows"]]
+    assert classes == ["spec", "record", "approve", "change", "record", "record", "merge"]
+    assert all(row["class"] and row["sha"] and row["identity"] for row in data["rows"])
+
+    summary = data["summary"]
+    assert summary["operator_acts"] == 2
+    assert summary["product_acts"] == 3
+    assert summary["executor_commits"] == 1
+    assert summary["stops"] == 0
+    assert summary["since"] == "v0.19.1"
+
+
+def test_ledger_marks_a_pre_v018_record_commit_as_record_or_launch(tmp_path):
+    """Acceptance row 2: a person's record commit before v0.18.0 prints
+    record-or-launch with the note, never launch or record -- before that
+    version the driver and the executor had no identity of their own to
+    tell a genuine launch apart from an automated one."""
+    root = make_tenant(tmp_path, "ledger_base")
+    add_spec(root)
+
+    rel = write_record(root, "1", "build", 1, {"status": "pass", "product_version": "v0.17.0"})
+    person_sha = commit_as(root, PERSON, "manual build record for item 1", [rel])
+
+    run = run_attavo(root, "ledger", "1", "--json")
+    assert run.returncode == 0, run.stdout + run.stderr
+    data = json.loads(run.stdout)
+
+    row = next(r for r in data["rows"] if r["sha"] == person_sha)
+    assert row["class"] == "record-or-launch"
+    assert row["note"] == "not distinguishable before v0.18.0"
+    assert data["summary"]["operator_acts"] == 0
+    assert data["summary"]["product_acts"] == 0
+
+
+def test_ledger_json_is_one_object_matching_the_text_forms_numbers(tmp_path):
+    """Acceptance row 3: --json is one object with rows and summary, and
+    the text form prints the same numbers."""
+    root = build_merged_item(tmp_path)
+
+    run_json = run_attavo(root, "ledger", "1", "--json")
+    assert run_json.returncode == 0, run_json.stdout + run_json.stderr
+    data = json.loads(run_json.stdout)
+    assert set(data) == {"item", "rows", "summary"}
+    assert isinstance(data["rows"], list)
+    assert isinstance(data["summary"], dict)
+
+    run_text = run_attavo(root, "ledger", "1")
+    assert run_text.returncode == 0, run_text.stdout + run_text.stderr
+    summary = data["summary"]
+    assert f"operator acts: {summary['operator_acts']}" in run_text.stdout
+    assert f"product acts: {summary['product_acts']}" in run_text.stdout
+    assert f"executor commits: {summary['executor_commits']}" in run_text.stdout
+    assert f"stops: {summary['stops']}" in run_text.stdout
+    assert f"since: {summary['since']}" in run_text.stdout
