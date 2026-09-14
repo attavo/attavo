@@ -91,6 +91,12 @@ def committed(root: Path, path: str) -> bool:
     return show.returncode == 0
 
 
+def commit_subject(root: Path) -> str:
+    log = subprocess.run(["git", "-C", str(root), "log", "-1", "--format=%s"],
+                         capture_output=True, text=True, check=True)
+    return log.stdout.strip()
+
+
 def test_approve_template_records_the_item_from_the_branch_not_the_pr(tmp_path):
     root = build_tenant(tmp_path)
 
@@ -102,3 +108,41 @@ def test_approve_template_records_the_item_from_the_branch_not_the_pr(tmp_path):
     assert not (root / "records").exists(), (
         "nothing should land under the default 'records/' path; "
         "paths.records for this tenant is 'attavo/records'")
+
+
+def test_commit_subject_names_the_item_not_the_issue_number(tmp_path):
+    """Issue #121: tenant zero's item #651 chain read `approval record for
+    #675` -- PR #675's own number (attavo/code-factory#642 read #636 for
+    item #635 the same way). The record commit derives the item once, from
+    the resolved steps.pr.outputs.ref, and names it -- not
+    github.event.issue.number, which is the PR/issue's own number, not the
+    item's."""
+    root = build_tenant(tmp_path)
+
+    run_workflow(root)
+
+    assert commit_subject(root) == "attavo: approval record for item 7", (
+        "the commit subject should name item 7 (from the attavo/7-x branch), "
+        "not issue #12")
+
+
+def test_refuses_before_committing_when_the_branch_yields_no_item(tmp_path):
+    """Acceptance row 3: a branch that doesn't match attavo/N-* must refuse
+    before the commit step ever runs `git add`/`git commit` -- there is no
+    item to name."""
+    root = build_tenant(tmp_path)
+    before = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                            capture_output=True, text=True, check=True).stdout.strip()
+
+    result = run_step(root, rendered(
+        "Commit and push the approval record",
+        **{"${{ github.event.issue.number }}": "12",
+           "${{ steps.pr.outputs.ref }}": "not-an-item-branch",
+           "${{ steps.bot.outputs.login }}": "attavo-app[bot]",
+           "${{ steps.bot.outputs.email }}":
+               "12345+attavo-app[bot]@users.noreply.github.com"}))
+
+    assert result.returncode != 0
+    after = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                           capture_output=True, text=True, check=True).stdout.strip()
+    assert after == before, "no commit should land when the item can't be derived"
