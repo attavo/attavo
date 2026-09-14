@@ -45,7 +45,7 @@
 # steps.gate.outcome is 'success' or 'failure' -- and not when the gate
 # never ran. A step condition with no status function implies success(), so
 # !cancelled() is what lets the failure branch run at all:
-# https://docs.github.com/en/actions/learn-github-actions/expressions#status-check-functions
+# (GitHub Actions expressions reference, the section on status check functions).
 # The job's own conclusion still tracks the gate: a failed `attavo
 # spec-gate` step fails the job even though the push step afterward
 # succeeds, since nothing here sets continue-on-error.
@@ -96,7 +96,7 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
-      - uses: attavo/attavo@v0.19.0
+      - uses: attavo/attavo@v0.19.1
 
       - name: Skip when the head commit only touches records
         id: touch
