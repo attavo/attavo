@@ -150,6 +150,18 @@ def test_schema_version_job_reports_on_merge_group():
     assert "github.event_name == 'pull_request'" in condition
 
 
+def test_doctor_job_reports_on_pull_request_and_merge_group():
+    """Issue #113: the doctor job's #106 condition, main-only, hid it from
+    pull requests and merge groups -- the events where a refusal is
+    cheap. It must name both, and never reduce to the main-only shape a
+    later edit could reintroduce."""
+    condition = job_if_condition(CI_YML.read_text(), "doctor")
+    assert condition is not None
+    assert "github.event_name == 'pull_request'" in condition
+    assert "github.event_name == 'merge_group'" in condition
+    assert condition != "github.ref == 'refs/heads/main'"
+
+
 # The product's own pre-existing, generic vocabulary that a blind grep for
 # TENANCY_STRINGS would otherwise flag: "attavo.toml" is the manifest
 # filename every tenant uses, named by the schema itself, not a fact

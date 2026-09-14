@@ -23,17 +23,13 @@ jobs:
 
   # Since #103, this repository is Attavo's own second tenant (attavo.toml
   # at the root) and the doctor's four proofs run for real, not under
-  # || true. attavo doctor . fails until an item has traversed every
-  # stage (proof one-item-every-stage): this job is expected red on main
-  # until the first item merges, so it is not yet a required check --
-  # the operator makes it required once that item lands.
-  #
-  # #106: proof two (a driven item's forge is green) has no vacuous case,
-  # so this job is red on every pull request until this tenant's first
-  # item has merged. Conditioned on pushes to main only until then; a
-  # later item returns it to pull requests and merge groups.
+  # || true. #106's first item merged (fdd1981, v0.18.0), so the four
+  # proofs hold on main and this job reports on pull requests and merge
+  # groups too -- where a refusal is cheap. It does not report on a
+  # branch push: a branch's own boundary commits precede their records,
+  # so proof three (no commit lacks a record) cannot hold there (#113).
   doctor:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
