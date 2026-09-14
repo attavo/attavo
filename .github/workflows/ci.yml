@@ -50,6 +50,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./
+      - run: test "$ATTAVO_ATTESTATION_PREDICATE_TYPE" = "$(python3 -c "import json; print(json.load(open('schema/attestation.schema.json'))['\$id'])")"
       - run: attavo spec-gate
         working-directory: tests/fixtures/valid
         env:

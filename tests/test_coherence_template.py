@@ -17,12 +17,16 @@ happen. Still read-only otherwise -- no app token, no push.
 Run: python3 -m pytest tests -q
 """
 import json
+import os
+import re
+import subprocess
 from pathlib import Path
 
 from helpers import extract_step_run, job_if_condition, step_block, with_keys
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "templates" / "workflows" / "attavo-coherence.yml"
+ACTION_YML = ROOT / "action.yml"
 JOB_NAME = "coherence"
 ACTIONS_ATTEST_INPUTS = set(
     json.loads((ROOT / "tests" / "fixtures" / "actions-attest-v2-inputs.json").read_text())["inputs"])
@@ -129,10 +133,68 @@ def test_checkout_step_has_no_ref_and_full_history():
     assert "fetch-depth: 0" in checkout_block
 
 
-def test_predicate_type_is_the_ruled_url():
-    """Moved from the deleted tests/test_attest_template.py (issue #54's
-    test, retired alongside the file it exercised)."""
-    assert "predicate-type: https://attavo.dev/attestation/v1" in TEMPLATE.read_text()
+def test_template_carries_no_predicate_type_literal():
+    """Issue #117: v0.18.0 moved schema/attestation.schema.json's $id from
+    .../v1 to .../v2 because a required field (ci_runs) left the
+    predicate; the template's own typed copy of the URL did not move with
+    it, so every signature since has labeled a v2-shaped statement as v1.
+    Retires test_predicate_type_is_the_ruled_url (moved here from the
+    deleted tests/test_attest_template.py, issue #54) -- the fact is the
+    schema's $id, known in the product, not a literal a template carries."""
+    assert "attavo.dev/attestation/v" not in TEMPLATE.read_text()
+
+
+def test_signing_step_reads_the_predicate_type_from_the_environment():
+    """Issue #117, acceptance row 1. The signing step reads the variable
+    action.yml exports from the schema's own $id, so the next schema
+    version bump moves the label with it instead of leaving it behind
+    again."""
+    block = step_block(TEMPLATE.read_text(), "- name: Sign the attestation record")
+    assert "predicate-type: ${{ env.ATTAVO_ATTESTATION_PREDICATE_TYPE }}" in block
+
+
+def test_action_yml_exports_the_predicate_type_from_the_schema_id(tmp_path):
+    """Issue #117, acceptance row 2. action.yml already writes
+    ATTAVO_PRODUCT_VERSION into GITHUB_ENV; it must also write
+    ATTAVO_ATTESTATION_PREDICATE_TYPE, read from
+    schema/attestation.schema.json's own $id with python3 -c, never
+    typed -- run the literal step script, the same way
+    test_action_yml.py exercises the product_version step, rather than
+    reimplementing what it does."""
+    action_text = ACTION_YML.read_text()
+    lines = action_text.splitlines()
+    marker = next(i for i, l in enumerate(lines) if "ATTAVO_ATTESTATION_PREDICATE_TYPE" in l)
+    start = marker
+    while not re.match(r"^\s*- run:", lines[start]):
+        start -= 1
+    dash_indent = len(lines[start]) - len(lines[start].lstrip(" "))
+    first = lines[start].strip()[len("- run:"):].strip()
+    if first and first != "|":
+        script = first
+    else:
+        block: list[str] = []
+        block_indent = None
+        for line in lines[start + 1:]:
+            if not line.strip():
+                block.append("")
+                continue
+            indent = len(line) - len(line.lstrip(" "))
+            if indent <= dash_indent + 2:
+                break
+            if block_indent is None:
+                block_indent = indent
+            block.append(line[block_indent:])
+        script = "\n".join(block).rstrip("\n")
+
+    script = script.replace("${{ github.action_path }}", str(ROOT))
+    github_env = tmp_path / "github_env"
+    github_env.write_text("")
+    subprocess.run(["bash", "-c", script], check=True,
+                    env={**os.environ, "GITHUB_ENV": str(github_env)})
+    env_lines = dict(line.split("=", 1) for line in github_env.read_text().splitlines() if line)
+
+    schema_id = json.loads((ROOT / "schema" / "attestation.schema.json").read_text())["$id"]
+    assert env_lines.get("ATTAVO_ATTESTATION_PREDICATE_TYPE") == schema_id
 
 
 def test_signing_step_inputs_are_a_subset_of_actions_attest_v2_and_include_predicate_path():

@@ -37,11 +37,14 @@
 # statement, two further steps run: a sha256 digest of that commit's own
 # sha text (deterministic and reproducible from the sha alone), and
 # actions/attest@v2, signing attest's printed statement as the predicate,
-# https://attavo.dev/attestation/v1, over that digest. Signing here
-# replaces the post-merge attest workflow this product shipped before
-# (issue #69): the four stage records are the evidence, and the bundle
-# actions/attest@v2 writes to the forge's attestation store is the seal
-# over them -- no attestation record is ever written to the tree.
+# env.ATTAVO_ATTESTATION_PREDICATE_TYPE, over that digest. That variable
+# is action.yml's own export of the schema's $id, never typed here (issue
+# #117: v0.18.0 moved the $id from .../v1 to .../v2, and this template's
+# own copy of the literal did not move with it). Signing here replaces
+# the post-merge attest workflow this product shipped before (issue #69):
+# the four stage records are the evidence, and the bundle actions/attest@v2
+# writes to the forge's attestation store is the seal over them -- no
+# attestation record is ever written to the tree.
 #
 # Neither step carries continue-on-error. Ruled: a merge without a
 # signature is unattested, and the product's claim is that nothing merges
@@ -115,5 +118,5 @@ jobs:
         with:
           subject-name: ${{ github.sha }}
           subject-digest: ${{ steps.subject.outputs.digest }}
-          predicate-type: https://attavo.dev/attestation/v1
+          predicate-type: ${{ env.ATTAVO_ATTESTATION_PREDICATE_TYPE }}
           predicate-path: ${{ runner.temp }}/attestation.json
