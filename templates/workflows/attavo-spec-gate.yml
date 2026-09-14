@@ -34,13 +34,21 @@
 # with the skip step above, that run completes instead of retriggering
 # the gate.
 #
-# The commit-and-push step carries if: always() -- a refusal is exactly
-# the record most worth having on the branch, and a step after a failed
-# one is skipped by default (issue #28: a refusal record existed only in
-# the run log, never reached the branch). The job's own conclusion still
-# tracks the gate: a failed `attavo spec-gate` step fails the job even
-# though the push step afterward succeeds, since nothing here sets
-# continue-on-error.
+# The commit-and-push step's condition names the gate step's own outcome
+# rather than carrying if: always() -- a refusal is exactly the record most
+# worth having on the branch, and a step after a failed one is skipped by
+# default (issue #28: a refusal record existed only in the run log, never
+# reached the branch), but always() also ran the push after a mint or
+# checkout failure, with no bot identity to commit as, so that failure
+# masked the real one behind a second, unrelated exit 128 (issue #116). The
+# push now runs when the gate step itself ran, whatever it said --
+# steps.gate.outcome is 'success' or 'failure' -- and not when the gate
+# never ran. A step condition with no status function implies success(), so
+# !cancelled() is what lets the failure branch run at all:
+# https://docs.github.com/en/actions/learn-github-actions/expressions#status-check-functions
+# The job's own conclusion still tracks the gate: a failed `attavo
+# spec-gate` step fails the job even though the push step afterward
+# succeeds, since nothing here sets continue-on-error.
 name: Attavo spec gate
 
 on:
@@ -85,11 +93,12 @@ jobs:
         run: attavo record-only && echo skip=true >> "$GITHUB_OUTPUT" || echo skip=false >> "$GITHUB_OUTPUT"
 
       - name: attavo spec-gate
+        id: gate
         if: steps.touch.outputs.skip != 'true'
         run: attavo spec-gate
 
       - name: Commit and push the spec-gate record
-        if: always() && steps.touch.outputs.skip != 'true'
+        if: "!cancelled() && steps.touch.outputs.skip != 'true' && (steps.gate.outcome == 'success' || steps.gate.outcome == 'failure')"
         run: |
           git config user.name "${{ steps.bot.outputs.login }}"
           git config user.email "${{ steps.bot.outputs.email }}"
