@@ -15,3 +15,12 @@ runs:
         fi
         echo "ATTAVO_PRODUCT_VERSION=$ref" >> "$GITHUB_ENV"
       shell: bash
+    # The schema's own $id names the attestation shape (issue #117: v0.18.0
+    # moved it from .../v1 to .../v2, and a template that carried a typed
+    # copy of the URL stayed on v1). Reading it here, from the schema this
+    # action installs, means a future version bump moves the coherence
+    # template's predicate-type with it.
+    - run: |
+        predicate_type="$(python3 -c "import json; print(json.load(open('${{ github.action_path }}/schema/attestation.schema.json'))['\$id'])")"
+        echo "ATTAVO_ATTESTATION_PREDICATE_TYPE=$predicate_type" >> "$GITHUB_ENV"
+      shell: bash
