@@ -14,6 +14,7 @@
     attavo attest [--partial] [N]
     attavo drive [N] [--until-ready]
     attavo ledger [N] [--json]
+    attavo stops [N] [--json]
 
 The doctor is the definition of done. It asserts four proofs against a
 tenant root and exits 1 until every proof holds:
@@ -219,6 +220,19 @@ executor their own identities, prints as record-or-launch with a note,
 counted toward neither total, rather than guessed. --json prints the
 rows and the summary as one object. See issue #128's lane for the full
 rules it enforces.
+
+stops reads, never writes. For item N (or every item under
+paths.records when N is omitted), one row per non-pass build or verify
+record: the record, its stop's class, provenance, and detail, and the
+answerer -- "counsel:<verdict>" when a counsel record read this exact
+stop, else "person" for a question, else "guard" for a class a guard
+alone raised (GUARDED_STOP_CLASSES), else "none". A record too old to
+carry stop at all prints the doctor's own phrase for it, "before stop
+was recorded", and is counted there rather than by class. Totals per
+class (read from the build record schema's own enum, never retyped) and
+per answerer, plus the before-stop count, follow the rows. --json prints
+the rows and the totals as one object. See issue #129's lane for the
+full rules it enforces.
 """
 from __future__ import annotations
 
@@ -1390,6 +1404,32 @@ def driver_identity() -> dict:
     executor_identity: that names an adapter invocation's own commits,
     this names the transport that carries a stage's record."""
     return {"name": "attavo driver", "email": "driver@attavo.invalid"}
+
+
+# The stop classes issue #89 gave no code of their own beyond the guard
+# that raised them -- non-question and outlived-invocation from an
+# adapter's own pre-emptive refusal, forge-unconcluded from a returned
+# verify, ceiling from a declared-input-limit error, claims-boundary from
+# the write-outside-claims refusal, repeated-act from... the same shape,
+# environment from cmd_build's own [checks].command preflight (issue
+# #115). question (a person's to answer) and the residual (no-cause,
+# unclassed -- nobody has looked yet) are not in this tuple; attavo stops
+# (issue #129) is the one reader, so it lives beside driver_identity,
+# not beside derive_stop, which never needs to tell a guard from any
+# other class once it has already named one.
+GUARDED_STOP_CLASSES = ("non-question", "outlived-invocation", "forge-unconcluded", "ceiling",
+                        "claims-boundary", "repeated-act", "environment")
+
+
+def stop_class_enum() -> tuple[str, ...]:
+    """Every class a stop can name, read from the build record schema's own
+    enum (issue #129) rather than retyped -- STOP_CLASSES already drifted
+    once (environment arrived in the schema before anything but derive_stop
+    read it); a second copy is a second place to forget. build's schema is
+    read, not verify's: verify's own enum is a strict subset (it never
+    raises environment, cmd_build's own preflight alone)."""
+    schema = stage_schema("build")
+    return tuple(schema["properties"]["stop"]["properties"]["class"]["enum"])
 
 
 def commits_since(root: Path, start_sha: str, end: str = "HEAD") -> list[dict]:
@@ -2975,6 +3015,111 @@ def cmd_ledger(argv: list[str]) -> int:
     return 0
 
 
+# --- stops: every non-pass record by class, provenance, and answerer
+# (issue #129) ---
+
+def item_stops(root: Path, m: dict, item_id: str) -> dict:
+    """{"item", "rows", "totals"}: one row per non-pass build or verify
+    record (STOP_STAGES) under item_id, whatever the record's own
+    record_version -- a record too old to carry stop at all still gets a
+    row, its class printed as the doctor's own phrase for it.
+
+    The answerer, a closed choice: "counsel:<verdict>" when
+    counsel_record_for finds a counsel record naming this exact stage and
+    number -- the product's own answer, which wins over whatever the stop
+    itself says, since a counseled stop was already read once; failing
+    that, "person" for class question (a person's to answer, not a
+    guard's); failing that, "guard" for a class in GUARDED_STOP_CLASSES
+    (a guard's own rejection needed no further reading); anything else
+    -- no-cause, unclassed, or no stop at all -- is "none": nobody has
+    answered it yet."""
+    records_rel = m["paths"]["records"]
+    item_records_dir = root / records_rel / item_id
+    by_class = {c: 0 for c in stop_class_enum()}
+    by_answerer: dict[str, int] = {}
+    before_stop_was_recorded = 0
+    rows: list[dict] = []
+
+    if item_records_dir.is_dir():
+        for stage in STOP_STAGES:
+            for n, rec in sorted(parse_attempts(item_records_dir, stage).items()):
+                if rec.get("status") == "pass":
+                    continue
+                name = f"{stage}-{n:02d}"
+                stop = rec.get("stop")
+                marker = item_records_dir / f"{name}.filed"
+                filed_issue = marker.read_text() if marker.is_file() else None
+                counsel = counsel_record_for(item_records_dir, stage, n)
+
+                if counsel is not None:
+                    answerer = f"counsel:{counsel.get('verdict')}"
+                elif stop and stop.get("class") == "question":
+                    answerer = "person"
+                elif stop and stop.get("class") in GUARDED_STOP_CLASSES:
+                    answerer = "guard"
+                else:
+                    answerer = "none"
+
+                if stop:
+                    cls, provenance, detail = (stop.get("class"), stop.get("provenance"),
+                                              stop.get("detail"))
+                    if cls in by_class:
+                        by_class[cls] += 1
+                else:
+                    cls, provenance, detail = "before stop was recorded", None, None
+                    before_stop_was_recorded += 1
+
+                by_answerer[answerer] = by_answerer.get(answerer, 0) + 1
+                rows.append({"item": item_id, "record": name, "class": cls,
+                            "provenance": provenance, "detail": detail,
+                            "answerer": answerer, "filed_issue": filed_issue})
+
+    totals = {"by_class": by_class, "by_answerer": by_answerer,
+             "before_stop_was_recorded": before_stop_was_recorded}
+    return {"item": item_id, "rows": rows, "totals": totals}
+
+
+def cmd_stops(argv: list[str]) -> int:
+    as_json = "--json" in argv
+    positional = [a for a in argv if a != "--json"]
+    root = Path(".").resolve()
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo stops: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    records_rel = m["paths"]["records"]
+    if positional:
+        item_ids = [positional[0]]
+    else:
+        records_root = root / records_rel
+        item_ids = (sorted((p.name for p in records_root.iterdir() if p.is_dir()))
+                   if records_root.is_dir() else [])
+
+    reports = [item_stops(root, m, item_id) for item_id in item_ids]
+
+    if as_json:
+        if positional:
+            print(json.dumps(reports[0], indent=2))
+        else:
+            print(json.dumps({"items": reports}, indent=2))
+        return 0
+
+    for entry in reports:
+        print(f"attavo stops: item {entry['item']}")
+        for row in entry["rows"]:
+            filed = f"  filed: {row['filed_issue'].strip()}" if row["filed_issue"] else ""
+            print(f"  {row['record']:<10} {row['class']:<24} {row['provenance'] or '-':<10} "
+                 f"{row['answerer']:<16}{filed}")
+        t = entry["totals"]
+        print(f"  by class: {t['by_class']}")
+        print(f"  by answerer: {t['by_answerer']}")
+        print(f"  before stop was recorded: {t['before_stop_was_recorded']}")
+    if not reports:
+        print(f"attavo stops: no item found under {records_rel}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__.strip())
@@ -3005,9 +3150,11 @@ def main(argv: list[str]) -> int:
         return cmd_drive(argv[1:])
     if argv[0] == "ledger":
         return cmd_ledger(argv[1:])
+    if argv[0] == "stops":
+        return cmd_stops(argv[1:])
     print(f"attavo: unknown subcommand {argv[0]!r}; only doctor, spec-gate, approve, "
           f"approval-status, build, verify, file-findings, file-stops, counsel, record-only, "
-          f"attest, drive, ledger exist at this commit", file=sys.stderr)
+          f"attest, drive, ledger, stops exist at this commit", file=sys.stderr)
     return 2
 
 
