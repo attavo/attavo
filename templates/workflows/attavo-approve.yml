@@ -15,6 +15,14 @@
 # user at run time, never typed into the template. A push authenticated
 # this way is what creates the pull_request run on the record commit; the
 # default GITHUB_TOKEN does not.
+#
+# The commit subject names the item, not github.event.issue.number (issue
+# #121: tenant zero's item #651 chain read "approval record for #675",
+# the PR's own number, not the item's). The item is derived once, in
+# shell, from the resolved steps.pr.outputs.ref, as the digits between
+# attavo/ and the first -, the same pattern bin/attavo's own
+# derive_item_id uses. A branch that doesn't match refuses before the
+# commit.
 name: Attavo approval
 
 on:
@@ -76,6 +84,12 @@ jobs:
           git config user.name "${{ steps.bot.outputs.login }}"
           git config user.email "${{ steps.bot.outputs.email }}"
           records_rel="$(python3 -c "import tomllib; print(tomllib.load(open('attavo.toml','rb'))['paths']['records'])")"
+          if [[ "${{ steps.pr.outputs.ref }}" =~ ^attavo/([0-9]+)- ]]; then
+            item="${BASH_REMATCH[1]}"
+          else
+            echo "::error::cannot derive item id from branch ${{ steps.pr.outputs.ref }}" >&2
+            exit 1
+          fi
           git add "$records_rel"
-          git commit -m "attavo: approval record for #${{ github.event.issue.number }}"
+          git commit -m "attavo: approval record for item $item"
           git push origin "HEAD:${{ steps.pr.outputs.ref }}"

@@ -49,6 +49,16 @@
 # The job's own conclusion still tracks the gate: a failed `attavo
 # spec-gate` step fails the job even though the push step afterward
 # succeeds, since nothing here sets continue-on-error.
+#
+# The commit subject names the item, not github.event.pull_request.number
+# (issue #121: tenant zero's item #651 chain read "spec-gate record for
+# #675", PR #675's own number -- the record lives under
+# <paths.records>/651/, and #675 names nothing there). The item is
+# derived once, in shell, from GITHUB_HEAD_REF -- this job only ever runs
+# on a pull_request event (the job's own if: above), so that env var is
+# always the real head branch -- as the digits between attavo/ and the
+# first -, the same pattern bin/attavo's own derive_item_id uses. A
+# branch that doesn't match refuses before the commit.
 name: Attavo spec gate
 
 on:
@@ -103,6 +113,12 @@ jobs:
           git config user.name "${{ steps.bot.outputs.login }}"
           git config user.email "${{ steps.bot.outputs.email }}"
           records_rel="$(python3 -c "import tomllib; print(tomllib.load(open('attavo.toml','rb'))['paths']['records'])")"
+          if [[ "$GITHUB_HEAD_REF" =~ ^attavo/([0-9]+)- ]]; then
+            item="${BASH_REMATCH[1]}"
+          else
+            echo "::error::cannot derive item id from branch $GITHUB_HEAD_REF" >&2
+            exit 1
+          fi
           git add "$records_rel"
-          git commit -m "attavo: spec-gate record for #${{ github.event.pull_request.number }}"
+          git commit -m "attavo: spec-gate record for item $item"
           git push origin "HEAD:${{ github.event.pull_request.head.ref }}"

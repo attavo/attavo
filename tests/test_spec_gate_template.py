@@ -30,7 +30,7 @@ Run: python3 -m pytest tests -q
 """
 from pathlib import Path
 
-from helpers import job_if_condition, step_block
+from helpers import extract_step_run, job_if_condition, step_block
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "templates" / "workflows" / "attavo-spec-gate.yml"
@@ -104,3 +104,22 @@ def test_job_guards_on_the_attavo_branch_prefix():
     condition = job_if_condition(TEMPLATE.read_text(), JOB_NAME)
     assert condition is not None, f"job {JOB_NAME!r} has no if: condition"
     assert "startsWith(github.head_ref, 'attavo/')" in condition
+
+
+def test_record_commit_names_the_item_not_the_pull_request_number():
+    """Issue #121: tenant zero's item #651 chain read `spec-gate record for
+    #675` -- PR #675's own number, not the item's. The record lives under
+    <paths.records>/651/, and #675 names nothing there. The commit step
+    derives the item once in shell, from GITHUB_HEAD_REF (the branch the
+    record is for -- this job only ever runs on a pull_request event, per
+    the job guard above, so the env var is always the real head branch),
+    the same digits-between-attavo/-and-first-dash pattern bin/attavo's own
+    derive_item_id uses, and refuses before committing when the branch
+    doesn't match."""
+    script = extract_step_run(TEMPLATE.read_text(), "Commit and push the spec-gate record")
+    assert "github.event.pull_request.number" not in script
+    assert "GITHUB_HEAD_REF" in script
+    assert "attavo/([0-9]+)-" in script
+    assert 'git commit -m "attavo: spec-gate record for item $item"' in script
+    assert script.index("exit 1") < script.index("git commit"), (
+        "the item-derivation guard must run, and be able to refuse, before the commit")
