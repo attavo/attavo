@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import jsonschema
+
 from helpers import commit_all, make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -734,3 +736,62 @@ def test_build_refuses_a_commit_not_authored_by_the_executor(tmp_path):
     rec = latest_build(root)
     assert rec["status"] == "refused"
     assert "not authored by the executor" in rec["refusal"]
+
+
+def test_build_refuses_when_checks_command_exits_2_on_the_approved_tree(tmp_path):
+    """Issue #115, acceptance rows 1 and 3. [checks].command exiting 2 on
+    the approved tree -- the command itself cannot run, not a failing
+    check -- refuses the build before the adapter is ever invoked: class
+    environment, provenance tenant, nothing spent. Regression: item
+    #106's build-01 spent three iterations, 940s, and $1.98 discovering
+    a missing jsonschema import only after the fact, filed
+    unclassed/product; a later change that moves this preflight after
+    the invocation, or drops it, spends a build on a broken environment
+    again.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text()
+                    + '\n[checks]\ncommand = "echo no jsonschema; exit 2"\n')
+    commit_all(root, "configure a broken checks command")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1")
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    assert rec["status"] == "refused"
+    assert rec["stop"] == {"class": "environment", "provenance": "tenant",
+                           "detail": "no jsonschema"}
+    assert rec["checks"] == {"command": "echo no jsonschema; exit 2", "exit": 2}
+    # the adapter never ran: no commit, no model, the stub file untouched
+    assert rec["sha"] == rec["start_sha"]
+    assert rec["model"] is None
+    assert not (root / "built.txt").is_file()
+
+    schema = json.loads((ROOT / "schema" / "records" / "build.schema.json").read_text())
+    jsonschema.validate(rec, schema)
+
+
+def test_build_proceeds_when_checks_command_exits_1_on_the_approved_tree(tmp_path):
+    """Issue #115, acceptance row 2. A [checks].command exiting 1 --
+    failing checks, the expected state before a build -- does not refuse:
+    the preflight only catches exit 2 (the command cannot run at all).
+    Regression: a preflight that refuses on failing checks would refuse
+    every build, since failing criteria are the expected state before
+    one runs.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text() + '\n[checks]\ncommand = "exit 1"\n')
+    commit_all(root, "configure a failing checks command")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1")
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    # the adapter ran -- unlike the exit-2 case above, which never invokes it
+    assert rec["model"] == "fixture"
+    assert rec["status"] == "failed"
+    assert rec["checks"] == {"command": "exit 1", "exit": 1}

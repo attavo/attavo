@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/build/4",
+  "$id": "https://attavo.dev/schema/records/build/5",
   "title": "attavo build record (build-NN.json)",
   "type": "object",
   "additionalProperties": false,
@@ -109,12 +109,13 @@
         "class": {
           "type": "string",
           "enum": ["non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
-                   "ceiling", "claims-boundary", "repeated-act", "unclassed", "question"]
+                   "ceiling", "claims-boundary", "repeated-act", "unclassed", "question",
+                   "environment"]
         },
         "provenance": {"type": "string", "enum": ["product", "tenant", "executor", "spec"]},
         "detail": {
           "type": ["string", "null"],
-          "description": "Populated for class \"unclassed\" (the log's last line, capped at 200 characters) and class \"question\" (the halt's own question, its first line only); null for every other class, whose evidence already lives in refusal, halted, or the log itself."
+          "description": "Populated for class \"unclassed\" (the log's last line, capped at 200 characters), class \"question\" (the halt's own question, its first line only), and class \"environment\" ([checks].command's last output line, capped at 200 characters); null for every other class, whose evidence already lives in refusal, halted, or the log itself."
         }
       }
     },

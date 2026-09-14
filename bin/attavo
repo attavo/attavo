@@ -499,7 +499,8 @@ def write_record(records_dir: Path, stage: str, record: dict, m: dict, item: str
 # itself after the fact. ---
 
 STOP_CLASSES = ("non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
-               "ceiling", "claims-boundary", "repeated-act", "unclassed", "question")
+               "ceiling", "claims-boundary", "repeated-act", "unclassed", "question",
+               "environment")
 STOP_PROVENANCES = ("product", "tenant", "executor", "spec")
 
 # Beyond the enum spelling itself, the prose issue #88 actually shipped
@@ -533,6 +534,14 @@ CLASS_TEXT_MARKERS: dict[str, tuple[str, ...]] = {
     # question that happens to use the word "question" as executor
     # provenance, before the structural check in derive_stop is reached.
     "question": (),
+    # environment/tenant (issue #115) is set directly by cmd_build's own
+    # preflight -- the one caller who knows a [checks].command exited 2
+    # on the approved tree -- never derived from adapter text. Left at
+    # the default, the generic match above would catch the word
+    # "environment" anywhere in a log or refusal (e.g. codex's own
+    # OPENAI_API_KEY auth-mismatch refusal, adapters/codex/run's
+    # check_auth) as an environment/executor stop that never happened.
+    "environment": (),
 }
 
 # Known tool error text for a declared ceiling -- issue #86's own specimen
@@ -1454,6 +1463,49 @@ def cmd_build(argv: list[str]) -> int:
     start_sha = git(root, "rev-parse", "HEAD").strip()
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
     started = time.monotonic()
+
+    # Issue #115: the tenant's whole-tree checks run once here, on the
+    # approved tree, before the adapter is ever invoked -- exit 2 means
+    # the command itself cannot run (e.g. a missing import at test
+    # collection, item #106's build-01), not a failing check, and no
+    # build could have passed against it. Exit 0 or 1 -- the checks run
+    # and pass or fail, the expected states before a build -- proceeds;
+    # the per-iteration checks below run (and are recorded) exactly as
+    # before.
+    if checks_command:
+        preflight = subprocess.run(checks_command, shell=True, cwd=str(root),
+                                   capture_output=True, text=True, check=False)
+        if preflight.returncode == 2:
+            detail = _log_last_line(preflight.stdout + "\n" + preflight.stderr)
+            record = {
+                "sha": start_sha,
+                "start_sha": start_sha,
+                "spec_sha": spec_sha,
+                "approval_sha": latest_approval.get("sha") if latest_approval else None,
+                "at": now_iso(),
+                "adapter": adapter_name,
+                "adapter_config": adapter_config,
+                "executor_identity": identity,
+                "reports": reports,
+                "adapter_version": None,
+                "model": None,
+                "model_version": None,
+                "iterations": 1,
+                "criteria": [],
+                "selected_tests": None,
+                "checks": {"command": checks_command, "exit": preflight.returncode},
+                "tokens": {"input": 0, "output": 0},
+                "cost_usd": None,
+                "wall_clock_s": round(time.monotonic() - started, 3),
+                "status": "refused",
+                "refusal": "[checks].command exited 2 on the approved tree",
+                "halted": None,
+                "stop": {"class": "environment", "provenance": "tenant", "detail": detail},
+            }
+            record_path = write_record(item_records_dir, "build", record, m, item_id,
+                                       log=preflight.stdout + preflight.stderr)
+            print(f"attavo build: refused ({record_path.name})")
+            return 1
 
     adapter_version = model = model_version = None
     tokens = {"input": 0, "output": 0}
