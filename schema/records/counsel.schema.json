@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/counsel/1",
+  "$id": "https://attavo.dev/schema/records/counsel/2",
   "title": "attavo counsel record (counsel-NN.json)",
   "type": "object",
   "additionalProperties": false,
