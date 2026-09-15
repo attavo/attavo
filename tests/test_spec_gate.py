@@ -221,6 +221,72 @@ def test_spec_gate_built_refuses_a_failing_criterion(tmp_path):
     assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 1, "on_stub": 1}]
 
 
+def test_spec_gate_removed_deletes_the_path_from_the_stub(tmp_path):
+    """Issue #132, acceptance 1. stub/.removed names a path the change
+    deletes; the gate must drop it from the stubbed copy before running
+    the criteria, so a criterion asserting its absence passes on the
+    stub and fails on the tree, where the path is still there. Red
+    today: the overlay is add-only, so the path survives into the
+    stubbed tree and the criterion fails on both.
+    """
+    root = make_tenant(tmp_path, "removed_present")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0
+
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "pass"
+    assert rec["criteria"] == [{"name": "absent.sh", "on_tree": 1, "on_stub": 0}]
+    assert rec["refusal"] is None
+
+
+def test_spec_gate_removed_refuses_a_path_absent_from_the_tree(tmp_path):
+    """Issue #132, acceptance 2. A .removed entry naming a path that
+    isn't in the tree at all removes nothing, so it is refused by name
+    before any criterion runs -- no criteria entries in the record.
+    """
+    root = make_tenant(tmp_path, "removed_absent")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+    assert "nope.txt" in run.stdout
+
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused"
+    assert "nope.txt" in rec["refusal"]
+    assert rec["criteria"] == []
+
+
+def test_spec_gate_removed_refuses_a_path_the_stub_also_supplies(tmp_path):
+    """Issue #132, acceptance 3. A path named in .removed that the stub
+    also supplies is a contradiction -- add and remove the same path --
+    and is refused by name before any criterion runs.
+    """
+    root = make_tenant(tmp_path, "removed_contradicts_stub")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+    assert "src/marker.txt" in run.stdout
+
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused"
+    assert "src/marker.txt" in rec["refusal"]
+    assert rec["criteria"] == []
+
+
+def test_spec_gate_removed_refuses_a_path_outside_the_tree(tmp_path):
+    """Issue #132, acceptance 4. A .removed entry that escapes the tree
+    is refused by name before any criterion runs -- the stubbed copy is
+    the only thing the gate may delete from.
+    """
+    root = make_tenant(tmp_path, "removed_outside_tree")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+    assert "../escape.txt" in run.stdout
+
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused"
+    assert "../escape.txt" in rec["refusal"]
+    assert rec["criteria"] == []
+
+
 def test_spec_gate_phase1_rule_unchanged_without_build(tmp_path):
     """Issue #28, acceptance 3. No build record at all: the third verdict
     does not apply, and Phase 1's original rule holds unchanged."""
