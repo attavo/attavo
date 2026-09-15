@@ -76,20 +76,22 @@ def canned(verdict: str, **kwargs) -> dict:
 
 
 def test_counsel_refuses_without_a_non_pass_record(tmp_path):
-    """Acceptance row 2 (half). A fresh item with no build or verify
-    record at all -- refused by name, nothing written."""
+    """Acceptance row 2 (half). A fresh item with no build, verify, or
+    spec-gate record at all -- refused by name, nothing written."""
     root = make_tenant(tmp_path, "build_valid")
     configure_counsel_adapter(root)
 
     run = run_attavo(root, "counsel", "1")
     assert run.returncode == 1
-    assert "no non-pass build or verify record" in run.stdout
+    assert "no non-pass build, verify, or spec-gate record" in run.stdout
     assert not records_dir(root).exists() or list(records_dir(root).glob("counsel-*.json")) == []
 
 
 def test_counsel_refuses_when_the_latest_record_is_a_pass(tmp_path):
-    """A passing build carries nothing to counsel -- refused the same as
-    an item with no record at all."""
+    """Acceptance row 2 (rest). A passing build -- and the passing spec-01
+    it rests on -- carries nothing to counsel -- refused the same as an
+    item with no record at all: the spec-gate fallback only ever reads a
+    refused spec record, never a passing one."""
     root = make_tenant(tmp_path, "build_valid")
     configure_counsel_adapter(root)
     assert run_attavo(root, "spec-gate", "1").returncode == 0
@@ -98,7 +100,49 @@ def test_counsel_refuses_when_the_latest_record_is_a_pass(tmp_path):
 
     run = run_attavo(root, "counsel", "1")
     assert run.returncode == 1
-    assert "no non-pass build or verify record" in run.stdout
+    assert "no non-pass build, verify, or spec-gate record" in run.stdout
+
+
+def test_counsel_answers_a_refused_spec_gate_record_when_no_build_or_verify_exists(tmp_path):
+    """Acceptance row 1. No build or verify record exists at all -- the
+    item never got approved -- but a refused spec-01.json does (issue
+    #133's own specimen, tenant zero #683: a criterion the gate cannot
+    express). counsel reads it as the earliest stop, citing the refusal
+    and the criterion by name."""
+    root = make_tenant(tmp_path, "passes_on_tree")
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace(
+        '[paths]\nspecs = "specs"\nrecords = "records"',
+        '[paths]\nspecs = "specs"\nrecords = "records"\n'
+        'rulings = "rulings.md"\nrejections = "rejections"'
+    ) + '\n[executor]\ncounsel = "fixture"\n')
+    commit_all(root, "configure the counsel adapter")
+
+    gate = run_attavo(root, "spec-gate", "1")
+    assert gate.returncode == 1
+    assert "checks.sh" in gate.stdout
+
+    response = write_counsel_response(tmp_path, canned(
+        "answer",
+        citations=[
+            {"kind": "instruction", "path": "specs/1/spec.md", "symbol": None, "ruling_id": None},
+            {"kind": "mechanism", "path": "specs/1/criteria/checks.sh", "symbol": None,
+             "ruling_id": None},
+        ],
+        proposal={"ruling_text": "checks.sh always exits zero and never fails on the tree",
+                  "patch": None, "question": None}))
+
+    run = run_attavo(root, "counsel", "1",
+                     env={"ATTAVO_FIXTURE_COUNSEL_RESPONSE": str(response)})
+    assert run.returncode == 0, run.stdout + run.stderr
+
+    record = json.loads((records_dir(root) / "counsel-01.json").read_text())
+    jsonschema.validate(record, COUNSEL_SCHEMA)
+    assert record["record_stage"] == "spec"
+    assert record["record"] == "spec-01"
+    assert record["status"] == "done"
+    assert record["verdict"] == "answer"
+    assert "checks.sh" in record["proposal"]["ruling_text"]
 
 
 def test_counsel_writes_a_valid_record_for_a_halted_item(tmp_path):

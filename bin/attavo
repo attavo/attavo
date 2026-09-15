@@ -120,22 +120,27 @@ nothing filed) a stop whose class is unclassed and whose detail is
 empty -- a stop the product cannot even describe is not filed as if it
 could. See issue #89's lane for the full rules it enforces.
 
-counsel reads the item's latest non-pass build or verify record and asks
-the tenant's [executor].counsel adapter (defaulting to [executor].verify)
-a read-only question about it: the record, its log, the spec (problem,
-claims, criteria, stub), paths.rulings, the item's diff since approval,
-the tenant manifest, and this product's own root (bin/attavo, adapters/,
-schema/, templates/) by path, under the same sandbox verify runs under.
-The adapter answers with class (the stop enumeration, or unclassed),
-verdict (answer: a ruling text with citations; patch: a product defect's
-file, symbol, rejection test, and diff; person: a one-line question no
-rule covers), citations (instruction, mechanism, guard, each a path and
-symbol or a ruling id), and proposal (the ruling text, the patch, or the
-question). It writes the next counsel-NN.json under paths.records/N/,
-with the adapter's transcript beside it as counsel-NN.log, and commits
-nothing -- the caller commits, as with every stage. It refuses (exit 1,
-nothing written) when the item carries no non-pass build or verify
-record to counsel. See issue #100's lane for the full rules it enforces.
+counsel reads the item's latest non-pass build or verify record -- or,
+when neither exists, its latest refused spec-gate record, the earliest
+point a question can be answered inside the product, before any
+approval or executor spend (issue #133) -- and asks the tenant's
+[executor].counsel adapter (defaulting to [executor].verify) a
+read-only question about it: the record, its log, the spec (problem,
+claims, criteria, stub, including stub/.removed), paths.rulings, the
+item's diff since approval, the tenant manifest, and this product's own
+root (bin/attavo, adapters/, schema/, templates/) by path, under the
+same sandbox verify runs under. The adapter answers with class (the
+stop enumeration, or unclassed), verdict (answer: a ruling text with
+citations; patch: a product defect's file, symbol, rejection test, and
+diff; person: a one-line question no rule covers), citations
+(instruction, mechanism, guard, each a path and symbol or a ruling id),
+and proposal (the ruling text, the patch, or the question). It writes
+the next counsel-NN.json under paths.records/N/, with the adapter's
+transcript beside it as counsel-NN.log, and commits nothing -- the
+caller commits, as with every stage. It refuses (exit 1, nothing
+written) when the item carries no non-pass build, verify, or spec-gate
+record to counsel. See issue #100's lane for the full rules it
+enforces, and issue #133's for the spec-gate fallback.
 
 record-only exits 0 when HEAD, against its first parent, touches only
 paths.records; 1 otherwise; 2 with no manifest. Core logic about a git
@@ -2060,10 +2065,14 @@ COUNSEL_STAGES = ("build", "verify")
 
 def latest_non_pass_stage_record(records_dir: Path) -> tuple[str | None, dict | None, Path | None]:
     """(stage, record, path) for the item's most recent non-pass build or
-    verify record, by its own "at" timestamp -- (None, None, None) when
-    neither stage carries one. "Most recent" rather than "build, else
-    verify" so a stop on the stage that ran later (typically verify,
-    bound to a build that already passed) is the one counseled."""
+    verify record, by its own "at" timestamp -- or, when neither stage
+    carries one, the item's latest refused spec-gate record (issue #133):
+    a refused gate is the same shape of stop, earlier, and it is read only
+    once a build or verify record exists to counsel first, since either
+    one already implies the gate that produced it passed. (None, None,
+    None) when none of the three exists. "Most recent" rather than
+    "build, else verify" so a stop on the stage that ran later (typically
+    verify, bound to a build that already passed) is the one counseled."""
     candidates: list[tuple[str, dict, Path]] = []
     for stage in COUNSEL_STAGES:
         path = latest_attempt_path(records_dir, stage)
@@ -2073,10 +2082,15 @@ def latest_non_pass_stage_record(records_dir: Path) -> tuple[str | None, dict | 
         if rec.get("status") == "pass":
             continue
         candidates.append((stage, rec, path))
-    if not candidates:
-        return None, None, None
-    candidates.sort(key=lambda c: c[1].get("at") or "")
-    return candidates[-1]
+    if candidates:
+        candidates.sort(key=lambda c: c[1].get("at") or "")
+        return candidates[-1]
+    spec_path = latest_attempt_path(records_dir, "spec")
+    if spec_path is not None:
+        spec_rec = latest_record(records_dir, "spec")
+        if spec_rec.get("status") == "refused":
+            return "spec", spec_rec, spec_path
+    return None, None, None
 
 
 def cmd_counsel(argv: list[str]) -> int:
@@ -2097,7 +2111,8 @@ def cmd_counsel(argv: list[str]) -> int:
 
     stage, stop_record, record_path = latest_non_pass_stage_record(item_records_dir)
     if stop_record is None:
-        print(f"attavo counsel: refused: no non-pass build or verify record for item {item_id}")
+        print(f"attavo counsel: refused: no non-pass build, verify, or spec-gate record "
+              f"for item {item_id}")
         return 1
 
     executor = m.get("executor") or {}
@@ -2589,6 +2604,19 @@ def cmd_file_stops(argv: list[str]) -> int:
                 continue
             pending.append((stage, n, stop, marker))
 
+    # A refused spec-gate record is the same shape of stop, earlier (issue
+    # #133): it never carries a stop field of its own (cmd_spec_gate is
+    # untouched by this lane), so its class and provenance are derived
+    # here from its status and refusal, the same way derive_stop already
+    # reads a build or verify refusal that names no more specific class.
+    for n, rec in sorted(parse_attempts(item_records_dir, "spec").items()):
+        if rec.get("status") != "refused":
+            continue
+        marker = item_records_dir / f"spec-{n:02d}.filed"
+        if marker.exists():
+            continue
+        pending.append(("spec", n, derive_stop("refused", refusal=rec.get("refusal")), marker))
+
     if not pending:
         print("attavo file-stops: no stops to file")
         return 0
@@ -3073,9 +3101,12 @@ def cmd_ledger(argv: list[str]) -> int:
 
 def item_stops(root: Path, m: dict, item_id: str) -> dict:
     """{"item", "rows", "totals"}: one row per non-pass build or verify
-    record (STOP_STAGES) under item_id, whatever the record's own
-    record_version -- a record too old to carry stop at all still gets a
-    row, its class printed as the doctor's own phrase for it.
+    record (STOP_STAGES), plus every refused spec-gate record (issue
+    #133) -- the same shape of stop, earlier, read from status and
+    refusal rather than a stop field spec-gate records never carry
+    (derive_stop synthesizes it) -- under item_id, whatever the record's
+    own record_version -- a record too old to carry stop at all still
+    gets a row, its class printed as the doctor's own phrase for it.
 
     The answerer, a closed choice: "counsel:<verdict>" when
     counsel_record_for finds a counsel record naming this exact stage and
@@ -3093,39 +3124,46 @@ def item_stops(root: Path, m: dict, item_id: str) -> dict:
     before_stop_was_recorded = 0
     rows: list[dict] = []
 
+    def add_row(stage: str, n: int, stop: dict | None) -> None:
+        nonlocal before_stop_was_recorded
+        name = f"{stage}-{n:02d}"
+        marker = item_records_dir / f"{name}.filed"
+        filed_issue = marker.read_text() if marker.is_file() else None
+        counsel = counsel_record_for(item_records_dir, stage, n)
+
+        if counsel is not None:
+            answerer = f"counsel:{counsel.get('verdict')}"
+        elif stop and stop.get("class") == "question":
+            answerer = "person"
+        elif stop and stop.get("class") in GUARDED_STOP_CLASSES:
+            answerer = "guard"
+        else:
+            answerer = "none"
+
+        if stop:
+            cls, provenance, detail = (stop.get("class"), stop.get("provenance"),
+                                      stop.get("detail"))
+            if cls in by_class:
+                by_class[cls] += 1
+        else:
+            cls, provenance, detail = "before stop was recorded", None, None
+            before_stop_was_recorded += 1
+
+        by_answerer[answerer] = by_answerer.get(answerer, 0) + 1
+        rows.append({"item": item_id, "record": name, "class": cls,
+                    "provenance": provenance, "detail": detail,
+                    "answerer": answerer, "filed_issue": filed_issue})
+
     if item_records_dir.is_dir():
         for stage in STOP_STAGES:
             for n, rec in sorted(parse_attempts(item_records_dir, stage).items()):
                 if rec.get("status") == "pass":
                     continue
-                name = f"{stage}-{n:02d}"
-                stop = rec.get("stop")
-                marker = item_records_dir / f"{name}.filed"
-                filed_issue = marker.read_text() if marker.is_file() else None
-                counsel = counsel_record_for(item_records_dir, stage, n)
-
-                if counsel is not None:
-                    answerer = f"counsel:{counsel.get('verdict')}"
-                elif stop and stop.get("class") == "question":
-                    answerer = "person"
-                elif stop and stop.get("class") in GUARDED_STOP_CLASSES:
-                    answerer = "guard"
-                else:
-                    answerer = "none"
-
-                if stop:
-                    cls, provenance, detail = (stop.get("class"), stop.get("provenance"),
-                                              stop.get("detail"))
-                    if cls in by_class:
-                        by_class[cls] += 1
-                else:
-                    cls, provenance, detail = "before stop was recorded", None, None
-                    before_stop_was_recorded += 1
-
-                by_answerer[answerer] = by_answerer.get(answerer, 0) + 1
-                rows.append({"item": item_id, "record": name, "class": cls,
-                            "provenance": provenance, "detail": detail,
-                            "answerer": answerer, "filed_issue": filed_issue})
+                add_row(stage, n, rec.get("stop"))
+        for n, rec in sorted(parse_attempts(item_records_dir, "spec").items()):
+            if rec.get("status") != "refused":
+                continue
+            add_row("spec", n, derive_stop("refused", refusal=rec.get("refusal")))
 
     totals = {"by_class": by_class, "by_answerer": by_answerer,
              "before_stop_was_recorded": before_stop_was_recorded}

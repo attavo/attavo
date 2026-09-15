@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/counsel/1",
+  "$id": "https://attavo.dev/schema/records/counsel/2",
   "title": "attavo counsel record (counsel-NN.json)",
   "type": "object",
   "additionalProperties": false,
@@ -16,13 +16,13 @@
     "sha": {"type": "string", "minLength": 1},
     "record_stage": {
       "type": "string",
-      "enum": ["build", "verify"],
-      "description": "Which stage's non-pass record this counsel invocation read."
+      "enum": ["build", "verify", "spec"],
+      "description": "Which stage's non-pass record this counsel invocation read -- \"spec\" is a refused spec-gate record, read only when no build or verify record exists yet."
     },
     "record": {
       "type": "string",
       "minLength": 1,
-      "description": "The stem (e.g. \"build-01\") of the non-pass record counsel read."
+      "description": "The stem (e.g. \"build-01\" or \"spec-01\") of the non-pass record counsel read."
     },
     "at": {"type": "string", "minLength": 1},
     "adapter": {"type": ["string", "null"]},
