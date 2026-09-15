@@ -15,6 +15,7 @@ the tenant's `attavo/adapters/`, then under this product's `adapters/`.
 - `ATTAVO_ADAPTER_CONFIG` — the tenant manifest's `[executor.<adapter-name>]` table, serialized as JSON (`{}` when the tenant declared none). The product does not know what an adapter's settings mean; each adapter documents its own keys on its own `README.md`. **Never put a secret in this table** — it is copied verbatim into `build-NN.json` as `adapter_config`, and a record is not where secrets live.
 - `ATTAVO_CHECKS_COMMAND` — the tenant's `[checks].command`, unset when the tenant declared no `[checks]` table. The product does not know what it checks; the tenant does. An adapter should tell the executor it is part of done when set, and say nothing about checks when it is not.
 - `ATTAVO_STAGE` — `"build"`, `"verify"`, or `"counsel"` (issue #100), which invocation this is. An adapter that supports every stage branches on it; one that only builds may ignore it.
+- `ATTAVO_EVENTS` — build and verify only: a file path an adapter may append events to while it runs (issue #26). Absent on a stage that does not set it (counsel does not); an adapter that never checks for it breaks nothing.
 - `ATTAVO_DIFF` — verify only: a file holding the diff since the build's approval.
 - `ATTAVO_BUILD_RECORD` — verify only: the path to the `build-NN.json` being verified.
 - `ATTAVO_COUNSEL_RECORD` — counsel only: the path to the non-pass `build-NN.json`/`verify-NN.json` being counseled.
@@ -47,6 +48,32 @@ An adapter never writes a record. `attavo build` writes the one
 `build-NN.json` for the whole invocation. What it must do with a tool
 error, an absent report, or a bad question is `tests/test_executor_conformance.py`,
 run against every `adapters/<name>/conformance.json` it declares.
+
+## Events (issue #26)
+
+`ATTAVO_EVENTS`, when set, names a file the adapter may append events to
+while it runs, mapping its own executor's stream into one JSON object
+per line, flushed on every write:
+
+```json
+{"at": "<iso8601, seconds>", "kind": "message" | "tool_call" | "tool_result",
+ "text": "<one line, capped at 400 characters>"}
+```
+
+`text` is the executor's own words for `message`, the tool's name and its
+first argument for `tool_call`, and the tool's result's first line for
+`tool_result`. The product appends its own `iteration` and `gate` events
+to the same file (each iteration's start, and each criterion's exit,
+from the loop that already runs them) and, for `attavo counsel`, never
+opens the file at all -- events belong to a running stage, not a
+read-only judgment of one already finished.
+
+The file is never a record and is never committed: it is not among the
+paths `commit_record` names, and a tenant's `.gitignore` is not touched
+for it, since an uncommitted file in an item's own worktree is already
+invisible to the ledger and the doctor. An adapter that never writes to
+it breaks nothing -- the file is simply absent, and the screen renders
+the feed it has without one.
 
 ## Counsel (issue #100)
 

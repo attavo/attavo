@@ -178,6 +178,33 @@ def test_drive_builds_from_an_approved_spec_with_no_build(tmp_path):
     assert remote_head(bare, branch) == head_of(root)
 
 
+def test_drive_leaves_the_events_file_out_of_the_record_commit(tmp_path):
+    """Issue #26, acceptance row 2. attavo build always writes
+    build-01.events.jsonl now (test_build.py's own row-1 test), so it
+    exists on disk by the time drive commits -- and the commit's file
+    list still names only the record and its log: an event stream is
+    not a record, and commit_record never adds a path it was not given.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_bare_remote(root, tmp_path)
+    approve_item(root)
+
+    run = run_attavo(root, "drive", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+
+    record_path = record_files(root, "build")[-1]
+    events_path = record_path.with_suffix(".events.jsonl")
+    assert events_path.is_file()
+
+    touched = set(last_commit_paths(root))
+    assert str(events_path.relative_to(root)) not in touched
+    assert touched == {
+        str(record_path.relative_to(root)),
+        str(record_path.with_suffix(".log").relative_to(root)),
+    }
+
+
 def test_drive_commits_the_record_as_the_driver_not_the_tenants_own_identity(tmp_path):
     """The driver's identity (driver_identity, beside executor_identity):
     set by the product, never the tenant's git config, so a driven item's

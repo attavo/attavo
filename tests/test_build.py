@@ -116,6 +116,44 @@ def test_fixture_adapter_traverses_build(tmp_path):
     assert rec["selected_tests"]["count"] == len([l for l in touched.splitlines() if l.strip()])
 
 
+def test_build_writes_an_events_file_and_leaves_the_record_unchanged(tmp_path):
+    """Issue #26, acceptance row 1. The product now always sets
+    ATTAVO_EVENTS before invoking the adapter: build-01.events.jsonl
+    carries the product's own iteration and gate lines (one of each --
+    this fixture's single criterion passes on the first iteration) plus
+    the fixture adapter's own three, each a JSON object with exactly
+    at/kind/text -- and the record is exactly the one
+    test_fixture_adapter_traverses_build already asserts: the event
+    stream changes nothing about it.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1")
+    assert run.returncode == 0
+
+    rec = latest_build(root)
+    assert rec["status"] == "pass"
+    assert rec["adapter"] == "fixture"
+    assert rec["iterations"] == 1
+    assert rec["criteria"] == [{"name": "checks_built.sh", "exit": 0}]
+    assert rec["model"] == "fixture"
+    assert rec["selected_tests"]["exit"] == 0
+
+    events_path = root / "records" / "1" / "build-01.events.jsonl"
+    assert events_path.is_file()
+    lines = [json.loads(l) for l in events_path.read_text().splitlines() if l.strip()]
+    assert all(set(e) == {"at", "kind", "text"} for e in lines)
+    kinds = [e["kind"] for e in lines]
+    assert kinds.count("iteration") == 1
+    assert kinds.count("gate") == 1
+    assert kinds.count("message") == 1
+    assert kinds.count("tool_call") == 1
+    assert kinds.count("tool_result") == 1
+    gate_line = next(e for e in lines if e["kind"] == "gate")
+    assert "checks_built.sh" in gate_line["text"]
+
+
 def test_adapter_config_reaches_the_adapter(tmp_path):
     """Issue #24, acceptance 1. [executor.<adapter-name>] is an open table:
     attavo build serializes it to JSON, passes it to the adapter as

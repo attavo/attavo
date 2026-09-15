@@ -2,12 +2,16 @@
 """adapters/claude-code/run -- see README.md (this directory) for the four
 configuration keys, and ../README.md for the shared adapter contract.
 
-Not exercised by the test suite (judgment is measured, not tested); its
-argument construction is checked by ATTAVO_ADAPTER_DRY_RUN=1, which prints
-the `claude` command line as a JSON array instead of running it, and its
-response handling is checked by ATTAVO_ADAPTER_RESPONSE_FILE, which reads a
-canned --output-format json response from a file instead of invoking
-`claude`.
+A live `claude` invocation is not exercised by the test suite (judgment
+is measured, not tested); its argument construction is checked by
+ATTAVO_ADAPTER_DRY_RUN=1, which prints the `claude` command line as a
+JSON array instead of running it, its response handling is checked by
+ATTAVO_ADAPTER_RESPONSE_FILE, which reads a canned final report object
+from a file instead of invoking `claude`, and (issue #26) its
+`--output-format stream-json --verbose` mapping -- the event stream
+this adapter maps to ATTAVO_EVENTS, and the terminal "result" line it
+reads the report object from -- is checked by ATTAVO_ADAPTER_STREAM_FILE,
+which feeds a recorded transcript instead.
 
 The whole result is printed to stdout before this adapter's own final
 line, so build-NN.log carries it as the transcript -- a halt otherwise
@@ -80,6 +84,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 STATUS_SCHEMA = {
@@ -478,7 +483,7 @@ def build_command(instruction: str, config: dict, schema: dict, stage: str) -> l
         cmd += ["--bare"]
     cmd += ["--settings", json.dumps(sandbox_settings(stage, Path.cwd()))]
     cmd += ["-p", instruction,
-           "--output-format", "json",
+           "--output-format", "stream-json", "--verbose",
            "--json-schema", json.dumps(schema),
            "--permission-mode", permission_mode,
            "--allowedTools", ",".join(allowed_tools),
@@ -593,7 +598,11 @@ def load_canned_responses() -> list[dict] | None:
     per invocation, its last element repeating once exhausted (issue
     #88: the non-question retry is a second invocation inside the same
     adapter run, and a canned test needs to hand it a different answer
-    than the first)."""
+    than the first). Distinct from ATTAVO_ADAPTER_STREAM_FILE below: a
+    canned response here is the final report object itself, the shape
+    the model-derivation and report-field tests exercise, never a stream
+    to map -- unaffected by --output-format actually being stream-json
+    on a real invocation."""
     response_file = os.environ.get("ATTAVO_ADAPTER_RESPONSE_FILE")
     if not response_file:
         return None
@@ -601,37 +610,171 @@ def load_canned_responses() -> list[dict] | None:
     return raw if isinstance(raw, list) else [raw]
 
 
-def invoke_once(cmd: list[str], responses: list[dict] | None, call_index: int
+def load_canned_stream() -> list[str] | None:
+    """None when ATTAVO_ADAPTER_STREAM_FILE is unset. Otherwise a
+    recorded `claude --output-format stream-json --verbose` transcript,
+    one JSONL line per list entry (issue #26, acceptance row 3) -- fed
+    through the same line-by-line mapping and terminal "result" read a
+    real invocation gets, so the mapping is exercised without a live
+    `claude` process."""
+    stream_file = os.environ.get("ATTAVO_ADAPTER_STREAM_FILE")
+    if not stream_file:
+        return None
+    return Path(stream_file).read_text().splitlines()
+
+
+def parse_stream_line(line: str) -> dict | None:
+    """One parsed JSONL line, or None when it is blank or not JSON -- a
+    tracing line on the same stream is not an error, just not an event
+    (codex's own parse_events does the same)."""
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        return json.loads(line)
+    except ValueError:
+        return None
+
+
+def first_string_arg(tool_input: dict | None) -> str:
+    """The first string-valued argument of a tool_use block's input, in
+    declaration order -- a file path or a command, the one value worth a
+    feed line; a tool whose arguments are all non-string (booleans,
+    numbers) reports "" rather than guess which one matters."""
+    for value in (tool_input or {}).values():
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+def tool_result_content_text(content) -> str:
+    """A tool_result block's own text, whichever of claude code's two
+    content shapes it carries: a bare string, or a list of {"type":
+    "text", "text": ...} blocks (an image or other non-text block
+    contributes nothing -- there is no line of text to render)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(b.get("text", "") for b in content
+                         if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
+
+def stream_line_events(obj: dict) -> list[tuple[str, str]]:
+    """[(kind, text), ...] for one parsed stream-json line -- zero, one,
+    or several (one assistant turn can carry a text block and a tool_use
+    block together, each its own event). An assistant message's text
+    block maps to "message", its tool_use blocks to "tool_call" (the
+    tool's name and its first string argument); a user message carrying
+    a tool_result block maps to "tool_result" (the result's own first
+    line). Everything else on the stream -- system, and "result" itself,
+    read separately for the report fields rather than rendered as a feed
+    line -- maps to nothing."""
+    events: list[tuple[str, str]] = []
+    content = ((obj.get("message") or {}).get("content") or [])
+    if obj.get("type") == "assistant":
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and block.get("text"):
+                events.append(("message", block["text"]))
+            elif block.get("type") == "tool_use":
+                name = block.get("name") or ""
+                arg = first_string_arg(block.get("input"))
+                events.append(("tool_call", f"{name} {arg}".strip()))
+    elif obj.get("type") == "user":
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                text = tool_result_content_text(block.get("content"))
+                first_line = text.splitlines()[0] if text.splitlines() else ""
+                events.append(("tool_result", first_line))
+    return events
+
+
+EVENT_TEXT_MAX_CHARS = 400
+
+
+def append_event(events_path: str, kind: str, text: str) -> None:
+    """One {at, kind, text} JSON line appended to events_path and
+    flushed at once -- the same shape and the same open-write-close
+    discipline bin/attavo's own append_event uses for its iteration and
+    gate events, kept independently here since an adapter is a separate
+    process with no import path into the product."""
+    line = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "kind": kind, "text": " ".join(text.split())[:EVENT_TEXT_MAX_CHARS]}
+    with open(events_path, "a") as fh:
+        fh.write(json.dumps(line) + "\n")
+
+
+def invoke_stream(cmd: list[str], events_path: str | None, canned_lines: list[str] | None
+                  ) -> tuple[str, dict | None, int]:
+    """(raw transcript text, the terminal "result" object or None, exit
+    code) -- from canned_lines (ATTAVO_ADAPTER_STREAM_FILE) when given,
+    else a real `claude --output-format stream-json --verbose`
+    invocation, read line by line as it runs (not buffered until the
+    process exits) so each mapped event reaches events_path while the
+    stage is still in progress. Every raw line reaches the returned
+    transcript, mapped or not -- issue #34's guarantee: the evidence is
+    what build-NN.log saves, not just what this adapter went on to use.
+    """
+    raw_lines: list[str] = []
+    result: dict | None = None
+
+    def handle(line: str) -> None:
+        nonlocal result
+        if not line.strip():
+            return
+        raw_lines.append(line)
+        obj = parse_stream_line(line)
+        if obj is None:
+            return
+        if obj.get("type") == "result":
+            result = obj
+            return
+        if events_path:
+            for kind, text in stream_line_events(obj):
+                append_event(events_path, kind, text)
+
+    if canned_lines is not None:
+        for line in canned_lines:
+            handle(line)
+        return "\n".join(raw_lines), result, 0
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        handle(line.rstrip("\n"))
+    proc.wait()
+    stderr = proc.stderr.read() if proc.stderr else ""
+    if stderr.strip():
+        raw_lines.append(stderr.rstrip("\n"))
+    return "\n".join(raw_lines), result, proc.returncode
+
+
+def invoke_once(cmd: list[str], responses: list[dict] | None, call_index: int,
+                events_path: str | None
                 ) -> tuple[int | None, dict | None]:
     """(None, response) for a result this adapter goes on to evaluate;
     (exit_code, None) when the call itself must end the adapter right
-    away (the underlying tool's own non-zero exit). Always prints this
-    call's raw result to stdout first -- issue #34's guarantee holds
-    across a retry too: every raw result the tool returns, not just the
-    one this adapter finally reports on, reaches build-NN.log.
+    away (the underlying tool's own non-zero exit, or a 0 exit whose
+    stream carried no terminal "result" line at all). Always prints this
+    call's raw transcript to stdout first -- issue #34's guarantee holds
+    across a retry too: every raw line the tool produced, not just the
+    result this adapter finally reports on, reaches build-NN.log.
     """
     if responses is not None:
         response = responses[min(call_index, len(responses) - 1)]
         print(json.dumps(response))
         return None, response
 
-    run = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if run.returncode != 0:
-        # keep the evidence: claude's own account of a failure is the
-        # only record of it once this process exits.
-        if run.stdout.strip():
-            print(run.stdout.rstrip("\n"))
-        if run.stderr.strip():
-            print(run.stderr.rstrip("\n"))
-        return run.returncode, None
-    response = json.loads(run.stdout)
-    # keep the evidence: the whole result, not just the fields common{}
-    # below carries, is the transcript build-NN.log saves -- a halt
-    # otherwise cannot be explained after the fact.
-    print(run.stdout.rstrip("\n"))
-    if run.stderr.strip():
-        print(run.stderr.rstrip("\n"))
-    return None, response
+    raw, result, returncode = invoke_stream(cmd, events_path, load_canned_stream())
+    if raw.strip():
+        print(raw)
+    if returncode != 0:
+        return returncode, None
+    if result is None:
+        return 1, None
+    return None, result
 
 
 def usage_fields(response: dict) -> tuple[int, int, float | None]:
@@ -720,8 +863,9 @@ def main() -> int:
         return 0
 
     responses = load_canned_responses()
+    events_path = os.environ.get("ATTAVO_EVENTS")
 
-    exit_code, response = invoke_once(cmd, responses, 0)
+    exit_code, response = invoke_once(cmd, responses, 0, events_path)
     if exit_code is not None:
         return exit_code
 
@@ -777,7 +921,7 @@ def main() -> int:
         # reaches a person.
         reinstruction = instruction + "\n\n" + REINSTRUCTION
         cmd2 = build_command(reinstruction, config, schema, stage)
-        exit_code2, response2 = invoke_once(cmd2, responses, 1)
+        exit_code2, response2 = invoke_once(cmd2, responses, 1, events_path)
         if exit_code2 is not None:
             return exit_code2
         if response2.get("is_error") or not response2.get("structured_output"):
