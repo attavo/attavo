@@ -1,0 +1,26 @@
+schema_version = 1
+
+[attavo]
+version = "v0.1.0"
+
+[executor]
+build = "fixture"
+
+[spec]
+[spec.boundary]
+paths = ["src/**"]
+
+[tests]
+select = "cat"
+run = "true"
+
+[gates]
+
+[paths]
+specs = "specs"
+records = "records"
+rulings = "rulings.md"
+rejections = "rejections"
+
+[operators]
+approvers = ["alice"]
