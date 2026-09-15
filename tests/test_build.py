@@ -45,6 +45,15 @@ def approve_item(root: Path, item: str = "1") -> None:
     assert run_attavo(root, "approve", item, "--by", "alice").returncode == 0
 
 
+def events_dir(root: Path) -> Path:
+    """<git-dir>/attavo -- where the product writes a stage's events
+    file (issue #140), outside the working tree the executor commits
+    from."""
+    git_dir = subprocess.run(["git", "-C", str(root), "rev-parse", "--absolute-git-dir"],
+                             capture_output=True, text=True, check=True).stdout.strip()
+    return Path(git_dir) / "attavo"
+
+
 def amend_problem(root: Path) -> None:
     spec_md = root / "specs" / "1" / "spec.md"
     spec_md.write_text(spec_md.read_text().replace(
@@ -91,6 +100,69 @@ def test_build_refuses_write_outside_claims(tmp_path):
     assert "unclaimed.txt" in rec["refusal"]
     # the adapter's commit is left on the branch, not reverted
     assert (root / "unclaimed.txt").is_file()
+
+
+def test_build_events_file_lives_outside_the_working_tree(tmp_path):
+    """Issue #140, acceptance row 1. The events file sits under the
+    checkout's own git directory, not the working tree the executor
+    commits from: `git status` is clean after a stage that wrote
+    events, and the file itself exists at the git-dir path. Tenant
+    zero's own specimen, #688: the executor's commit carried
+    attest/records/688/build-01.events.jsonl because the product wrote
+    it inside the tree, and the executor's own commit staged it.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1")
+    assert run.returncode == 0
+
+    # no events file anywhere under the working tree (.git's own
+    # contents aside -- that is exactly where it now lives) -- not
+    # untracked (which alone wouldn't catch one the executor already
+    # committed), not present at all.
+    in_tree = [p for p in root.rglob("*.events.jsonl") if ".git" not in p.parts]
+    assert in_tree == []
+
+    events_path = events_dir(root) / "build-01.events.jsonl"
+    assert events_path.is_file()
+    assert json.loads(events_path.read_text().splitlines()[0])["kind"] == "iteration"
+
+
+def test_build_refuses_an_executor_commit_under_records(tmp_path):
+    """Issue #140, acceptance row 2. paths.records is the product's own
+    directory, not a claim any spec can make -- an executor commit
+    touching it is refused by name, class claims-boundary, provenance
+    executor (not "spec": the boundary crossed is the product's own,
+    not the definition of done the spec's claims describe). Tenant
+    zero's own specimen, #688, would be refused this way, naming
+    attest/records/688/build-01.events.jsonl.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1", env={"ATTAVO_FIXTURE_WRITE": "records/1/sneaky.txt"})
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    assert rec["status"] == "refused"
+    assert rec["refusal"] == "records/1/sneaky.txt"
+    assert rec["stop"] == {"class": "claims-boundary", "provenance": "executor", "detail": None}
+
+
+def test_build_refuses_an_executor_commit_under_specs(tmp_path):
+    """Issue #140, acceptance row 3. The same guard for paths.specs --
+    the definition of done, not a claim the build itself may touch."""
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1", env={"ATTAVO_FIXTURE_WRITE": "specs/1/sneaky.txt"})
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    assert rec["status"] == "refused"
+    assert rec["refusal"] == "specs/1/sneaky.txt"
+    assert rec["stop"] == {"class": "claims-boundary", "provenance": "executor", "detail": None}
 
 
 def test_fixture_adapter_traverses_build(tmp_path):
@@ -140,7 +212,7 @@ def test_build_writes_an_events_file_and_leaves_the_record_unchanged(tmp_path):
     assert rec["model"] == "fixture"
     assert rec["selected_tests"]["exit"] == 0
 
-    events_path = root / "records" / "1" / "build-01.events.jsonl"
+    events_path = events_dir(root) / "build-01.events.jsonl"
     assert events_path.is_file()
     lines = [json.loads(l) for l in events_path.read_text().splitlines() if l.strip()]
     assert all(set(e) == {"at", "kind", "text"} for e in lines)

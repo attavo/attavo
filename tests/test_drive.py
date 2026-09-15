@@ -179,11 +179,12 @@ def test_drive_builds_from_an_approved_spec_with_no_build(tmp_path):
 
 
 def test_drive_leaves_the_events_file_out_of_the_record_commit(tmp_path):
-    """Issue #26, acceptance row 2. attavo build always writes
-    build-01.events.jsonl now (test_build.py's own row-1 test), so it
-    exists on disk by the time drive commits -- and the commit's file
-    list still names only the record and its log: an event stream is
-    not a record, and commit_record never adds a path it was not given.
+    """Issue #26, acceptance row 2, strengthened by issue #140: attavo
+    build always writes a stage's events file now (test_build.py's own
+    row-1 tests), under the checkout's own git directory rather than
+    the working tree -- so it is not merely excluded from the commit's
+    file list, it is not even a path git tracks anything under. The
+    commit's file list still names only the record and its log.
     """
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
@@ -194,11 +195,11 @@ def test_drive_leaves_the_events_file_out_of_the_record_commit(tmp_path):
     assert run.returncode == 0, run.stdout + run.stderr
 
     record_path = record_files(root, "build")[-1]
-    events_path = record_path.with_suffix(".events.jsonl")
+    git_dir = git(root, "rev-parse", "--absolute-git-dir").strip()
+    events_path = Path(git_dir) / "attavo" / "build-01.events.jsonl"
     assert events_path.is_file()
 
     touched = set(last_commit_paths(root))
-    assert str(events_path.relative_to(root)) not in touched
     assert touched == {
         str(record_path.relative_to(root)),
         str(record_path.with_suffix(".log").relative_to(root)),
