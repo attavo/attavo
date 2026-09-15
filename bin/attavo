@@ -1532,6 +1532,27 @@ def split_adapter_stdout(stdout: str) -> tuple[str, dict | None]:
     return transcript, payload
 
 
+# --- events: the adapter contract's one optional output (issue #26) --
+# an uncommitted <stage>-NN.events.jsonl the screen tails while a stage
+# runs, never a record and never committed (commit_record names only
+# .json, .log, and .filed; this suffix is never among them). ---
+
+EVENT_TEXT_MAX_CHARS = 400
+
+
+def append_event(events_path: Path, kind: str, text: str) -> None:
+    """One {at, kind, text} JSON line appended to events_path and flushed
+    at once (open-write-close, not a kept handle) -- the screen tails
+    this file while the stage is still running, so a line held in a
+    buffer is a line the feed does not move on. text is collapsed to one
+    line and capped at EVENT_TEXT_MAX_CHARS: a tool result can be a whole
+    file, and the feed renders lines, not files."""
+    line = {"at": now_iso(), "kind": kind,
+            "text": " ".join(text.split())[:EVENT_TEXT_MAX_CHARS]}
+    with events_path.open("a") as fh:
+        fh.write(json.dumps(line) + "\n")
+
+
 def cmd_build(argv: list[str]) -> int:
     root = Path(".").resolve()
     item_id = argv[0] if argv else derive_item_id(root)
@@ -1642,12 +1663,16 @@ def cmd_build(argv: list[str]) -> int:
     halted = None
     iterations_used = 0
 
+    item_records_dir.mkdir(parents=True, exist_ok=True)
+    events_path = item_records_dir / f"build-{next_attempt_number(item_records_dir, 'build'):02d}.events.jsonl"
+
     with tempfile.TemporaryDirectory() as tmp:
         feedback_path = Path(tmp) / "feedback.txt"
         feedback_path.write_text("")
 
         for iteration in range(1, BUILD_ITERATION_BUDGET + 1):
             iterations_used = iteration
+            append_event(events_path, "iteration", f"iteration {iteration} of {BUILD_ITERATION_BUDGET}")
             env = dict(os.environ)
             env["ATTAVO_SPEC_DIR"] = str(spec_dir)
             env["ATTAVO_RECORDS_DIR"] = str(item_records_dir)
@@ -1657,6 +1682,7 @@ def cmd_build(argv: list[str]) -> int:
             env["ATTAVO_FEEDBACK"] = str(feedback_path)
             env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(adapter_config)
             env["ATTAVO_STAGE"] = "build"
+            env["ATTAVO_EVENTS"] = str(events_path)
             if checks_command:
                 env["ATTAVO_CHECKS_COMMAND"] = checks_command
             env["GIT_AUTHOR_NAME"] = identity["name"]
@@ -1714,6 +1740,8 @@ def cmd_build(argv: list[str]) -> int:
             criteria_results = [
                 {"name": name, "exit": run_criterion(spec_dir / "criteria" / name, root)}
                 for name in criteria_names]
+            for c in criteria_results:
+                append_event(events_path, "gate", f"{c['name']}: exit {c['exit']}")
 
             select_in = "".join(p + "\n" for p in touched)
             select_run = subprocess.run(tests_cfg["select"], shell=True, cwd=str(root),
@@ -1968,6 +1996,9 @@ def cmd_verify(argv: list[str]) -> int:
         print(f"attavo verify: refused: {diff_refusal}")
         return 1
 
+    item_records_dir.mkdir(parents=True, exist_ok=True)
+    events_path = item_records_dir / f"verify-{next_attempt_number(item_records_dir, 'verify'):02d}.events.jsonl"
+
     with tempfile.TemporaryDirectory() as tmp:
         diff_path = Path(tmp) / "diff.patch"
         diff_path.write_text(diff_text)
@@ -1981,6 +2012,7 @@ def cmd_verify(argv: list[str]) -> int:
         env["ATTAVO_DIFF"] = str(diff_path)
         env["ATTAVO_BUILD_RECORD"] = str(build_record_path) if build_record_path else ""
         env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(adapter_config)
+        env["ATTAVO_EVENTS"] = str(events_path)
 
         run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
                              capture_output=True, text=True, check=False)

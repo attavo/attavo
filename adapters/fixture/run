@@ -19,6 +19,16 @@ echo "--- ATTAVO_FEEDBACK ---"
 cat "${ATTAVO_FEEDBACK:-/dev/null}" 2>/dev/null || true
 echo "--- end feedback ---"
 
+if [ -n "${ATTAVO_EVENTS:-}" ]; then
+  # issue #26: three canned events, one of each executor kind, so the
+  # conformance suite can assert the shape a real adapter's own mapping
+  # must also produce -- this fixture has no real executor stream to map.
+  at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"at":"%s","kind":"message","text":"fixture: starting"}\n' "$at" >> "$ATTAVO_EVENTS"
+  printf '{"at":"%s","kind":"tool_call","text":"fixture-tool arg1"}\n' "$at" >> "$ATTAVO_EVENTS"
+  printf '{"at":"%s","kind":"tool_result","text":"ok"}\n' "$at" >> "$ATTAVO_EVENTS"
+fi
+
 if [ "${ATTAVO_STAGE:-build}" = "counsel" ]; then
   # issue #100: a read-only reading of a stop -- the record, its log, and
   # the diff, all handed by path, plus the tenant manifest and this

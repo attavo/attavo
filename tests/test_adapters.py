@@ -1,9 +1,11 @@
 """adapters/claude-code/run: its argument construction is checked through
 ATTAVO_ADAPTER_DRY_RUN=1, which prints the `claude` command line as a JSON
 array instead of running it, and its response handling is checked through
-ATTAVO_ADAPTER_RESPONSE_FILE, which feeds it a canned --output-format json
-response instead of invoking `claude`. Judgment itself is measured, not
-tested, so no real model is ever in this loop.
+ATTAVO_ADAPTER_RESPONSE_FILE, which feeds it a canned final report object
+instead of invoking `claude`. Judgment itself is measured, not tested, so
+no real model is ever in this loop. Its `--output-format stream-json
+--verbose` mapping (issue #26) is tests/test_adapter_claude_code.py's own
+module, through ATTAVO_ADAPTER_STREAM_FILE.
 
 Issue #24: [executor.<adapter>] is an open configuration table, passed
 through as ATTAVO_ADAPTER_CONFIG and copied verbatim into build-NN.json as
@@ -141,7 +143,8 @@ def test_claude_code_api_mode_is_default(tmp_path):
     cmd = dry_run(tmp_path)
 
     assert "--bare" in cmd
-    assert cmd[cmd.index("--output-format") + 1] == "json"
+    assert cmd[cmd.index("--output-format") + 1] == "stream-json"
+    assert "--verbose" in cmd
     assert "--json-schema" in cmd
     assert cmd[cmd.index("--permission-mode") + 1] == "acceptEdits"
     assert cmd[cmd.index("--allowedTools") + 1] == "Read,Edit,Write,Bash"
