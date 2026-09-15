@@ -118,6 +118,35 @@ def test_ledger_classifies_every_commit_and_counts_operator_acts(tmp_path):
     assert summary["since"] == "v0.19.1"
 
 
+def test_ledger_stops_count_matches_stops_including_a_gate_refusal(tmp_path):
+    """Issue #137, acceptance row 2. A refused spec-gate record and a
+    non-pass build record: ledger's own stops count is the same set
+    `attavo stops` counts, gate refusals included -- both computed by
+    item_stops, not two producers reading one item and printing
+    different numbers (tenant zero #683: stops printed 1, ledger printed
+    0, because ledger's own count only ever looked at build and verify).
+    """
+    root = make_tenant(tmp_path, "ledger_base")
+    add_spec(root)
+
+    write_record(root, "1", "spec", 1,
+                {"status": "refused",
+                 "refusal": "criterion fails against the tree plus stub: "
+                            "doctor-template-absent.sh"})
+    write_record(root, "1", "build", 1, {"status": "failed"})
+
+    ledger_run = run_attavo(root, "ledger", "1", "--json")
+    assert ledger_run.returncode == 0, ledger_run.stdout + ledger_run.stderr
+    stops_run = run_attavo(root, "stops", "1", "--json")
+    assert stops_run.returncode == 0, stops_run.stdout + stops_run.stderr
+
+    ledger_data = json.loads(ledger_run.stdout)
+    stops_data = json.loads(stops_run.stdout)
+
+    assert len(stops_data["rows"]) == 2
+    assert ledger_data["summary"]["stops"] == len(stops_data["rows"])
+
+
 def test_ledger_marks_a_pre_v018_record_commit_as_record_or_launch(tmp_path):
     """Acceptance row 2: a person's record commit before v0.18.0 prints
     record-or-launch with the note, never launch or record -- before that

@@ -62,6 +62,40 @@ def write_build_record(root: Path, item: str, n: int, status: str, stop: dict | 
     return path
 
 
+def write_spec_record(root: Path, item: str, n: int, refusal: str) -> Path:
+    records_dir = root / "records" / item
+    records_dir.mkdir(parents=True, exist_ok=True)
+    record = {
+        "sha": "0" * 40, "spec_sha": "0" * 40, "at": "2026-01-01T00:00:00Z",
+        "status": "refused", "approval_sha": None, "criteria": [], "refusal": refusal,
+    }
+    path = records_dir / f"spec-{n:02d}.json"
+    path.write_text(json.dumps(record))
+    return path
+
+
+def test_file_stops_files_a_refused_gate_record_as_class_gate(tmp_path):
+    """Issue #137, acceptance row 1 (file-stops half). A refused
+    spec-gate record files as class "gate", provenance "spec" -- not
+    "claims-boundary", the boundary it never crossed (tenant zero's own
+    specimen, #683: a criterion the gate cannot express)."""
+    root = make_tenant(tmp_path, "build_valid")
+    filed = tmp_path / "filed.jsonl"
+    configure_filing(root, filed)
+
+    write_spec_record(root, "1", 1,
+                      "criterion fails against the tree plus stub: doctor-template-absent.sh")
+
+    run = run_attavo(root, "file-stops", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+
+    filed_bodies = [json.loads(l) for l in filed.read_text().splitlines() if l.strip()]
+    assert len(filed_bodies) == 1
+    assert filed_bodies[0]["class"] == "gate"
+    assert filed_bodies[0]["provenance"] == "spec"
+    assert filed_bodies[0]["record"] == "records/1/spec-01.json"
+
+
 def test_file_stops_refuses_an_unclassed_stop_with_empty_detail(tmp_path):
     """Acceptance row 4 (half). A stop the product cannot even describe --
     class unclassed, detail empty -- is refused by name; nothing is filed."""
