@@ -159,6 +159,35 @@ def test_stops_prints_before_stop_was_recorded_for_a_record_without_stop(tmp_pat
     assert "before stop was recorded" in run_text.stdout
 
 
+def test_stops_prints_counsel_verdict_for_a_refused_spec_gate_record(tmp_path):
+    """Issue #133, acceptance row 3. A refused spec-01.json carries no
+    stop field of its own (cmd_spec_gate is untouched by this lane), so
+    its class is derived from status and refusal -- claims-boundary/spec,
+    the same class a build or verify refusal of this shape already
+    carries -- and a counsel record naming it wins as the answerer, the
+    same as any other guarded class. A passing spec-02 must never appear
+    as a row."""
+    root = make_tenant(tmp_path, "ledger_base")
+    write_record(root, "1", "spec", 1,
+                {"status": "refused",
+                 "refusal": "criterion fails against the tree plus stub: "
+                            "doctor-template-absent.sh"})
+    write_counsel(root, "1", 1, "spec-01", "patch")
+    write_record(root, "1", "spec", 2, {"status": "pass"})
+
+    run = run_attavo(root, "stops", "1", "--json")
+    assert run.returncode == 0, run.stdout + run.stderr
+    data = json.loads(run.stdout)
+
+    rows = rows_by_record(data)
+    assert set(rows) == {"spec-01"}
+    assert rows["spec-01"]["class"] == "claims-boundary"
+    assert rows["spec-01"]["provenance"] == "spec"
+    assert rows["spec-01"]["answerer"] == "counsel:patch"
+    assert data["totals"]["by_class"]["claims-boundary"] == 1
+    assert data["totals"]["by_answerer"] == {"counsel:patch": 1}
+
+
 def test_stops_json_is_one_object_matching_rows_and_totals(tmp_path):
     """--json prints rows and totals as one object."""
     root = build_fixture(tmp_path)

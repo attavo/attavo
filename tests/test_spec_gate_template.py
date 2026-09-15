@@ -106,6 +106,32 @@ def test_job_guards_on_the_attavo_branch_prefix():
     assert "startsWith(github.head_ref, 'attavo/')" in condition
 
 
+def test_counsel_step_runs_only_when_the_gate_refuses():
+    """Issue #133, acceptance row 4. The counsel step's own guard names
+    the gate step's outcome, 'failure' -- the same outcome the
+    commit-and-push step already keys on -- so a passing gate never
+    produces a counsel record. It runs before the commit-and-push step,
+    whose `git add` already sweeps the whole records directory, so
+    counsel-NN.json rides into the same commit as the spec-NN.json
+    record it read, with no separate add needed for it.
+    """
+    text = TEMPLATE.read_text()
+
+    counsel_block = step_block(text, "- name: attavo counsel")
+    assert "id: counsel" in counsel_block
+    assert "run: attavo counsel" in counsel_block
+    if_line = next(l for l in counsel_block.splitlines() if l.strip().startswith("if:"))
+    assert "steps.gate.outcome == 'failure'" in if_line
+    assert "steps.gate.outcome == 'success'" not in if_line
+    assert "steps.touch.outputs.skip" in if_line
+
+    assert text.index("- name: attavo counsel") < text.index(
+        "- name: Commit and push the spec-gate record")
+
+    push_script = extract_step_run(text, "Commit and push the spec-gate record")
+    assert 'git add "$records_rel"' in push_script
+
+
 def test_record_commit_names_the_item_not_the_pull_request_number():
     """Issue #121: tenant zero's item #651 chain read `spec-gate record for
     #675` -- PR #675's own number, not the item's. The record lives under
