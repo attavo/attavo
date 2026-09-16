@@ -628,7 +628,8 @@ def _carries_a_known_class(text: str | None) -> str | None:
 
 
 def derive_stop(status: str, *, refusal: str | None = None, halted: dict | None = None,
-                log: str | None = None, report_class: str | None = None) -> dict | None:
+                log: str | None = None, report_class: str | None = None,
+                refusal_provenance: str | None = None) -> dict | None:
     """The stop field for a build or verify record: None for status "pass",
     else {class, provenance, detail} from what the caller already knows.
 
@@ -665,7 +666,12 @@ def derive_stop(status: str, *, refusal: str | None = None, halted: dict | None 
         only the transcript
       - a refusal that is not that -- the write-outside-claims path
         itself, not the "commit ... not authored by the executor" shape
-        -- is claims-boundary/spec
+        -- is claims-boundary/spec, unless the caller already knows this
+        refusal touched paths.records or paths.specs (issue #140:
+        protected_path_touched, checked ahead of the ordinary claims
+        match in cmd_build) and passes refusal_provenance="executor" --
+        the product's own directories are not a claim a spec makes, so a
+        refusal there is not the spec's boundary to answer for
       - a returned verify (the forge was not green; no adapter ran) is
         forge-unconcluded/tenant
       - an adapter exit whose log carries a declared-ceiling error line is
@@ -690,7 +696,8 @@ def derive_stop(status: str, *, refusal: str | None = None, halted: dict | None 
     if known:
         return {"class": known, "provenance": "executor", "detail": None}
     if status == "refused" and refusal is not None and not refusal.startswith("commit "):
-        return {"class": "claims-boundary", "provenance": "spec", "detail": None}
+        return {"class": "claims-boundary", "provenance": refusal_provenance or "spec",
+               "detail": None}
     if log and any(marker in log.lower() for marker in CEILING_MARKERS):
         return {"class": "ceiling", "provenance": "product", "detail": None}
     return {"class": "unclassed", "provenance": "product", "detail": _log_last_line(log)}
@@ -1441,6 +1448,32 @@ def matches_a_claim(path: str, claims: list[str]) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in claims)
 
 
+def protected_path_touched(root: Path, start_sha: str, records_rel: str,
+                           specs_rel: str) -> str | None:
+    """The first path an executor's own commits touched under
+    paths.records or paths.specs since start_sha, or None (issue #140).
+    Neither directory is a claim a spec can make -- paths.records is
+    where the product itself writes, paths.specs is the definition of
+    done -- yet changed_paths above excludes paths.records from the
+    ordinary claims check entirely, so a path there never even reached
+    matches_a_claim to be refused: tenant zero's own item #688 committed
+    its own events file this way, under its records directory, on a
+    build that then passed. Checked directly against the raw diff, not
+    changed_paths's already-filtered list."""
+    touched = git(root, "diff", "--name-only", start_sha, "HEAD").splitlines()
+    protected = []
+    for rel in (records_rel, specs_rel):
+        stripped = rel.rstrip("/")
+        protected.append((stripped, stripped + "/"))
+    for p in touched:
+        if not p:
+            continue
+        for exact, prefix in protected:
+            if p == exact or p.startswith(prefix):
+                return p
+    return None
+
+
 def executor_identity(adapter_name: str) -> dict:
     """The executor's identity (issue #33): set by the product, never the
     tenant's git config, so an executor commit is never indistinguishable
@@ -1535,9 +1568,27 @@ def split_adapter_stdout(stdout: str) -> tuple[str, dict | None]:
 # --- events: the adapter contract's one optional output (issue #26) --
 # an uncommitted <stage>-NN.events.jsonl the screen tails while a stage
 # runs, never a record and never committed (commit_record names only
-# .json, .log, and .filed; this suffix is never among them). ---
+# .json, .log, and .filed; this suffix is never among them). Written
+# under the checkout's own git directory, not the working tree (issue
+# #140): tenant zero's own item #688 committed its events file for
+# real -- the executor's own commit staged it, because it sat inside
+# the tree the executor runs `git status` against. ---
 
 EVENT_TEXT_MAX_CHARS = 400
+
+
+def stage_events_dir(root: Path) -> Path:
+    """<git-dir>/attavo, absolute -- <checkout>/.git/attavo for an
+    ordinary checkout, <main-repo>/.git/worktrees/<name>/attavo for a
+    linked worktree (issue #140). Outside the working tree either way,
+    so a file written here never appears in `git status` in root and is
+    never at risk of being staged and committed by the executor; the
+    screen's seam finds it the same way, with the same command, in its
+    own worktree."""
+    git_dir = Path(git(root, "rev-parse", "--absolute-git-dir").strip())
+    events_dir = git_dir / "attavo"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    return events_dir
 
 
 def append_event(events_path: Path, kind: str, text: str) -> None:
@@ -1660,11 +1711,11 @@ def cmd_build(argv: list[str]) -> int:
     checks_result: dict | None = None
     status_out = "failed"
     refusal = None
+    refusal_provenance = None
     halted = None
     iterations_used = 0
 
-    item_records_dir.mkdir(parents=True, exist_ok=True)
-    events_path = item_records_dir / f"build-{next_attempt_number(item_records_dir, 'build'):02d}.events.jsonl"
+    events_path = stage_events_dir(root) / f"build-{next_attempt_number(item_records_dir, 'build'):02d}.events.jsonl"
 
     with tempfile.TemporaryDirectory() as tmp:
         feedback_path = Path(tmp) / "feedback.txt"
@@ -1728,6 +1779,13 @@ def cmd_build(argv: list[str]) -> int:
             if foreign:
                 status_out = "refused"
                 refusal = f"commit {foreign['sha']} not authored by the executor"
+                break
+
+            protected = protected_path_touched(root, start_sha, records_rel, specs_rel)
+            if protected:
+                status_out = "refused"
+                refusal = protected
+                refusal_provenance = "executor"
                 break
 
             touched = sorted(changed_paths(root, start_sha, records_rel))
@@ -1833,7 +1891,8 @@ def cmd_build(argv: list[str]) -> int:
         "halted": halted,
         "stop": derive_stop(status_out, refusal=refusal, halted=halted,
                             log="\n".join(transcripts),
-                            report_class=(payload or {}).get("class")),
+                            report_class=(payload or {}).get("class"),
+                            refusal_provenance=refusal_provenance),
     }
     record_path = write_record(item_records_dir, "build", record, m, item_id,
                                log="\n".join(transcripts))
@@ -1996,8 +2055,7 @@ def cmd_verify(argv: list[str]) -> int:
         print(f"attavo verify: refused: {diff_refusal}")
         return 1
 
-    item_records_dir.mkdir(parents=True, exist_ok=True)
-    events_path = item_records_dir / f"verify-{next_attempt_number(item_records_dir, 'verify'):02d}.events.jsonl"
+    events_path = stage_events_dir(root) / f"verify-{next_attempt_number(item_records_dir, 'verify'):02d}.events.jsonl"
 
     with tempfile.TemporaryDirectory() as tmp:
         diff_path = Path(tmp) / "diff.patch"
