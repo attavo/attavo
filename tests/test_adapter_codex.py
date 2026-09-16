@@ -84,6 +84,20 @@ def read_events(tmp_path: Path) -> list[dict]:
     return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
 
 
+def test_codex_recorded_fixtures_command_execution_item_matches_tenant_zeros_field_names():
+    """Issue #144, acceptance row 2. RECORDED_STREAM's own command_execution
+    item is the live shape, not a guess: tenant zero's verify logs on
+    attavo/code-factory (every item.completed line since #649) carry
+    exactly these six keys on a command_execution item. A fixture edited
+    by hand back to a guessed shape -- say, just command and
+    aggregated_output -- fails this."""
+    command_execution_item = RECORDED_STREAM[3]["item"]
+    assert command_execution_item["type"] == "command_execution"
+    assert set(command_execution_item) == {
+        "aggregated_output", "command", "exit_code", "id", "status", "type",
+    }
+
+
 def test_codex_maps_a_recorded_stream_to_events_and_the_record_is_unchanged(tmp_path):
     """Acceptance row 1. A recorded item.completed stream maps to
     message/tool_call/tool_result events, in order, each {at, kind,
