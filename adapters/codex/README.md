@@ -56,10 +56,12 @@ stream maps to `../README.md`'s shared `{at, kind, text}` shape: an
 specimen), a `command_execution` item's `command` to `tool_call` and,
 once present, its `aggregated_output` to `tool_result` (both the
 command's and the output's own first line only, capped at 400
-characters) -- `command` and `aggregated_output` are not independently
-confirmed live this session the way `agent_message` is; read against a
-real `codex exec --json` run before trusting them past
-`tests/test_adapter_codex.py`'s own recorded fixture. Every other item
+characters) -- `command` and `aggregated_output` are confirmed, by
+tenant zero's own verify logs on `attavo/code-factory` since #649:
+every `command_execution` item there carries exactly the keys
+`aggregated_output`, `command`, `exit_code`, `id`, `status`, `type`,
+the same shape `tests/test_adapter_codex.py`'s own recorded fixture
+exercises this mapping through. Every other item
 type, and every non-`item.completed` line, maps to nothing. Read from
 the same `events` list `invoke()` already parses for the report line's
 own token count, whether from a live run or a canned

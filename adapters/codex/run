@@ -501,14 +501,15 @@ def item_events(obj: dict) -> list[tuple[str, str]]:
     "agent_message", "text": "ok"}}`, is this exact shape. A
     command_execution item's "command" maps to "tool_call" (the
     command's own first line) and its "aggregated_output", once
-    present, to "tool_result" (the output's own first line) -- these
-    two field names are not independently confirmed live this session
-    the way agent_message's shape is; read them against a real `codex
-    exec --json` run before trusting them past the recorded fixture
-    tests/test_adapter_codex.py exercises this mapping through. Every
-    other item type (reasoning, file_change, mcp_tool_call, and the
-    rest), and every non-item.completed line (thread.*, turn.*, "result"
-    itself), maps to nothing here."""
+    present, to "tool_result" (the output's own first line) -- both
+    field names are confirmed, by tenant zero's own verify logs on
+    attavo/code-factory since #649: every command_execution item there
+    carries exactly the keys aggregated_output, command, exit_code, id,
+    status, type, the same shape tests/test_adapter_codex.py's recorded
+    fixture exercises this mapping through. Every other item type
+    (reasoning, file_change, mcp_tool_call, and the rest), and every
+    non-item.completed line (thread.*, turn.*, "result" itself), maps
+    to nothing here."""
     if obj.get("type") != "item.completed":
         return []
     item = obj.get("item") or {}
