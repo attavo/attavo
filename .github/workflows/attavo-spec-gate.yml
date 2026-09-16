@@ -59,6 +59,18 @@
 # always the real head branch -- as the digits between attavo/ and the
 # first -, the same pattern bin/attavo's own derive_item_id uses. A
 # branch that doesn't match refuses before the commit.
+#
+# The counsel step runs only when the gate itself ran and refused --
+# steps.gate.outcome == 'failure', the same outcome the commit-and-push
+# step already keys on -- so a passing gate never gets a counsel record
+# (issue #133: a counsel record on a passing gate would be noise, and a
+# step without this guard would produce one on every PR). It runs before
+# the commit-and-push step, which `git add`s the whole records directory,
+# so counsel-NN.json rides into the same commit as the spec-NN.json
+# record it read, whether or not the adapter that produced it is
+# configured -- an unconfigured [executor].counsel fails this step the
+# same way the gate step's own refusal already fails the job, adding
+# nothing new to its conclusion.
 name: Attavo spec gate
 
 on:
@@ -96,7 +108,7 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
-      - uses: attavo/attavo@v0.19.1
+      - uses: attavo/attavo@v0.25.0
 
       - name: Skip when the head commit only touches records
         id: touch
@@ -106,6 +118,11 @@ jobs:
         id: gate
         if: steps.touch.outputs.skip != 'true'
         run: attavo spec-gate
+
+      - name: attavo counsel
+        id: counsel
+        if: steps.touch.outputs.skip != 'true' && steps.gate.outcome == 'failure'
+        run: attavo counsel
 
       - name: Commit and push the spec-gate record
         if: "!cancelled() && steps.touch.outputs.skip != 'true' && (steps.gate.outcome == 'success' || steps.gate.outcome == 'failure')"
