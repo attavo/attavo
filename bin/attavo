@@ -537,7 +537,7 @@ def write_record(records_dir: Path, stage: str, record: dict, m: dict, item: str
 
 STOP_CLASSES = ("non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
                "ceiling", "claims-boundary", "repeated-act", "unclassed", "question",
-               "environment")
+               "environment", "gate")
 STOP_PROVENANCES = ("product", "tenant", "executor", "spec")
 
 # Beyond the enum spelling itself, the prose issue #88 actually shipped
@@ -701,6 +701,19 @@ def derive_stop(status: str, *, refusal: str | None = None, halted: dict | None 
     if log and any(marker in log.lower() for marker in CEILING_MARKERS):
         return {"class": "ceiling", "provenance": "product", "detail": None}
     return {"class": "unclassed", "provenance": "product", "detail": _log_last_line(log)}
+
+
+def gate_stop(refusal: str | None) -> dict:
+    """The stop for a refused spec-gate record: class "gate", provenance
+    "spec", the refusal string itself as cause (issue #137) -- not
+    derive_stop's generic claims-boundary/spec fallback issue #133
+    reused, which named a boundary the record never crossed: "criterion
+    fails against the tree plus stub: doctor-template-absent.sh" is not
+    a write outside claims. cmd_spec_gate is untouched by this lane, so
+    a spec record still carries no stop field of its own; this is
+    synthesized wherever a refused one is read (item_stops,
+    cmd_file_stops, proof_no_stop_lacks_cause), never persisted."""
+    return {"class": "gate", "provenance": "spec", "detail": refusal}
 
 
 def load_records(records_dir: Path) -> dict[str, dict[str, dict]]:
@@ -1018,6 +1031,30 @@ def proof_no_stop_lacks_cause(root: Path, m: dict | None) -> Proof:
                     problems.append(f"item {item_dir.name} {name}'s log ends in an adapter "
                                     f"exit with nothing before it but event lines; the tool's "
                                     f"own error line is owed")
+
+        # issue #137: a refused spec-gate record is a stop too, class
+        # "gate" -- synthesized the same way item_stops and
+        # cmd_file_stops already read it, since cmd_spec_gate itself
+        # carries no stop field to check for one. No record_version
+        # gate here: unlike build/verify's own stop field, gate is never
+        # persisted, so there is no older shape that predates it.
+        for n, rec in sorted(parse_attempts(item_dir, "spec").items()):
+            if rec.get("status") != "refused":
+                continue
+            checked += 1
+            name = f"spec-{n:02d}"
+            stop = gate_stop(rec.get("refusal"))
+            cls, provenance = stop["class"], stop["provenance"]
+            if cls not in STOP_CLASSES:
+                problems.append(f"item {item_dir.name} {name} stop.class {cls!r} names "
+                                f"no enumerated class")
+                continue
+            if provenance not in STOP_PROVENANCES:
+                problems.append(f"item {item_dir.name} {name} stop.provenance "
+                                f"{provenance!r} names no enumerated provenance")
+                continue
+            if not stop.get("detail"):
+                problems.append(f"item {item_dir.name} {name} is a gate stop with no cause")
 
     older_note = f"{older} record(s) before stop was recorded"
     if problems:
@@ -2695,17 +2732,16 @@ def cmd_file_stops(argv: list[str]) -> int:
             pending.append((stage, n, stop, marker))
 
     # A refused spec-gate record is the same shape of stop, earlier (issue
-    # #133): it never carries a stop field of its own (cmd_spec_gate is
-    # untouched by this lane), so its class and provenance are derived
-    # here from its status and refusal, the same way derive_stop already
-    # reads a build or verify refusal that names no more specific class.
+    # #133); its own class is "gate" (issue #137), never persisted -- it
+    # never carries a stop field of its own (cmd_spec_gate is untouched
+    # by this lane), so it is synthesized here from its refusal.
     for n, rec in sorted(parse_attempts(item_records_dir, "spec").items()):
         if rec.get("status") != "refused":
             continue
         marker = item_records_dir / f"spec-{n:02d}.filed"
         if marker.exists():
             continue
-        pending.append(("spec", n, derive_stop("refused", refusal=rec.get("refusal")), marker))
+        pending.append(("spec", n, gate_stop(rec.get("refusal")), marker))
 
     if not pending:
         print("attavo file-stops: no stops to file")
@@ -3072,7 +3108,7 @@ def item_ledger(root: Path, m: dict, item_id: str) -> dict:
 
     driver = driver_identity()
     rows: list[dict] = []
-    operator_acts = product_acts = executor_commits = stops = 0
+    operator_acts = product_acts = executor_commits = 0
     since = None
     approval_seen = False
 
@@ -3111,9 +3147,6 @@ def item_ledger(root: Path, m: dict, item_id: str) -> dict:
                 approval_seen = True
                 continue
 
-            if stage in ("build", "verify") and content.get("status") not in (None, "pass"):
-                stops += 1
-
             is_driver = name == driver["name"] and email == driver["email"]
             is_records_app = _is_records_app(name)
             if stage == "spec" or is_driver or is_records_app:
@@ -3140,6 +3173,12 @@ def item_ledger(root: Path, m: dict, item_id: str) -> dict:
 
         rows.append({"sha": sha, "identity": name, "class": "transport"})
         operator_acts += 1
+
+    # issue #137: the same set attavo stops counts, from the same reader
+    # (item_stops) -- not a second, independent count kept in sync by
+    # hand. One non-pass record per row, whatever its stage; a gate
+    # refusal is included the same as a non-pass build or verify record.
+    stops = len(item_stops(root, m, item_id)["rows"])
 
     summary = {"operator_acts": operator_acts, "product_acts": product_acts,
               "executor_commits": executor_commits, "stops": stops, "since": since}
@@ -3192,11 +3231,11 @@ def cmd_ledger(argv: list[str]) -> int:
 def item_stops(root: Path, m: dict, item_id: str) -> dict:
     """{"item", "rows", "totals"}: one row per non-pass build or verify
     record (STOP_STAGES), plus every refused spec-gate record (issue
-    #133) -- the same shape of stop, earlier, read from status and
-    refusal rather than a stop field spec-gate records never carry
-    (derive_stop synthesizes it) -- under item_id, whatever the record's
-    own record_version -- a record too old to carry stop at all still
-    gets a row, its class printed as the doctor's own phrase for it.
+    #133), class "gate" (issue #137) -- read from status and refusal
+    rather than a stop field spec-gate records never carry (gate_stop
+    synthesizes it) -- under item_id, whatever the record's own
+    record_version -- a record too old to carry stop at all still gets
+    a row, its class printed as the doctor's own phrase for it.
 
     The answerer, a closed choice: "counsel:<verdict>" when
     counsel_record_for finds a counsel record naming this exact stage and
@@ -3253,7 +3292,7 @@ def item_stops(root: Path, m: dict, item_id: str) -> dict:
         for n, rec in sorted(parse_attempts(item_records_dir, "spec").items()):
             if rec.get("status") != "refused":
                 continue
-            add_row("spec", n, derive_stop("refused", refusal=rec.get("refusal")))
+            add_row("spec", n, gate_stop(rec.get("refusal")))
 
     totals = {"by_class": by_class, "by_answerer": by_answerer,
              "before_stop_was_recorded": before_stop_was_recorded}
