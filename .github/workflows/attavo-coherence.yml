@@ -94,7 +94,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: attavo/attavo@v0.19.1
+      - uses: attavo/attavo@v0.25.0
 
       - name: attavo attest
         id: attest
