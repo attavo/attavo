@@ -47,6 +47,26 @@ live that this path does honor the schema.
   where `findings`/`tests_named` (verify) or `status`/`question` (build)
   come from.
 
+## Events (issue #138)
+
+With `ATTAVO_EVENTS` set, each `item.completed` line on the `--json`
+stream maps to `../README.md`'s shared `{at, kind, text}` shape: an
+`agent_message` item's own text to `message` (confirmed live, issue
+#41 -- `conformance.json`'s own `"done"` situation is this exact
+specimen), a `command_execution` item's `command` to `tool_call` and,
+once present, its `aggregated_output` to `tool_result` (both the
+command's and the output's own first line only, capped at 400
+characters) -- `command` and `aggregated_output` are not independently
+confirmed live this session the way `agent_message` is; read against a
+real `codex exec --json` run before trusting them past
+`tests/test_adapter_codex.py`'s own recorded fixture. Every other item
+type, and every non-`item.completed` line, maps to nothing. Read from
+the same `events` list `invoke()` already parses for the report line's
+own token count, whether from a live run or a canned
+`ATTAVO_ADAPTER_RESPONSE_FILE` -- codex's own invocation is not a
+stream read as it happens the way claude-code's is (issue #26): the
+events land in `ATTAVO_EVENTS` once the whole call returns, not before.
+
 ## The sandbox, not just the instruction
 
 `verify`'s instruction says "make no edits, write no files, commit

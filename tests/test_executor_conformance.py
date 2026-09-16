@@ -473,6 +473,31 @@ def test_situation_18_counsel_instruction_stays_under_the_bound_with_large_files
     assert len(result["instruction"].encode()) < FIXED_BOUND_CHARS
 
 
+def test_situation_19_codex_writes_events_when_attavo_events_is_set(tmp_path):
+    """Issue #138, acceptance row 2. With ATTAVO_EVENTS set, the codex
+    adapter maps its own JSONL stream to the same {at, kind, text}
+    shape claude-code already writes -- checked through the
+    conformance suite's existing canned-response hook, since codex's
+    own invoke() parses the "events" list the same way whether canned
+    or live, and the "done" situation's own item.completed/
+    agent_message event (confirmed live, issue #41) is exactly such a
+    stream. Codex-only, not parametrized across ADAPTER_NAMES:
+    claude-code's own canned-response hook feeds the final report
+    object directly and never touches ATTAVO_EVENTS -- its mapping is
+    tests/test_adapter_claude_code.py's own module, through the
+    separate ATTAVO_ADAPTER_STREAM_FILE hook issue #26 added for it.
+    """
+    events_path = tmp_path / "events.jsonl"
+    run = run_situation("codex", "done", tmp_path,
+                        extra_env={"ATTAVO_EVENTS": str(events_path)})
+    assert run.returncode == 0, run.stderr
+
+    lines = [json.loads(l) for l in events_path.read_text().splitlines() if l.strip()]
+    assert lines, "no events written"
+    assert all(set(e) == {"at", "kind", "text"} for e in lines)
+    assert any(e["kind"] == "message" and e["text"] == "ok" for e in lines)
+
+
 def make_large_file(path: Path, diff_like: bool) -> Path:
     """A file over 2 MB: a diff-shaped one (3 files, unified-diff
     headers) or a flat feedback-shaped one, the same shapes issue #86's

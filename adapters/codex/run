@@ -85,6 +85,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 STATUS_SCHEMA = {
@@ -469,6 +470,68 @@ def terminal_event(events: list[dict]) -> dict | None:
     return None
 
 
+EVENT_TEXT_MAX_CHARS = 400
+
+
+def append_event(events_path: str, kind: str, text: str) -> None:
+    """One {at, kind, text} JSON line appended to events_path and
+    flushed at once -- the same shape and the same open-write-close
+    discipline bin/attavo's own append_event and claude-code's own copy
+    use, kept independently here since an adapter is a separate process
+    with no import path into the product or into another adapter."""
+    line = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "kind": kind, "text": " ".join(text.split())[:EVENT_TEXT_MAX_CHARS]}
+    with open(events_path, "a") as fh:
+        fh.write(json.dumps(line) + "\n")
+
+
+def first_line(text: str) -> str:
+    stripped = text.strip()
+    return stripped.splitlines()[0] if stripped else ""
+
+
+def item_events(obj: dict) -> list[tuple[str, str]]:
+    """[(kind, text), ...] for one parsed codex --json stream line --
+    zero, one, or two (a command_execution item carries both the
+    command and, once it has run, its own output, so it maps to a
+    tool_call and a tool_result together). An agent_message item's own
+    text maps to "message" -- confirmed live (issue #41, recorded
+    2026-09-08 against codex-cli 0.153.4): conformance.json's own
+    "done" situation, `{"type": "item.completed", "item": {"type":
+    "agent_message", "text": "ok"}}`, is this exact shape. A
+    command_execution item's "command" maps to "tool_call" (the
+    command's own first line) and its "aggregated_output", once
+    present, to "tool_result" (the output's own first line) -- these
+    two field names are not independently confirmed live this session
+    the way agent_message's shape is; read them against a real `codex
+    exec --json` run before trusting them past the recorded fixture
+    tests/test_adapter_codex.py exercises this mapping through. Every
+    other item type (reasoning, file_change, mcp_tool_call, and the
+    rest), and every non-item.completed line (thread.*, turn.*, "result"
+    itself), maps to nothing here."""
+    if obj.get("type") != "item.completed":
+        return []
+    item = obj.get("item") or {}
+    kind = item.get("type")
+    events: list[tuple[str, str]] = []
+    if kind == "agent_message" and item.get("text"):
+        events.append(("message", first_line(item["text"])))
+    elif kind == "command_execution":
+        command = item.get("command")
+        if command:
+            events.append(("tool_call", first_line(str(command))))
+        output = item.get("aggregated_output")
+        if output:
+            events.append(("tool_result", first_line(str(output))))
+    return events
+
+
+def write_events(events_path: str, parsed_events: list[dict]) -> None:
+    for obj in parsed_events:
+        for kind, text in item_events(obj):
+            append_event(events_path, kind, text)
+
+
 def load_canned_responses() -> list[dict] | None:
     """None when ATTAVO_ADAPTER_RESPONSE_FILE is unset. Otherwise the
     queue of canned {"events", "final", "exit_code"} objects this run
@@ -619,6 +682,7 @@ def main() -> int:
             return 1
 
     responses = load_canned_responses()
+    events_path = os.environ.get("ATTAVO_EVENTS")
 
     raw, events, final, exit_code = invoke(instruction, schema, config, stage, responses, 0)
     # keep the evidence: both channels, not just the fields below, are
@@ -630,6 +694,8 @@ def main() -> int:
     print(raw.rstrip("\n") if raw.strip() else "(codex produced no output)")
     if final is not None:
         print(json.dumps(final))
+    if events_path:
+        write_events(events_path, events)
 
     if exit_code != 0:
         return exit_code
@@ -675,6 +741,8 @@ def main() -> int:
         print(raw2.rstrip("\n") if raw2.strip() else "(codex produced no output)")
         if final2 is not None:
             print(json.dumps(final2))
+        if events_path:
+            write_events(events_path, events2)
 
         if exit_code2 != 0:
             return exit_code2
