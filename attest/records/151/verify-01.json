@@ -1,0 +1,75 @@
+{
+  "sha": "ac6b35568aa781b2b6877dfced64959e4fcd29d6",
+  "build_sha": "e1ae0cc484f012415e0284a3a2635e7a9f6dd786",
+  "build_record": "build-04",
+  "approval_sha": "626c79de6cd77d625391a3c6a756269015232d22",
+  "at": "2026-09-17T21:16:40Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "ac6b35568aa781b2b6877dfced64959e4fcd29d6",
+    "conclusions": [
+      {
+        "name": "doctor",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "Doctor treats a stale live invocation as running forever",
+      "specimen": "bin/attavo:880-908",
+      "retires": "The operator screen\u2019s in-memory running state as the only witness, and silence for a hung invocation.",
+      "rejection_test": "test_doctor_proof_five_fails_on_a_live_invocation_past_stall_bound: create an old marker for a live PID with no recent event and assert proof no-invocation-lacks-record fails naming it hung, while a fresh marker still reports running.",
+      "severity": "Blocking when a marker\u2019s PID remains alive beyond [drive].stall_after_s: proof five continues to hold indefinitely, so the declared running-versus-hung state transition never occurs."
+    },
+    {
+      "title": "Recovery records failure without cleaning the abandoned executor state",
+      "specimen": "bin/attavo:957-1048",
+      "retires": "The three hand-written recovery blocks that removed the abandoned worktree, reset the branch, and archived its events.",
+      "rejection_test": "test_drive_recover_resets_abandoned_executor_state_and_archives_events: start from a marker commit, add an executor commit plus dirty files and an events stream, recover the dead invocation, then assert the executor commit and dirt are absent, the events are preserved in the recovery log, the failed record is committed, and git status is globally clean.",
+      "severity": "Blocking when an invocation dies after creating an executor commit or dirty worktree state: --recover commits the failed record on top of that abandoned state and leaves unrelated dirt untouched, so the recovery primitive does not replace the manual reset/cleanup it claims to retire."
+    }
+  ],
+  "tests_named": [
+    "test_doctor_proof_five_fails_on_a_live_invocation_past_stall_bound",
+    "test_drive_recover_resets_abandoned_executor_state_and_archives_events"
+  ],
+  "commits": [],
+  "mutation": null,
+  "weak_stub": false,
+  "stub_ratio": null,
+  "tokens": {
+    "input": 332469,
+    "output": 2521
+  },
+  "cost_usd": null,
+  "wall_clock_s": 61.512,
+  "status": "pass",
+  "stop": null,
+  "record_version": 4,
+  "item": "151",
+  "product_version": "v0.25.0-25-g866feeb",
+  "product_pin": "v0.25.0"
+}
