@@ -88,6 +88,16 @@
           "type": "string",
           "description": "Reads one finding as JSON on stdin and files it as a tenant issue. attavo file-findings runs it once per finding in the item's latest verify record.",
           "minLength": 1
+        },
+        "attestation_command": {
+          "type": "string",
+          "description": "Reads a merge commit sha on stdin and prints that merge's attestation statement as JSON on exit 0; nothing on a non-zero exit. The doctor's fifth proof runs it once per merged, fully-staged item to require a statement in the store.",
+          "minLength": 1
+        },
+        "sealed_since": {
+          "type": "string",
+          "description": "A commit sha. A merge at or before it predates the tenant's merge queue and is named by the doctor's fifth proof as before the window rather than failed.",
+          "minLength": 7
         }
       }
     },

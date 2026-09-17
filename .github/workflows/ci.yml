@@ -20,10 +20,11 @@ jobs:
           --deselect tests/test_doctor.py::test_one_item_traversed_every_stage
           --deselect tests/test_doctor.py::test_no_commit_lacks_a_record
           --deselect tests/test_doctor.py::test_no_stop_lacks_cause
+          --deselect tests/test_doctor.py::test_every_attested_item_is_sealed
 
   # Since #103, this repository is Attavo's own second tenant (attavo.toml
-  # at the root) and the doctor's four proofs run for real, not under
-  # || true. #106's first item merged (fdd1981, v0.18.0), so the four
+  # at the root) and the doctor's five proofs run for real, not under
+  # || true. #106's first item merged (fdd1981, v0.18.0), so the five
   # proofs hold on main and this job reports on pull requests and merge
   # groups too -- where a refusal is cheap. It does not report on a
   # branch push: a branch's own boundary commits precede their records,
@@ -31,6 +32,9 @@ jobs:
   doctor:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,9 +43,11 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install pytest jsonschema
-      - name: doctor's four proofs
-        run: python3 -m pytest tests/test_doctor.py -q -k "every_gate_rejects or one_item_traversed_every_stage or no_commit_lacks_a_record or no_stop_lacks_cause"
+      - name: doctor's five proofs
+        run: python3 -m pytest tests/test_doctor.py -q -k "every_gate_rejects or one_item_traversed_every_stage or no_commit_lacks_a_record or no_stop_lacks_cause or every_attested_item_is_sealed"
       - run: python3 bin/attavo doctor .
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   action-self-check:
     runs-on: ubuntu-latest

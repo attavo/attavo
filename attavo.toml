@@ -6,6 +6,8 @@ version = "v0.25.0"
 [forge]
 checks_command = "python3 .attavo/bin/forge-checks"
 file_issue_command = "python3 .attavo/bin/file-issue"
+attestation_command = "sh .attavo/bin/forge-attestation"
+sealed_since = "83fcbc6863fdb65956b77768c66c2103d221521b"
 
 [executor]
 build = "claude-code"
@@ -33,7 +35,7 @@ retires = [
 
 [tests]
 select = "python3 .attavo/bin/select-tests"
-run = "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause"
+run = "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed"
 
 [paths]
 specs = "attest/specs"
@@ -45,4 +47,4 @@ rejections = "attest/rejections"
 approvers = ["dbean10"]
 
 [checks]
-command = "python3 -m pytest tests -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause"
+command = "python3 -m pytest tests -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed"

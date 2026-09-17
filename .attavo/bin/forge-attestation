@@ -1,0 +1,25 @@
+#!/bin/sh
+# forge-attestation: [forge].attestation_command for attavo doctor's fifth
+# proof (issue #158).
+#
+# Reads a merge commit sha on stdin. actions/attest@v2, in
+# .github/workflows/attavo-coherence.yml, signs the merge's attestation
+# statement over a synthetic subject: the sha256 digest of the merge
+# sha's own text (deterministic and reproducible from the sha alone, since
+# the statement is sealed before the artifact -- the merge -- has landed
+# anywhere to be hashed itself). This script re-derives that same digest
+# and reads it back from the forge's attestation store, printing the
+# statement's predicate payload as JSON on exit 0. It prints nothing and
+# exits non-zero when the store holds no attestation for that digest, or
+# the sha is empty, or `gh` cannot resolve this checkout's repository.
+#
+# Usage: read sha | forge-attestation
+# Requires: `gh`, authenticated, run inside this repository's checkout.
+set -e
+read -r sha
+test -n "$sha" || exit 2
+digest=$(printf '%s' "$sha" | shasum -a 256 | cut -d ' ' -f 1)
+repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || exit 2
+payload=$(gh api "repos/$repo/attestations/sha256:$digest" --jq '.attestations[0].bundle.dsseEnvelope.payload' 2>/dev/null) || exit 1
+test -n "$payload" && test "$payload" != null || exit 1
+printf '%s' "$payload" | base64 -d
