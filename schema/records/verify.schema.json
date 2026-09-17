@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/verify/4",
+  "$id": "https://attavo.dev/schema/records/verify/5",
   "title": "attavo verify record (verify-NN.json)",
   "type": "object",
   "additionalProperties": false,
