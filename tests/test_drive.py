@@ -14,8 +14,10 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import queue
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -417,6 +419,84 @@ def test_drive_until_ready_stops_when_the_forge_goes_red_after_a_build(tmp_path)
     assert len(record_files(root, "build")) == 1
     assert latest_record(root, "build")["status"] == "pass"
     assert record_files(root, "verify") == []
+
+
+def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_build_line_before_verify_ends(tmp_path):
+    """Issue #145. On tenant zero #652 (2026-09-16), a pipe reader of
+    `attavo drive` (attavo/screen's own row) saw all six stage lines
+    arrive as one burst when the drive ended, each minutes old --
+    Python block-buffers stdout by default when it is not a tty. A
+    tenant-local adapter that sleeps during verify reproduces the same
+    shape of gap in miniature: with `--until-ready` running build then
+    verify in one process, a pipe reader with a timeout well under the
+    sleep must already see the build line before verify's own sleep
+    ends -- unreachable if stdout is still block-buffered.
+    """
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_bare_remote(root, tmp_path)
+    approve_item(root)
+
+    sleep_s = 3.0
+    adapter_dir = root / "attavo" / "adapters" / "slow"
+    adapter_dir.mkdir(parents=True)
+    adapter_run = adapter_dir / "run"
+    adapter_run.write_text(
+        "#!/bin/sh\n"
+        "set -eu\n"
+        'if [ "${ATTAVO_STAGE:-build}" = "verify" ]; then\n'
+        f"  sleep {sleep_s}\n"
+        '  printf \'{"model":"slow","model_version":null,"adapter_version":"slow-1",'
+        '"tokens":{"input":1,"output":1},"cost_usd":0.0,"findings":[],"tests_named":[]}\\n\'\n'
+        "  exit 0\n"
+        "fi\n"
+        "echo built > built.txt\n"
+        "git add built.txt\n"
+        "git commit -q -m 'slow: write built.txt'\n"
+        'echo \'{"status":"done","question":null,"model":"slow","model_version":null,'
+        '"adapter_version":"slow-1","tokens":{"input":1,"output":1},"cost_usd":0.0}\'\n'
+    )
+    adapter_run.chmod(0o755)
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace('build = "fixture"', 'build = "slow"'))
+    commit_all(root, "use a slow adapter for verify")
+
+    full_env = dict(os.environ)
+    full_env.update(FAST_POLL_ENV)
+    proc = subprocess.Popen(
+        [sys.executable, str(ATTAVO), "drive", "1", "--until-ready"],
+        cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, env=full_env)
+
+    lines: "queue.Queue[str | None]" = queue.Queue()
+
+    def reader() -> None:
+        for raw in proc.stdout:
+            lines.put(raw)
+        lines.put(None)
+
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
+
+    try:
+        first_line = lines.get(timeout=sleep_s / 2)
+    except queue.Empty:
+        proc.kill()
+        raise
+    assert first_line is not None and "attavo build: pass" in first_line, first_line
+
+    collected = [first_line]
+    while True:
+        line = lines.get(timeout=sleep_s + 10)
+        if line is None:
+            break
+        collected.append(line)
+    thread.join(timeout=5)
+    proc.wait(timeout=5)
+
+    output = "".join(collected)
+    assert proc.returncode == 0, output
+    assert "ready to merge" in output
 
 
 def test_drive_stops_when_the_forge_is_red(tmp_path):

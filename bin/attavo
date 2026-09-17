@@ -2626,6 +2626,14 @@ def _drive_step(root: Path, m: dict, item_id: str) -> tuple[int, bool]:
 
 
 def cmd_drive(argv: list[str]) -> int:
+    # Issue #145: Python block-buffers stdout when it is not a tty (a
+    # pipe, e.g. a screen reading this process live), so every stage
+    # line -- attavo build:, attavo drive: pushed, attavo verify:, attavo
+    # drive: item N is ready to merge -- would otherwise sit unflushed
+    # until this process exits. Line-buffering makes a pipe reader see
+    # each line the moment it is printed, the same as a terminal already
+    # does; no other output path changes.
+    sys.stdout.reconfigure(line_buffering=True)
     until_ready = "--until-ready" in argv
     positional = [a for a in argv if a != "--until-ready"]
     root = Path(".").resolve()
