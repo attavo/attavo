@@ -1,0 +1,91 @@
+{
+  "sha": "5d6cfca286dd8f9a9802b7863c245ec9dcf290ed",
+  "build_sha": "667ac7f8a07a2ab20851e6f5eb286181b34e3232",
+  "build_record": "build-02",
+  "approval_sha": "2297cf56007c2948ef567defe3a751dc0910a1fc",
+  "at": "2026-09-17T15:37:34Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "5d6cfca286dd8f9a9802b7863c245ec9dcf290ed",
+    "conclusions": [
+      {
+        "name": "schema-version",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "Commit lists add one Git subprocess per ordinary or unrecorded commit",
+      "specimen": "bin/attavo: commit_subject() and proof_no_commit_lacks_record()",
+      "retires": "Closes the unmeasured scalability risk introduced by replacing the prior constant-number classification read with an N+1 Git-process loop.",
+      "rejection_test": "test_proof_three_fetches_all_listed_commit_subjects_in_one_git_invocation",
+      "severity": "Blocking when the first-parent window contains enough ordinary or unrecorded commits for per-commit `git log` startup cost to exceed the doctor command's operational time budget; harmless while the window remains small."
+    }
+  ],
+  "tests_named": [
+    "test_proof_three_fetches_all_listed_commit_subjects_in_one_git_invocation"
+  ],
+  "commits": [],
+  "mutation": null,
+  "weak_stub": false,
+  "stub_ratio": null,
+  "tokens": {
+    "input": 122501,
+    "output": 1343
+  },
+  "cost_usd": null,
+  "wall_clock_s": 46.32,
+  "status": "pass",
+  "stop": null,
+  "record_version": 4,
+  "item": "148",
+  "product_version": "v0.25.0-4-g9dcecc9",
+  "product_pin": "v0.25.0"
+}

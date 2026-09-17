@@ -848,6 +848,10 @@ def proof_one_item_every_stage(root: Path, m: dict | None) -> Proof:
                   f"merge commit's first-parent diff introduces all of them")
 
 
+def commit_subject(root: Path, sha: str) -> str:
+    return git(root, "log", "-1", "--format=%s", sha).strip()
+
+
 def touches_boundary(root: Path, sha: str, boundary_paths: list[str]) -> bool:
     """Whether sha's first-parent diff touches a path [spec.boundary].paths
     declares governed -- an ordinary merge that does is a boundary
@@ -925,22 +929,28 @@ def proof_no_commit_lacks_record(root: Path, m: dict | None) -> Proof:
     # (anything else -- on a protected main with a queue, a non-merge
     # commit is the only way a change arrives without the forge).
     recorded, ordinary, unrecorded = [], [], []
+    ordinary_commits, unrecorded_commits = [], []
     boundary_evasions = 0
     for c in commits:
         if c in named or c in record_commits:
             recorded.append(c)
         elif c in merges:
             ordinary.append(c)
-            if boundary_paths and touches_boundary(root, c, boundary_paths):
+            evasion = bool(boundary_paths and touches_boundary(root, c, boundary_paths))
+            if evasion:
                 boundary_evasions += 1
+            ordinary_commits.append({"sha": c, "subject": commit_subject(root, c),
+                                     "boundary_evasion": evasion})
         else:
             unrecorded.append(c)
+            unrecorded_commits.append({"sha": c, "subject": commit_subject(root, c)})
 
     counts = f"{len(recorded)} recorded, {len(ordinary)} ordinary, {len(unrecorded)} unrecorded"
     evasions = boundary_evasions if boundary_paths else "n/a"
     extra = {"recorded": len(recorded), "ordinary": len(ordinary),
              "unrecorded": len(unrecorded), "boundary_evasions": evasions,
-             "before_window": before_window}
+             "before_window": before_window,
+             "ordinary_commits": ordinary_commits, "unrecorded_commits": unrecorded_commits}
     if unrecorded:
         return p.fail(f"{unrecorded[-1][:12]} lacks a record; {counts}; boundary evasions: "
                       f"{evasions}; before the window: {before_window}", **extra)

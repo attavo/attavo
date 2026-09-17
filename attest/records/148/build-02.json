@@ -1,0 +1,58 @@
+{
+  "sha": "667ac7f8a07a2ab20851e6f5eb286181b34e3232",
+  "start_sha": "cf2feeaf13eaded175986103efc7c606a772971f",
+  "spec_sha": "258287507e7d784861221ac62b3680ab43e85c10",
+  "approval_sha": "2297cf56007c2948ef567defe3a751dc0910a1fc",
+  "at": "2026-09-17T15:35:21Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.274 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "proof-three-json-lists-the-commits.sh",
+      "exit": 0
+    },
+    {
+      "name": "doctor-names-the-list-keys.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause",
+    "count": 1,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m pytest tests -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 278561,
+    "output": 1535
+  },
+  "cost_usd": 0.6493472000000001,
+  "wall_clock_s": 852.69,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "stop": null,
+  "record_version": 6,
+  "item": "148",
+  "product_version": "v0.25.0-4-g9dcecc9",
+  "product_pin": "v0.25.0"
+}
