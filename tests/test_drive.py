@@ -14,6 +14,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -113,6 +114,35 @@ def last_commit_paths(root: Path) -> list[str]:
 def remote_head(bare: Path, branch: str = "main") -> str:
     return subprocess.run(["git", "-C", str(bare), "rev-parse", branch],
                           capture_output=True, text=True, check=True).stdout.strip()
+
+
+def add_drive_stall_bound(root: Path, seconds: int = 60) -> None:
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text() + f'\n[drive]\nstall_after_s = {seconds}\n')
+    commit_all(root, "declare the stall bound")
+
+
+def _dead_pid() -> int:
+    """A pid guaranteed not to be running: a real child, spawned and
+    reaped, on this host."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+def write_dead_marker(root: Path, stage: str, nn: int, item: str = "1") -> Path:
+    """A <stage>-NN.started marker as a dead invocation would have left
+    it, committed the way `attavo drive` itself commits one -- but never
+    followed by its own record."""
+    d = records_dir(root, item)
+    d.mkdir(parents=True, exist_ok=True)
+    marker = d / f"{stage}-{nn:02d}.started"
+    marker.write_text(json.dumps({
+        "at": "2026-09-17T13:16:08Z", "host": socket.gethostname(), "pid": _dead_pid(),
+        "sha": head_of(root), "product_version": "fixture"}))
+    git(root, "add", str(marker.relative_to(root)))
+    git(root, "commit", "-q", "-m", f"invocation marker for item {item}")
+    return marker
 
 
 def test_drive_refuses_without_a_valid_approval(tmp_path):
@@ -735,12 +765,109 @@ def test_drive_retries_a_rejected_push_with_a_merge_never_a_rebase(tmp_path):
     # rebase, which would have rewritten it under a new sha.
     assert build_sha in git(root, "rev-list", "HEAD").split()
 
-    merge_parents = git(root, "log", "-1", "--format=%P", "HEAD").split()
-    assert len(merge_parents) == 2, "the retry should have landed a merge commit"
+    # Issue #151: the invocation marker's own push lands first and is
+    # what meets the divergent remote, so the merge commit the retry
+    # lands may sit under the build record's commit rather than at HEAD
+    # itself -- somewhere in the reachable history is what "never a
+    # rebase" requires, not specifically the tip.
+    merges = git(root, "log", "--merges", "--format=%H", "HEAD").split()
+    assert merges, "the retry should have landed a merge commit"
 
     assert remote_head(bare, branch) == head_of(root)
     # the concurrent commit from the other clone is present too
     assert "concurrent.txt" in git(root, "ls-tree", "-r", "--name-only", "HEAD")
+
+
+def test_drive_commits_and_pushes_an_invocation_marker_before_the_stage_runs(tmp_path):
+    """Issue #151: the invocation's own marker is a fact on the branch
+    before the stage runs -- its own commit, authored by the driver
+    identity, landing and pushed ahead of the stage record's commit."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    bare = add_bare_remote(root, tmp_path)
+    approve_item(root)
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+
+    run = run_attavo(root, "drive", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+
+    marker = records_dir(root) / "build-01.started"
+    assert marker.is_file()
+    info = json.loads(marker.read_text())
+    assert info["host"] == socket.gethostname()
+    assert isinstance(info["pid"], int)
+
+    marker_commit = git(root, "log", "--format=%H", "--", str(marker.relative_to(root))).split()[-1]
+    build_commit = head_of(root)
+    assert marker_commit != build_commit
+    # the marker's own commit is an ancestor of the build record's commit
+    assert git(root, "merge-base", "--is-ancestor", marker_commit, build_commit) == ""
+
+    assert git(root, "log", "-1", "--format=%an", marker_commit).strip() == "attavo driver"
+    assert remote_head(bare, branch) == head_of(root)
+
+
+def test_drive_recover_writes_a_died_record_for_a_dead_invocation(tmp_path):
+    """Issue #151: `attavo drive --recover` retires a build-01.started
+    marker naming a dead pid with a failed record, class died,
+    provenance product -- committed by the driver identity, pushed to
+    the fixture remote."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_drive_stall_bound(root)
+    bare = add_bare_remote(root, tmp_path)
+    approve_item(root)
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+
+    marker = write_dead_marker(root, "build", 1)
+    git(root, "push", "origin", f"HEAD:{branch}")
+
+    run = run_attavo(root, "drive", "--recover", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+
+    rec = latest_record(root, "build")
+    assert rec["status"] == "failed"
+    assert rec["stop"]["class"] == "died"
+    assert rec["stop"]["provenance"] == "product"
+    assert "wrote no build-01.json" in rec["stop"]["detail"]
+
+    record_path = record_files(root, "build")[-1]
+    assert record_path.with_suffix(".log").exists()
+    assert git(root, "log", "-1", "--format=%an").strip() == "attavo driver"
+    assert git(root, "status", "--porcelain", "--", str(record_path),
+              str(record_path.with_suffix(".log")), str(marker)).strip() == ""
+    assert remote_head(bare, branch) == head_of(root)
+    assert marker.is_file()  # the marker itself is left in place, retired by the record
+
+
+def test_drive_recover_refuses_without_a_stall_bound(tmp_path):
+    """No [drive].stall_after_s: a hung invocation cannot be told from a
+    running one, so --recover refuses rather than guessing a bound."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_bare_remote(root, tmp_path)
+    approve_item(root)
+
+    write_dead_marker(root, "build", 1)
+
+    run = run_attavo(root, "drive", "--recover", "1")
+    assert run.returncode == 1
+    assert "stall_after_s" in run.stdout
+    assert record_files(root, "build") == []
+
+
+def test_drive_recover_does_nothing_when_every_invocation_has_its_record(tmp_path):
+    """A tenant with no dangling marker: --recover is a no-op, not a
+    refusal -- there is simply nothing to recover."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_drive_stall_bound(root)
+    add_forge(root, GREEN_FORGE)
+    add_bare_remote(root, tmp_path)
+    approve_item(root)
+    assert run_attavo(root, "drive", "1").returncode == 0
+
+    run = run_attavo(root, "drive", "--recover", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "nothing to recover" in run.stdout
+    assert len(record_files(root, "build")) == 1
 
 
 def test_drive_forge_poll_defaults_are_a_real_forges_clock():

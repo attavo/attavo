@@ -111,7 +111,8 @@
         "class": {
           "type": "string",
           "enum": ["non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
-                   "ceiling", "claims-boundary", "repeated-act", "unclassed", "question"]
+                   "ceiling", "claims-boundary", "repeated-act", "unclassed", "question",
+                   "died", "hung"]
         },
         "provenance": {"type": "string", "enum": ["product", "tenant", "executor", "spec"]},
         "detail": {
