@@ -1,0 +1,62 @@
+{
+  "sha": "e1ae0cc484f012415e0284a3a2635e7a9f6dd786",
+  "start_sha": "7ac22c212a2db67f24d5b80d052b9636299e71f8",
+  "spec_sha": "3c5bbc2e94fed19ce12f29ffa543b1a0781c143c",
+  "approval_sha": "626c79de6cd77d625391a3c6a756269015232d22",
+  "at": "2026-09-17T21:14:13Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.274 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "doctor-fails-on-an-invocation-without-record.sh",
+      "exit": 0
+    },
+    {
+      "name": "recover-writes-a-died-record.sh",
+      "exit": 0
+    },
+    {
+      "name": "died-and-hung-are-stop-classes.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause",
+    "count": 1,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m pytest tests -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 27515608,
+    "output": 96747
+  },
+  "cost_usd": 7.3860896,
+  "wall_clock_s": 2459.498,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "stop": null,
+  "record_version": 6,
+  "item": "151",
+  "product_version": "v0.25.0-25-g866feeb",
+  "product_pin": "v0.25.0"
+}

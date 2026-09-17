@@ -1,0 +1,54 @@
+{
+  "sha": "40f11498df8c5c8384f3484729e5720192d48f8d",
+  "record_stage": "build",
+  "record": "build-03",
+  "at": "2026-09-17T20:07:32Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 250830,
+    "output": 3144
+  },
+  "cost_usd": null,
+  "wall_clock_s": 72.773,
+  "status": "done",
+  "class": "non-question",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "/Users/davidbean/Projects/attest/adapters/README.md",
+      "symbol": "Two stops (issue #88)",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attavo-worktree-151/attest/records/151/build-03.log",
+      "symbol": "ScheduleWakeup followed by StructuredOutput(status=\"question\", question=\"placeholder\")",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/adapters/claude-code/run",
+      "symbol": "question_class",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "The stop is non-question: the executor used the question channel with the placeholder text only to wait for its background confirmation run. That run was progress state, not a question about the definition of done; the question guard correctly rejects the short placeholder rather than sending it to a person.",
+    "patch": null,
+    "question": null
+  },
+  "record_version": 2,
+  "item": "151",
+  "product_version": "v0.25.0-22-gb3e2a23",
+  "product_pin": "v0.25.0"
+}

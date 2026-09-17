@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/build/6",
+  "$id": "https://attavo.dev/schema/records/build/7",
   "title": "attavo build record (build-NN.json)",
   "type": "object",
   "additionalProperties": false,
@@ -110,7 +110,7 @@
           "type": "string",
           "enum": ["non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
                    "ceiling", "claims-boundary", "repeated-act", "unclassed", "question",
-                   "environment", "gate"]
+                   "environment", "gate", "died", "hung"]
         },
         "provenance": {"type": "string", "enum": ["product", "tenant", "executor", "spec"]},
         "detail": {

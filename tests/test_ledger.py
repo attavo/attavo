@@ -169,6 +169,61 @@ def test_ledger_marks_a_pre_v018_record_commit_as_record_or_launch(tmp_path):
     assert data["summary"]["product_acts"] == 0
 
 
+def test_ledger_classifies_an_invocation_marker_commit_as_a_product_record(tmp_path):
+    """Issue #151: the invocation marker's own commit, authored by the
+    driver identity, touches paths.records without matching a stage
+    record's own NN.json name -- classified "record", the product's own
+    act, never "transport". Otherwise the same order build_merged_item
+    sets up, with the marker's own commit landing just ahead of the
+    build record it precedes in a real drive run."""
+    root = make_tenant(tmp_path, "ledger_base")
+    git(root, "checkout", "-b", "item")
+
+    spec_sha = add_spec(root, "1")
+
+    rel = write_record(root, "1", "spec", 1,
+                       {"status": "pass", "spec_sha": spec_sha, "product_version": "v0.19.1"})
+    commit_as(root, RECORDS_APP, "attavo: spec-gate record for item 1", [rel])
+
+    rel = write_record(root, "1", "approval", 1,
+                       {"approved_by": "alice", "sha": spec_sha, "spec_sha": spec_sha,
+                        "product_version": "v0.19.1"})
+    commit_as(root, RECORDS_APP, "attavo: approval record for item 1", [rel])
+
+    marker_dir = root / "records" / "1"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    marker = marker_dir / "build-01.started"
+    marker.write_text(json.dumps({"at": "2026-01-01T00:00:00Z", "host": "h", "pid": 1,
+                                  "sha": spec_sha, "product_version": "v0.19.1"}))
+    marker_sha = commit_as(root, DRIVER, "attavo: build invocation 01 started for item 1",
+                           [str(marker.relative_to(root))])
+
+    (root / "built.txt").write_text("built\n")
+    commit_as(root, EXECUTOR, "fixture: build item 1", ["built.txt"])
+
+    rel = write_record(root, "1", "build", 1, {"status": "pass", "product_version": "v0.19.1"})
+    commit_as(root, DRIVER, "attavo: build record for item 1 (build-01)", [rel])
+
+    rel = write_record(root, "1", "verify", 1, {"status": "pass", "product_version": "v0.19.1"})
+    commit_as(root, DRIVER, "attavo: verify record for item 1 (verify-01)", [rel])
+
+    git(root, "checkout", "main")
+    subprocess.run(["git", "-C", str(root), "merge", "--no-ff", "item",
+                    "-m", "Merge pull request #1 from x/item"], check=True)
+
+    run = run_attavo(root, "ledger", "1", "--json")
+    assert run.returncode == 0, run.stdout + run.stderr
+    data = json.loads(run.stdout)
+
+    row = next(r for r in data["rows"] if r["sha"] == marker_sha)
+    assert row["class"] == "record"
+
+    classes = [r["class"] for r in data["rows"]]
+    assert classes == ["spec", "record", "approve", "record", "change", "record", "record", "merge"]
+    assert data["summary"]["product_acts"] == 4
+    assert data["summary"]["operator_acts"] == 2
+
+
 def test_ledger_json_is_one_object_matching_the_text_forms_numbers(tmp_path):
     """Acceptance row 3: --json is one object with rows and summary, and
     the text form prints the same numbers."""
