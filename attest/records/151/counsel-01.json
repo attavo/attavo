@@ -1,0 +1,54 @@
+{
+  "sha": "797bb62710a4de6d087f8fd74f26e17d0a90e4a1",
+  "record_stage": "build",
+  "record": "build-01",
+  "at": "2026-09-17T16:19:50Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 211206,
+    "output": 1828
+  },
+  "cost_usd": null,
+  "wall_clock_s": 54.611,
+  "status": "done",
+  "class": "non-question",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "/Users/davidbean/Projects/attest/adapters/README.md",
+      "symbol": "build status/question contract",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attavo-worktree-151/attest/records/151/build-01.log",
+      "symbol": "StructuredOutput(status=\"question\", question=null)",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/adapters/claude-code/run",
+      "symbol": "question_class",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "The stop is non-question: the executor ended the build through the question channel with a null question. A background test still running is progress state, not a question about the definition of done. The adapter\u2019s question guard governs this specimen; the stage should be recorded as non-question with executor provenance.",
+    "patch": null,
+    "question": null
+  },
+  "record_version": 2,
+  "item": "151",
+  "product_version": "v0.25.0-12-g243e9fe",
+  "product_pin": "v0.25.0"
+}
