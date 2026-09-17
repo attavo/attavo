@@ -1,0 +1,92 @@
+{
+  "sha": "fbb165a588d12977d5ca263c069ffc94ae810d0a",
+  "build_sha": "71437296d8f03667106e913d67e4a4f601d47c91",
+  "build_record": "build-02",
+  "approval_sha": "79cb6842448232e057cb98adbd9e989a9817350d",
+  "at": "2026-09-17T16:56:17Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "fbb165a588d12977d5ca263c069ffc94ae810d0a",
+    "conclusions": [
+      {
+        "name": "schema-version",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "Approved test claim was not produced",
+      "specimen": "Approval/spec commit 79cb6842448232e057cb98adbd9e989a9817350d claims tests/test_ledger.py, but build commit 71437296d8f03667106e913d67e4a4f601d47c91 changes only bin/attavo among the claimed product files",
+      "retires": "Closes the assumption that passing acceptance scripts proves the approved working-tree change, including its regression-test claim, was delivered",
+      "rejection_test": "test_build_diff_covers_every_approved_claim \u2014 compare the approved spec's Claims paths with the build diff and require tests/test_ledger.py to be changed; additionally, test_ledger_batched_walk_preserves_rows_and_summary would directly compare ledger classifications and summaries across merged, unmerged, pre-v0.18, and missing/malformed-record histories",
+      "severity": "Blocking when an approved Claims entry is absent from the build diff; harmless only if the approval is amended to remove tests/test_ledger.py before accepting the build"
+    }
+  ],
+  "tests_named": [
+    "test_build_diff_covers_every_approved_claim",
+    "test_ledger_batched_walk_preserves_rows_and_summary"
+  ],
+  "commits": [],
+  "mutation": null,
+  "weak_stub": false,
+  "stub_ratio": null,
+  "tokens": {
+    "input": 129793,
+    "output": 1845
+  },
+  "cost_usd": null,
+  "wall_clock_s": 63.645,
+  "status": "pass",
+  "stop": null,
+  "record_version": 4,
+  "item": "153",
+  "product_version": "v0.25.0-12-g243e9fe",
+  "product_pin": "v0.25.0"
+}
