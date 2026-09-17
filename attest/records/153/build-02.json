@@ -1,0 +1,58 @@
+{
+  "sha": "71437296d8f03667106e913d67e4a4f601d47c91",
+  "start_sha": "b486941a58b2f271267ad85836efeed0a19bea9a",
+  "spec_sha": "2f79f3d16a434a7713b9abc63d8edc30e64a2d92",
+  "approval_sha": "79cb6842448232e057cb98adbd9e989a9817350d",
+  "at": "2026-09-17T16:53:47Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.274 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "ledger-six-items-under-sixty-git-processes.sh",
+      "exit": 0
+    },
+    {
+      "name": "ledger-records-cost-no-git-process.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause",
+    "count": 1,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m pytest tests -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 5384295,
+    "output": 45141
+  },
+  "cost_usd": 1.9043665999999997,
+  "wall_clock_s": 1408.953,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "stop": null,
+  "record_version": 6,
+  "item": "153",
+  "product_version": "v0.25.0-12-g243e9fe",
+  "product_pin": "v0.25.0"
+}
