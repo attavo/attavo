@@ -406,6 +406,27 @@ def test_proof_three_json_carries_the_path_ratio_fields(tmp_path):
     assert p["boundary_evasions"] == 0
 
 
+def test_proof_three_json_lists_the_ordinary_and_unrecorded_commits(tmp_path):
+    """Issue #148. Proof three's JSON entry carries `ordinary_commits` and
+    `unrecorded_commits`, each commit with sha and subject, so a reader
+    can name the commits behind the counts without re-running the
+    classification by hand. The ordinary merge that touches a boundary
+    path is flagged `boundary_evasion: true`."""
+    root = _three_way_fixture(tmp_path, "commit_lists", boundary_paths=["boundary/**"],
+                              ordinary_touches="boundary/thing.txt", include_direct_commit=True)
+    direct_sha = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                                capture_output=True, text=True, check=True).stdout.strip()
+
+    p = run_doctor(root)["no-commit-lacks-record"]
+    ordinary_commits = p["ordinary_commits"]
+    unrecorded_commits = p["unrecorded_commits"]
+    assert [c["subject"] for c in ordinary_commits] == ["Merge branch 'ordinary-change'"]
+    assert len(ordinary_commits[0]["sha"]) == 40
+    assert ordinary_commits[0]["boundary_evasion"] is True
+    assert [c["subject"] for c in unrecorded_commits] == ["a change committed straight to main"]
+    assert unrecorded_commits[0]["sha"] == direct_sha
+
+
 def _window_fixture(tmp_path: Path, name: str) -> tuple[Path, str, str]:
     """Two commits made straight to main, then a branch carrying item 1's
     spec record, merged --no-ff. Returns (root, merge_sha, branch_sha) --
