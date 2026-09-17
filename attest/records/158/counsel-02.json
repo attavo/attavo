@@ -1,0 +1,59 @@
+{
+  "sha": "997bae51950b6bab367e6314d197600728415bb3",
+  "record_stage": "build",
+  "record": "build-02",
+  "at": "2026-09-17T20:15:13Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 249228,
+    "output": 3356
+  },
+  "cost_usd": null,
+  "wall_clock_s": 75.825,
+  "status": "done",
+  "class": "unclassed",
+  "verdict": "patch",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "/Users/davidbean/Projects/attest/bin/attavo",
+      "symbol": "cmd_counsel",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/adapters/claude-code/run",
+      "symbol": "stream_line_events",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/tests/test_adapter_claude_code.py",
+      "symbol": "test_claude_code_ignores_non_object_message_payload",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": null,
+    "patch": {
+      "file": "/Users/davidbean/Projects/attest/adapters/claude-code/run",
+      "symbol": "stream_line_events",
+      "rejection_test": "Feed the Claude Code adapter an otherwise valid recorded stream containing an assistant event whose message value is a string, followed by a valid result event. The adapter must ignore the unmappable event, emit no feed event for it, preserve it in stdout, and complete successfully instead of raising AttributeError.",
+      "diff": "diff --git a/adapters/claude-code/run b/adapters/claude-code/run\n--- a/adapters/claude-code/run\n+++ b/adapters/claude-code/run\n@@ -671,7 +671,11 @@ def stream_line_events(obj: dict) -> list[tuple[str, str]]:\n     line -- maps to nothing.\"\"\"\n     events: list[tuple[str, str]] = []\n-    content = ((obj.get(\"message\") or {}).get(\"content\") or [])\n+    message = obj.get(\"message\")\n+    content = message.get(\"content\") if isinstance(message, dict) else []\n+    if not isinstance(content, list):\n+        content = []\n     if obj.get(\"type\") == \"assistant\":\n         for block in content:\n             if not isinstance(block, dict):\ndiff --git a/tests/test_adapter_claude_code.py b/tests/test_adapter_claude_code.py\n--- a/tests/test_adapter_claude_code.py\n+++ b/tests/test_adapter_claude_code.py\n@@ -158,3 +158,17 @@ def test_claude_code_stream_missing_result_line_fails(tmp_path):\n     run = run_with_stream(tmp_path, stream)\n     assert run.returncode == 1\n+\n+\n+def test_claude_code_ignores_non_object_message_payload(tmp_path):\n+    \"\"\"An auxiliary stream event may carry message as a scalar rather\n+    than Claude's message object. It is evidence in the raw transcript,\n+    but has no feed mapping and must not crash the adapter.\"\"\"\n+    stream = [\n+        {\"type\": \"assistant\", \"message\": \"temporarily unavailable\"},\n+        RESULT_LINE,\n+    ]\n+    run = run_with_stream(tmp_path, stream)\n+    assert run.returncode == 0, run.stdout + run.stderr\n+    assert json.dumps(stream[0]) in run.stdout\n+    assert read_events(tmp_path) == []\n+    assert json.loads(run.stdout.splitlines()[-1])[\"status\"] == \"done\"\n"
+    },
+    "question": null
+  },
+  "record_version": 2,
+  "item": "158",
+  "product_version": "v0.25.0-22-gb3e2a23",
+  "product_pin": "v0.25.0"
+}

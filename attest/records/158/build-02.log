@@ -1,0 +1,21 @@
+[adapter exited 1]
+Traceback (most recent call last):
+  File "/Users/davidbean/Projects/attest/adapters/claude-code/run", line 980, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/Users/davidbean/Projects/attest/adapters/claude-code/run", line 868, in main
+    exit_code, response = invoke_once(cmd, responses, 0, events_path)
+                          ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/davidbean/Projects/attest/adapters/claude-code/run", line 770, in invoke_once
+    raw, result, returncode = invoke_stream(cmd, events_path, load_canned_stream())
+                              ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/davidbean/Projects/attest/adapters/claude-code/run", line 746, in invoke_stream
+    handle(line.rstrip("\n"))
+    ~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/Users/davidbean/Projects/attest/adapters/claude-code/run", line 735, in handle
+    for kind, text in stream_line_events(obj):
+                      ~~~~~~~~~~~~~~~~~~^^^^^
+  File "/Users/davidbean/Projects/attest/adapters/claude-code/run", line 674, in stream_line_events
+    content = ((obj.get("message") or {}).get("content") or [])
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'str' object has no attribute 'get'
