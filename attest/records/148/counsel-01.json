@@ -1,0 +1,54 @@
+{
+  "sha": "a2007a271253035199e4c6e83452eabe3576c7e2",
+  "record_stage": "build",
+  "record": "build-01",
+  "at": "2026-09-17T12:41:30Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 294124,
+    "output": 2467
+  },
+  "cost_usd": null,
+  "wall_clock_s": 56.908,
+  "status": "done",
+  "class": "non-question",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "/Users/davidbean/Projects/attest/adapters/claude-code/run",
+      "symbol": "build_instruction",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "bin/attavo",
+      "symbol": "proof_no_commit_lacks_record",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "attest/specs/148/criteria/proof-three-json-lists-the-commits.sh",
+      "symbol": "proof-three-json-lists-the-commits.sh",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "Waiting for a background test run is not a decision that changes the criteria and therefore is not a question. Resume the build from the existing working tree, complete the required checks, and commit the implementation; the current mechanism already adds the two commit lists with subjects, SHAs, and the ordinary merge's boundary-evasion flag.",
+    "patch": null,
+    "question": null
+  },
+  "record_version": 2,
+  "item": "148",
+  "product_version": "v0.25.0-4-g9dcecc9",
+  "product_pin": "v0.25.0"
+}
