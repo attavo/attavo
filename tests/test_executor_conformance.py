@@ -189,9 +189,16 @@ def test_situation_3_no_structured_output_fails(adapter_name, tmp_path):
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
 def test_situation_4_question_quality_gates_the_halt(adapter_name, tmp_path):
+    # An absent, empty, or short question is a report in the question
+    # channel (issue #150): the adapter re-invokes once and, when the
+    # retry yields nothing better, reports class non-question with the
+    # tokens of both turns kept -- never an exit with no report line.
     for situation in ("question_null", "question_empty", "question_short"):
         run = run_situation(adapter_name, situation, tmp_path)
-        assert run.returncode != 0, f"{situation} should have failed, not halted"
+        assert run.returncode == 0, f"{situation}: {run.stderr}"
+        report = json.loads(run.stdout.splitlines()[-1])
+        assert report["status"] == "question", (situation, report)
+        assert report["class"] == "non-question", (situation, report)
 
     run = run_situation(adapter_name, "question_long", tmp_path)
     assert run.returncode == 0, run.stderr

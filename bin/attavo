@@ -775,32 +775,54 @@ def proof_every_gate_rejects(root: Path, m: dict | None) -> Proof:
     return p.hold(f"{len(gates)} gate(s) rejected their fixture")
 
 
+def _merges_reachable(root: Path) -> list[dict]:
+    """Every merge commit reachable from HEAD -- sha, parents, and its own
+    first-parent diff -- read by one process rather than the git log plus
+    one git diff per merge merge_introducing_records used to pay walking
+    toward the one it wants (issue #153). --diff-merges=first-parent gives
+    each merge's diff against its first parent in the same pass git log
+    --merges already makes to list them, in the same order."""
+    try:
+        out = git(root, "log", "--merges", "--diff-merges=first-parent", "--name-only",
+                 "--format=\x01%H\x1f%P")
+    except RuntimeError:
+        return []
+    merges = []
+    for block in out.split("\x01")[1:]:
+        header, _, rest = block.partition("\n")
+        sha, parents = header.split("\x1f")
+        merges.append({"sha": sha, "parents": parents.split(),
+                       "touched": [line for line in rest.splitlines() if line.strip()]})
+    return merges
+
+
 def merge_introducing_records(root: Path, records_rel: str, item: str,
-                              stages: tuple[str, ...]) -> str | None:
+                              stages: tuple[str, ...],
+                              merges: list[dict] | None = None) -> str | None:
     """The merge commit reachable from HEAD whose first-parent diff
     introduces a record for every one of stages, under
     records_rel/item/ -- the same derivation attest itself uses
     (derive_attest_items), read here so proof two requires an item's
     stage records to have arrived by an actual merge, not merely to sit
-    in the tree (issue #69, acceptance row 4)."""
-    try:
-        merges = git(root, "log", "--merges", "--format=%H", "HEAD").split()
-    except RuntimeError:
-        return None
+    in the tree (issue #69, acceptance row 4).
+
+    merges, when given, is _merges_reachable's own result -- ledger's
+    cmd_ledger computes it once and passes it to every item rather than
+    walking HEAD's merges again for each (issue #153); left None, a caller
+    with just the one item to ask (doctor's proof two) gets it computed
+    here."""
+    if merges is None:
+        merges = _merges_reachable(root)
     prefix = f"{records_rel.rstrip('/')}/{item}/"
-    for sha in merges:
-        try:
-            diff = git(root, "diff", "--name-only", f"{sha}^1", sha).splitlines()
-        except RuntimeError:
-            continue
+    for merge in merges:
         found: set[str] = set()
-        for p in diff:
+        for p in merge["touched"]:
             if p.startswith(prefix):
                 m = RECORD_RE.match(Path(p).name)
                 if m:
                     found.add(m.group(1))
         if all(s in found for s in stages):
-            return sha
+            return merge["sha"]
     return None
 
 
@@ -1849,6 +1871,22 @@ def commits_since(root: Path, start_sha: str, end: str = "HEAD") -> list[dict]:
     return commits
 
 
+def commits_with_diffs(root: Path, start_sha: str, end: str = "HEAD") -> list[dict]:
+    """commits_since's own (sha, name, email), each with its own
+    first-parent diff already attached as "touched" -- one process for the
+    whole range rather than commits_since's list plus a git diff per
+    commit (issue #153, the cost item_ledger's own walk paid per commit)."""
+    out = git(root, "log", "--first-parent", "--reverse", "--diff-merges=first-parent",
+             "--name-only", "--format=\x01%H\x1f%an\x1f%ae", f"{start_sha}..{end}")
+    commits = []
+    for block in out.split("\x01")[1:]:
+        header, _, rest = block.partition("\n")
+        sha, name, email = header.split("\x1f")
+        commits.append({"sha": sha, "name": name, "email": email,
+                        "touched": [line for line in rest.splitlines() if line.strip()]})
+    return commits
+
+
 def split_adapter_stdout(stdout: str) -> tuple[str, dict | None]:
     """(transcript, payload): the adapter's last non-empty stdout line is
     its JSON report, and everything before it is transcript, only when
@@ -2864,6 +2902,14 @@ def _drive_step(root: Path, m: dict, item_id: str) -> tuple[int, bool]:
 
 
 def cmd_drive(argv: list[str]) -> int:
+    # Issue #145: Python block-buffers stdout when it is not a tty (a
+    # pipe, e.g. a screen reading this process live), so every stage
+    # line -- attavo build:, attavo drive: pushed, attavo verify:, attavo
+    # drive: item N is ready to merge -- would otherwise sit unflushed
+    # until this process exits. Line-buffering makes a pipe reader see
+    # each line the moment it is printed, the same as a terminal already
+    # does; no other output path changes.
+    sys.stdout.reconfigure(line_buffering=True)
     until_ready = "--until-ready" in argv
     recover = "--recover" in argv
     positional = [a for a in argv if a not in ("--until-ready", "--recover")]
@@ -3330,37 +3376,55 @@ def first_commit_touching(root: Path, relpath: str) -> str | None:
     return lines[0] if lines else None
 
 
-def _commit_touches(root: Path, sha: str) -> list[str]:
-    return git(root, "diff", "--name-only", f"{sha}^1", sha).splitlines()
-
-
-def _record_at(root: Path, sha: str, relpath: str, item_id: str) -> dict:
-    """A record's own dict at a past commit, not the working tree --
-    ledger's only need for one (issue #128). Read through _load_record
-    (issue #60, acceptance 6: the one place a record's bytes become a
-    dict) by spilling the blob to a throwaway file, rather than a second
-    json.loads of its own: `git show` has no path on disk to hand
-    _load_record directly."""
-    out = subprocess.run(["git", "-C", str(root), "show", f"{sha}:{relpath}"],
-                         capture_output=True, text=True, check=False)
-    if out.returncode != 0:
+def _record_blobs_at(root: Path, specs: list[tuple[str, str]], item_id: str) -> dict[tuple[str, str], dict]:
+    """{(sha, relpath): record dict} for every (sha, relpath) pair, read by
+    one `git cat-file --batch` process for the whole list rather than one
+    `git show` per record (issue #153, ledger's only need for a record at a
+    past commit rather than the working tree -- issue #128). Each blob is
+    still spilled to a throwaway file and read through _load_record (issue
+    #60, acceptance 6: the one place a record's bytes become a dict),
+    rather than a second json.loads of its own. A pair git cannot resolve,
+    or whose blob is not valid JSON, is simply absent from the result --
+    the same silence _record_at once gave a missing blob."""
+    if not specs:
         return {}
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
-        fh.write(out.stdout)
-        blob_path = Path(fh.name)
-    try:
-        return _load_record(blob_path, item_id)
-    except json.JSONDecodeError:
-        return {}
-    finally:
-        blob_path.unlink(missing_ok=True)
+    stdin = "".join(f"{sha}:{relpath}\n" for sha, relpath in specs)
+    out = subprocess.run(["git", "-C", str(root), "cat-file", "--batch"],
+                         input=stdin.encode(), capture_output=True, check=False)
+    data = out.stdout
+    pos = 0
+    result: dict[tuple[str, str], dict] = {}
+    for key in specs:
+        newline = data.index(b"\n", pos)
+        header = data[pos:newline].decode()
+        pos = newline + 1
+        parts = header.split(" ")
+        if parts[-1] == "missing":
+            continue
+        size = int(parts[-1])
+        content = data[pos:pos + size]
+        pos += size + 1
+        with tempfile.NamedTemporaryFile("wb", suffix=".json", delete=False) as fh:
+            fh.write(content)
+            blob_path = Path(fh.name)
+        try:
+            result[key] = _load_record(blob_path, item_id)
+        except json.JSONDecodeError:
+            continue
+        finally:
+            blob_path.unlink(missing_ok=True)
+    return result
 
 
-def item_ledger(root: Path, m: dict, item_id: str) -> dict:
+def item_ledger(root: Path, m: dict, item_id: str, merges: list[dict] | None = None) -> dict:
     """{"item", "rows", "summary"}: one row per act between item_id's first
     spec commit and its merge (merge_introducing_records, the same
     derivation doctor's proof two and attest both already read) or HEAD
     when the item has not merged yet.
+
+    merges, when given, is _merges_reachable's own result -- cmd_ledger
+    computes it once and passes it here for every item, rather than each
+    item walking HEAD's merges again (issue #153).
 
     Each commit gets exactly one class, in this order: the merge commit
     itself is "merge"; a commit authored by the executor identity
@@ -3388,15 +3452,38 @@ def item_ledger(root: Path, m: dict, item_id: str) -> dict:
     if first_spec_sha is None:
         return {"item": item_id, "rows": [], "summary": empty_summary}
 
-    merge_sha = merge_introducing_records(root, records_rel, item_id, STAGES)
+    if merges is None:
+        merges = _merges_reachable(root)
+    merge_sha = merge_introducing_records(root, records_rel, item_id, STAGES, merges=merges)
     if merge_sha is not None:
-        branch_tip = git(root, "rev-parse", f"{merge_sha}^2").strip()
-        commits = commits_since(root, f"{first_spec_sha}^", end=branch_tip)
-        commits += commits_since(root, f"{merge_sha}^1", end=merge_sha)
+        branch_tip = next(mrg["parents"][1] for mrg in merges if mrg["sha"] == merge_sha)
+        commits = commits_with_diffs(root, f"{first_spec_sha}^", end=branch_tip)
+        commits += commits_with_diffs(root, f"{merge_sha}^1", end=merge_sha)
     else:
-        commits = commits_since(root, f"{first_spec_sha}^", end="HEAD")
+        commits = commits_with_diffs(root, f"{first_spec_sha}^", end="HEAD")
 
     driver = driver_identity()
+
+    # Every record a walked commit touches, read by one batched process
+    # for the whole item rather than one `git show` per record (issue
+    # #153): a first pass over the already-fetched diffs finds which
+    # commits touch a record, then _record_blobs_at fetches them all.
+    record_touches: dict[str, tuple[str, str]] = {}
+    for c in commits:
+        if merge_sha is not None and c["sha"] == merge_sha:
+            continue
+        if c["email"].startswith("executor+") and c["email"].endswith("@attavo.invalid"):
+            continue
+        for p in c["touched"]:
+            if not p.startswith(records_prefix):
+                continue
+            rm = RECORD_RE.match(Path(p).name)
+            if rm and rm.group(1) in STAGES:
+                record_touches[c["sha"]] = (rm.group(1), p)
+                break
+    record_content = _record_blobs_at(
+        root, [(sha, relpath) for sha, (_, relpath) in record_touches.items()], item_id)
+
     rows: list[dict] = []
     operator_acts = product_acts = executor_commits = 0
     since = None
@@ -3415,19 +3502,11 @@ def item_ledger(root: Path, m: dict, item_id: str) -> dict:
             executor_commits += 1
             continue
 
-        touched = _commit_touches(root, sha)
-        record_touch = None
-        for p in touched:
-            if not p.startswith(records_prefix):
-                continue
-            rm = RECORD_RE.match(Path(p).name)
-            if rm and rm.group(1) in STAGES:
-                record_touch = (rm.group(1), p)
-                break
+        record_touch = record_touches.get(sha)
 
         if record_touch is not None:
             stage, relpath = record_touch
-            content = _record_at(root, sha, relpath, item_id)
+            content = record_content.get((sha, relpath), {})
             if since is None:
                 since = content.get("product_version")
 
@@ -3457,12 +3536,12 @@ def item_ledger(root: Path, m: dict, item_id: str) -> dict:
         # An invocation marker's own commit (proof five): the product's
         # act, never the operator's.
         if any(p.startswith(records_prefix) and p.endswith(INVOCATION_MARKER_SUFFIX)
-               for p in touched):
+               for p in c["touched"]):
             rows.append({"sha": sha, "identity": name, "class": "record"})
             product_acts += 1
             continue
 
-        if any(p.startswith(specs_prefix) for p in touched):
+        if any(p.startswith(specs_prefix) for p in c["touched"]):
             cls = "amend" if approval_seen else "spec"
             rows.append({"sha": sha, "identity": name, "class": cls})
             if cls == "amend":
@@ -3500,7 +3579,11 @@ def cmd_ledger(argv: list[str]) -> int:
         item_ids = (sorted((p.name for p in records_root.iterdir() if p.is_dir()))
                    if records_root.is_dir() else [])
 
-    ledgers = [item_ledger(root, m, item_id) for item_id in item_ids]
+    # Computed once for every item in this read, not once per item (issue
+    # #153): the merges reachable from HEAD do not depend on which item is
+    # being asked about.
+    merges = _merges_reachable(root)
+    ledgers = [item_ledger(root, m, item_id, merges=merges) for item_id in item_ids]
 
     if as_json:
         if positional:

@@ -1,0 +1,3488 @@
+#!/usr/bin/env python3
+"""attavo: the command.
+
+    attavo doctor [TENANT_ROOT] [--json]
+    attavo spec-gate [N]
+    attavo approve [N] --by LOGIN
+    attavo approval-status [N]
+    attavo build [N]
+    attavo verify [N]
+    attavo file-findings [N]
+    attavo file-stops [N]
+    attavo counsel [N]
+    attavo record-only
+    attavo attest [--partial] [N]
+    attavo drive [N] [--until-ready]
+    attavo ledger [N] [--json]
+    attavo stops [N] [--json]
+
+The doctor is the definition of done. It asserts four proofs against a
+tenant root and exits 1 until every proof holds:
+
+  1. every-gate-rejects      every gate in the manifest's [gates] table,
+                             run against its rejection fixture, exits non-zero,
+                             and carries a non-empty retires
+  2. one-item-every-stage    one work item under paths.records carries a
+                             record for every stage -- spec, approval,
+                             build, verify -- all four introduced by one
+                             merge commit reachable from HEAD
+  3. no-commit-lacks-record  every commit on the default branch after the
+                             manifest was introduced is named by a record's
+                             sha or commits list, or itself writes under
+                             paths.records (a record is committed with the
+                             code it describes; an item's merge commit
+                             carries its own record paths this way)
+  4. no-stop-lacks-cause     every build or verify record under
+                             paths.records at record_version 3 or later,
+                             with a status other than pass, carries a stop
+                             naming an enumerated class and provenance, a
+                             non-empty detail when unclassed, the gates
+                             heading when a build failed after running
+                             them, and the tool's own error line when an
+                             adapter exit ended the log -- records before
+                             record_version 3 are counted and reported,
+                             never refused
+
+Nothing in doctor is a gate. The doctor reads; it never writes and it never
+blocks a merge by itself. It is what CI runs to say whether the product
+is done.
+
+spec-gate, approve, and approval-status are gates and writers. They run
+from the tenant root (the current working directory); N, the work item id,
+is read from the ATTAVO_ITEM environment variable when set, else from the
+branch (attavo/N-*). The doctor's first proof sets ATTAVO_ITEM for a
+rejection fixture's own item, so a gate's own command needs no argument
+even while the enclosing repository sits on a real item's attavo/N-*
+branch. Every run of spec-gate or approve writes the next numbered attempt
+file under paths.records/N/ and never overwrites one already written. See
+the spec contract in the project's Phase 1 issue for the full rules each
+one enforces.
+
+build refuses (exit 1, naming the cause, no record) unless the manifest
+declares [executor].build and [tests].select and [tests].run, and unless
+approval-status would print valid. It exports the executor's identity
+(issue #33) into the adapter's environment as GIT_AUTHOR_NAME/EMAIL and
+GIT_COMMITTER_NAME/EMAIL, set by the product and never the tenant's git
+config, then invokes the named adapter (adapters/<name>/run) with the
+spec, the corpus, and the branch. It refuses (status refused) a commit
+between start_sha and HEAD not authored by that identity, checks that
+every path touched matches a spec claim, records the adapter's own
+declared "reports" -- the fields adapters/<name>/conformance.json says
+it can supply with a real value (issue #41), so a field it claims and
+never supplies is a defect the conformance suite catches rather than a
+silent null -- then runs the criteria, the
+tests [tests].select and [tests].run name for the touched paths, and --
+when the manifest declares [checks].command -- the tenant's own
+whole-tree check, from the tenant root. pass requires every criterion,
+the test run, and the tenant's checks (if declared) to exit 0; any
+non-zero exit iterates, with the failure as feedback, up to a fixed
+budget. [checks] is optional; a tenant that declares none is not
+refused. It writes the next build-NN.json under paths.records/N/, with
+the adapter's transcript -- each iteration's gate output (criteria
+exits, the selected tests' stdout, the tenant's checks' tail) appended
+under an "--- attavo gates, iteration N ---" heading, issue #89 -- beside
+it as build-NN.log. Every record whose status is not pass carries stop:
+{class, provenance, detail}, derived from the refusal, halted, and log
+already on hand (issue #89); a pass record carries stop: null. See the
+build contract in the project's Phase 2 issue for the full rules it
+enforces.
+
+verify refuses (exit 1) unless the item's latest build record has
+status pass, and unless the manifest declares [forge].checks_command --
+a tenant command, taking a full commit sha on argv, that prints one
+line per check as "<name> <conclusion>". verify runs it on the build
+record's sha first: any conclusion other than success, neutral, or
+skipped writes verify-NN.json with status returned and calls no
+adapter, because a judge is never spent on a tree the forge already
+called red. With the forge green, verify calls the adapter named by
+[executor].verify (defaulting to [executor].build) with the diff since
+the build's approval, the spec, and the build record, and records its
+findings and its declared "reports" (issue #41). [executor.<adapter>.<stage>] shadows [executor.<adapter>] for
+build or verify alone; both merge parent then stage before setting
+ATTAVO_ADAPTER_CONFIG, and the record's adapter_config is the merged
+result. Like build, every verify record whose status is not pass
+carries stop: {class, provenance, detail} (issue #89); a pass record
+carries stop: null. file-findings opens one tenant issue per finding in
+the item's latest verify record via [forge].file_issue_command, and
+refuses (exit 1, nothing filed) a record carrying a finding with no
+retires. See the verify contract in the project's Phase 2 issue for the
+full rules both enforce.
+
+file-stops opens one tenant issue per stop record of the item with no
+issue filed for it yet, through [forge].file_issue_command, naming the
+class, the provenance, the record path, and the log's last twenty
+lines; a record it has already filed carries a <stage>-NN.filed marker
+beside it, holding the filing command's own stdout, so a second run
+files nothing new. Like a build or verify record, this command writes
+the marker and leaves it uncommitted -- drive commits it, in the same
+commit as the record it names (issue #89). It refuses (exit 1,
+nothing filed) a stop whose class is unclassed and whose detail is
+empty -- a stop the product cannot even describe is not filed as if it
+could. See issue #89's lane for the full rules it enforces.
+
+counsel reads the item's latest non-pass build or verify record -- or,
+when neither exists, its latest refused spec-gate record, the earliest
+point a question can be answered inside the product, before any
+approval or executor spend (issue #133) -- and asks the tenant's
+[executor].counsel adapter (defaulting to [executor].verify) a
+read-only question about it: the record, its log, the spec (problem,
+claims, criteria, stub, including stub/.removed), paths.rulings, the
+item's diff since approval, the tenant manifest, and this product's own
+root (bin/attavo, adapters/, schema/, templates/) by path, under the
+same sandbox verify runs under. The adapter answers with class (the
+stop enumeration, or unclassed), verdict (answer: a ruling text with
+citations; patch: a product defect's file, symbol, rejection test, and
+diff; person: a one-line question no rule covers), citations
+(instruction, mechanism, guard, each a path and symbol or a ruling id),
+and proposal (the ruling text, the patch, or the question). It writes
+the next counsel-NN.json under paths.records/N/, with the adapter's
+transcript beside it as counsel-NN.log, and commits nothing -- the
+caller commits, as with every stage. It refuses (exit 1, nothing
+written) when the item carries no non-pass build, verify, or spec-gate
+record to counsel. See issue #100's lane for the full rules it
+enforces, and issue #133's for the spec-gate fallback.
+
+record-only exits 0 when HEAD, against its first parent, touches only
+paths.records; 1 otherwise; 2 with no manifest. Core logic about a git
+checkout, not a forge's shell -- a workflow template's push-and-retrigger
+guard is one line reading this exit code instead of carrying its own
+copy of the check.
+
+attest refuses (exit 1) unless the latest spec, approval, build, and
+verify records for an item all exist and chain: the build's approval_sha
+names the latest approval, and the verify's build_sha names that build --
+a re-approval after a build must force a re-run of what changed. With no
+N given it derives the item from the record paths HEAD's merge commit
+touched under paths.records/<N>/, not from a branch name, which a squash
+merge discards and which names a forge's convention the product does not
+know; more than one item derived is a refusal naming what it found. Zero
+is not a defect -- not every merge is an item merge -- exit 0, nothing
+printed but a line saying so.
+
+attest never writes. On a coherent chain it prints the attestation
+statement -- validating against schema/attestation.schema.json -- to
+stdout as JSON and exits 0: the item, its four records and their shas,
+and the commit the statement was computed at (sha and merge_sha are the
+same commit here; on the merge group that commit is the one that lands).
+The four stage records already under paths.records are the evidence for
+that statement; a forge-specific template signs the printed JSON,
+unmodified, as the predicate, against the commit that lands, on the merge
+group -- and the signed bundle in the forge's attestation store is the
+seal over it. attest itself never signs anything and never talks to a
+signing service. --partial (issue #67) is for a pull request, where the
+record a complete chain would need is the output of a later stage that is
+itself waiting on this check: a missing later record is "not yet" (exit
+0, naming the item and the stages present and absent, no statement
+printed) rather than a refusal, while the two chain assertions -- build's
+approval_sha names the latest approval, verify's build_sha names the
+latest build -- still run over whatever records exist. merge_group and a
+push to main still demand the whole chain. See issue #69's lane for the
+full rules it enforces.
+
+drive reads an item's latest records and a forge's own check conclusions
+and performs the next mechanical step, and only that step, then stops: no
+valid approval refuses by name and runs nothing; no passing build bound to
+that approval runs build; a passing build with the forge green on the
+branch head (polled for a bound, not the manifest) runs verify; a passing
+verify with the forge still green prints that the item is ready to merge
+and stops there -- the merge is never drive's own act, and it enqueues
+nothing. A record build or verify writes that is not pass is counseled (counsel,
+issue #100) and filed (file-stops, issue #89) before it is transported,
+so its .filed marker exists in time to be committed alongside it; drive
+then commits the stage record and the counsel record together -- each
+with its own log and marker -- with `git commit --only`, never sweeping
+the index, and pushes; a push a divergent remote rejects
+is retried once after `git pull --no-rebase --no-edit`, never a rebase,
+since the record already names the commit's sha. drive writes no record
+of its own: a second run in the same state repeats the same step or the
+same stop, reading exactly what the prior run left behind -- the marker
+included, so a stop already filed is never filed again, from this
+worktree or a fresh one. See issue #84's lane for the full rules it
+enforces.
+
+--until-ready (issue #100's own followups) repeats step-and-wait --
+step, the forge poll already inside a step, step again -- in the same
+process, rather than making the caller invoke drive again after every
+passing step, until the item is ready to merge or a step stops on its
+own account (a refusal, a halted or failed or refused record, or the
+forge never going green); a step that stops still prints exactly what
+the same step would print without the flag. Without --until-ready,
+drive is unchanged: one step, then stop, exactly as before.
+
+ledger reads, never writes. For item N (or every item under
+paths.records when N is omitted), it walks the commits from the item's
+first spec commit to its merge (the same derivation doctor's proof two
+and attest use) or to HEAD when the item has not merged, and prints one
+row per act: the sha, the identity as git names it, and a class from a
+closed list -- spec, amend, approve, launch, record, change, transport,
+merge -- derived from who committed it and, for an approval, build, or
+verify record, what the record itself says. A summary line follows:
+operator acts (approve, amend, launch, transport, merge), product acts
+(record), executor commits (change), stops (non-pass records), and
+since (the product version on the first record). A build or verify
+record's own commit, from before v0.18.0 gave the driver and the
+executor their own identities, prints as record-or-launch with a note,
+counted toward neither total, rather than guessed. --json prints the
+rows and the summary as one object. See issue #128's lane for the full
+rules it enforces.
+
+stops reads, never writes. For item N (or every item under
+paths.records when N is omitted), one row per non-pass build or verify
+record: the record, its stop's class, provenance, and detail, and the
+answerer -- "counsel:<verdict>" when a counsel record read this exact
+stop, else "person" for a question, else "guard" for a class a guard
+alone raised (GUARDED_STOP_CLASSES), else "none". A record too old to
+carry stop at all prints the doctor's own phrase for it, "before stop
+was recorded", and is counted there rather than by class. Totals per
+class (read from the build record schema's own enum, never retyped) and
+per answerer, plus the before-stop count, follow the rows. --json prints
+the rows and the totals as one object. See issue #129's lane for the
+full rules it enforces.
+"""
+from __future__ import annotations
+
+import fnmatch
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import tomllib
+from datetime import datetime, timezone
+from pathlib import Path
+
+MANIFEST = "attavo.toml"
+STAGES = ("spec", "approval", "build", "verify")
+CRITERION_TIMEOUT = 120
+RECORD_RE = re.compile(r"^([a-z]+)-([0-9]{2,})\.json$")
+BUILD_ITERATION_BUDGET = 3
+BUILD_HALT_EXIT = 3
+CHECKS_FEEDBACK_TAIL_LINES = 200
+PRODUCT_ROOT = Path(__file__).resolve().parent.parent
+# issue #84: a constant the lane names, not a manifest key, until a tenant
+# disagrees -- how long drive gives a forge's checks room to conclude
+# before it gives up and stops rather than call a judge on a tree the
+# forge has not yet finished reading. Tenant zero's own checks conclude
+# about five minutes after a push; the default bound gives them room to
+# finish so a person is not the one re-running drive after CI, which is
+# exactly the transport act this lane retires. ATTAVO_DRIVE_POLL_BOUND_S
+# and ATTAVO_DRIVE_POLL_INTERVAL_S, read at call time rather than once at
+# import, are for a test's own clock, not a tenant's -- there is no
+# manifest key for either.
+DRIVE_FORGE_POLL_BOUND_DEFAULT_S = 600.0
+DRIVE_FORGE_POLL_INTERVAL_DEFAULT_S = 20.0
+
+
+def drive_forge_poll_bound_s() -> float:
+    return float(os.environ.get("ATTAVO_DRIVE_POLL_BOUND_S", DRIVE_FORGE_POLL_BOUND_DEFAULT_S))
+
+
+def drive_forge_poll_interval_s() -> float:
+    return float(os.environ.get("ATTAVO_DRIVE_POLL_INTERVAL_S", DRIVE_FORGE_POLL_INTERVAL_DEFAULT_S))
+
+
+class Proof:
+    def __init__(self, key: str, title: str) -> None:
+        self.key = key
+        self.title = title
+        self.holds = False
+        self.reason = ""
+        self.extra: dict = {}
+
+    def fail(self, reason: str, **extra) -> "Proof":
+        self.holds, self.reason = False, reason
+        self.extra.update(extra)
+        return self
+
+    def hold(self, reason: str, **extra) -> "Proof":
+        self.holds, self.reason = True, reason
+        self.extra.update(extra)
+        return self
+
+    def as_dict(self) -> dict:
+        return {"proof": self.key, "title": self.title,
+                "holds": self.holds, "reason": self.reason, **self.extra}
+
+
+def read_manifest(root: Path) -> dict | None:
+    path = root / MANIFEST
+    if not path.is_file():
+        return None
+    with path.open("rb") as fh:
+        return tomllib.load(fh)
+
+
+def git(root: Path, *args: str, env: dict | None = None) -> str:
+    out = subprocess.run(["git", "-C", str(root), *args],
+                         capture_output=True, text=True, check=False, env=env)
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr.strip() or "git failed")
+    return out.stdout
+
+
+def product_version() -> str:
+    """What the running program is. Three fallbacks, in order, and never an
+    exception -- this runs inside write_record, after the work it
+    describes already happened, and a raise here would lose the record
+    for an invocation that already ran:
+
+      1. ATTAVO_PRODUCT_VERSION, when the environment sets it. The forge
+         action sets this from its own ref (action.yml, not here -- this
+         function stays forge-agnostic).
+      2. git describe --tags --always --dirty against PRODUCT_ROOT: a
+         tagged release reports its tag, a checkout reports its commit,
+         a dirty tree says so.
+      3. "unknown", when PRODUCT_ROOT is not a git repository at all --
+         the case for a forge that extracts this action from a tarball
+         rather than a git checkout, which is exactly when (1) is
+         expected to already have supplied the answer.
+
+    Distinct from the tenant's product_pin -- an operator running a
+    checkout, which is how every build and verify have actually been run
+    so far, bypasses the pin entirely (issue #49)."""
+    env = os.environ.get("ATTAVO_PRODUCT_VERSION")
+    if env:
+        return env
+    try:
+        return git(PRODUCT_ROOT, "describe", "--tags", "--always", "--dirty").strip()
+    except RuntimeError:
+        return "unknown"
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def derive_item_id(root: Path) -> str | None:
+    """ATTAVO_ITEM first, not last: a rejection fixture's own item id must
+    win over whatever attavo/N-* branch the enclosing tenant repository
+    happens to be checked out on -- the common case is doctor running from
+    a real item's own branch, where a fallback-only env var would never be
+    consulted at all and every gate fixture would silently resolve to the
+    real item instead of its own."""
+    env_item = os.environ.get("ATTAVO_ITEM")
+    if env_item:
+        return env_item
+    out = subprocess.run(["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"],
+                         capture_output=True, text=True, check=False)
+    branch = out.stdout.strip()
+    m = re.match(r"^attavo/(\d+)-", branch)
+    return m.group(1) if m else None
+
+
+def fixture_item_id(fixture: Path) -> str | None:
+    """The one item id under a rejection fixture's own paths.specs, so the
+    doctor can export it as ATTAVO_ITEM: a fixture carries no attavo/N-*
+    branch for a gate command with no argument to derive from otherwise."""
+    fm = read_manifest(fixture)
+    specs_rel = ((fm or {}).get("paths") or {}).get("specs")
+    if not specs_rel:
+        return None
+    specs_dir = fixture / specs_rel
+    if not specs_dir.is_dir():
+        return None
+    items = sorted(p.name for p in specs_dir.iterdir() if p.is_dir())
+    return items[0] if len(items) == 1 else None
+
+
+class ShallowCheckoutError(RuntimeError):
+    pass
+
+
+def last_commit_touching(root: Path, relpath: str) -> str | None:
+    shallow = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-shallow-repository"],
+                             capture_output=True, text=True, check=False)
+    if shallow.stdout.strip() == "true":
+        raise ShallowCheckoutError(
+            "shallow checkout: git log -1 -- <path> returns HEAD for every path on a "
+            "shallow clone; check out with fetch-depth: 0")
+    out = subprocess.run(["git", "-C", str(root), "log", "-1", "--format=%H", "--", relpath],
+                         capture_output=True, text=True, check=False)
+    sha = out.stdout.strip()
+    return sha or None
+
+
+# --- record files: <stage>-NN.json, one per attempt, never overwritten ---
+
+SCHEMA_RECORDS_DIR = PRODUCT_ROOT / "schema" / "records"
+
+
+def stage_schema(stage: str) -> dict:
+    """schema/records/<stage>.schema.json -- this repository's own
+    declaration of that stage's record shape (issue #60). The only
+    artifact the outbound contract needs; there is no accessor for it
+    beyond reading the file."""
+    return json.loads((SCHEMA_RECORDS_DIR / f"{stage}.schema.json").read_text())
+
+
+def schema_id_version(schema: dict) -> int:
+    """The trailing integer of a schema's $id (".../records/build/2" -> 2)
+    -- the single place a record shape's version lives. write_record reads
+    this at call time rather than carrying its own copy, so the version it
+    stamps cannot drift from what the schema declares (issue #60)."""
+    return int(schema["$id"].rsplit("/", 1)[-1])
+
+
+class RecordItemMismatch(RuntimeError):
+    """A record's item field disagrees with the directory it was read
+    from (issue #60, acceptance 5) -- a misfiled or copied record, refused
+    rather than trusted."""
+
+
+def _load_record(path: Path, item_id: str) -> dict:
+    """The one place in this repository that turns a record file's bytes
+    into a dict (issue #60, acceptance 6). Defaults record_version to 1
+    when absent -- version 1 is every record written before this release
+    and is never migrated -- and fills item from the directory when
+    absent; refuses when a present item disagrees with it."""
+    data = json.loads(path.read_text())
+    data.setdefault("record_version", 1)
+    item = data.get("item")
+    if item is None:
+        data["item"] = item_id
+    elif item != item_id:
+        raise RecordItemMismatch(
+            f"{path}: item {item!r} disagrees with its directory {item_id!r}")
+    return data
+
+
+def parse_attempts(records_dir: Path, stage: str) -> dict[int, dict]:
+    attempts: dict[int, dict] = {}
+    if not records_dir.is_dir():
+        return attempts
+    for f in records_dir.glob(f"{stage}-*.json"):
+        m = RECORD_RE.match(f.name)
+        if not m or m.group(1) != stage:
+            continue
+        try:
+            attempts[int(m.group(2))] = _load_record(f, records_dir.name)
+        except json.JSONDecodeError:
+            continue
+    return attempts
+
+
+def latest_record(records_dir: Path, stage: str) -> dict | None:
+    attempts = parse_attempts(records_dir, stage)
+    return attempts[max(attempts)] if attempts else None
+
+
+def next_attempt_number(records_dir: Path, stage: str) -> int:
+    attempts = parse_attempts(records_dir, stage)
+    return (max(attempts) + 1) if attempts else 1
+
+
+def latest_attempt_path(records_dir: Path, stage: str) -> Path | None:
+    """The path of the highest-numbered <stage>-NN.json, or None."""
+    attempts = parse_attempts(records_dir, stage)
+    if not attempts:
+        return None
+    return records_dir / f"{stage}-{max(attempts):02d}.json"
+
+
+def write_record(records_dir: Path, stage: str, record: dict, m: dict, item: str,
+                 log: str | None = None) -> Path:
+    """Every record gains record_version (this stage schema's own $id
+    version -- issue #60) and item (verbatim from the caller, matching the
+    record's directory segment), plus product_version (what ran, derived
+    here) and product_pin (what the tenant declared, copied verbatim from
+    the manifest, or null when the manifest carries no [attavo] table) --
+    the latter two recorded, never enforced (issue #49). A manifest
+    missing the table is an absent fact, not a crash: this is the one
+    caller of write_record that must not raise on a shape the manifest
+    schema forbids but tomllib.load happily returns.
+
+    Refuses (raises ValueError) a record carrying a key this stage's
+    schema does not declare -- the declared key set enforced with the
+    standard library, not a jsonschema import: bin/attavo is a single
+    script a tenant pins, and a runtime dependency changes installation.
+
+    Also refuses a `status: "failed"` record that carries no trail at all
+    -- log the empty or missing text it will sit beside, and refusal and
+    halted (where the stage's schema has them) both null (issue #53).
+    `returned`, `pass`, `halted`, and `refused` owe no such trail. log is
+    None for a stage that invoked no adapter (verify's `returned`), which
+    write_record then writes no log file for; otherwise the log is
+    written before the record, so a refusal leaves no half-pair."""
+    records_dir.mkdir(parents=True, exist_ok=True)
+    nn = next_attempt_number(records_dir, stage)
+    schema = stage_schema(stage)
+    record = {**record, "record_version": schema_id_version(schema), "item": item,
+              "product_version": product_version(),
+              "product_pin": (m.get("attavo") or {}).get("version")}
+    undeclared = set(record) - set(schema.get("properties", {}))
+    if undeclared:
+        raise ValueError(f"write_record: {stage} record carries key(s) its schema does not "
+                         f"declare: {', '.join(sorted(undeclared))}")
+    if (record.get("status") == "failed" and not log
+            and record.get("refusal") is None and record.get("halted") is None):
+        raise ValueError(f"write_record: {stage} record status is 'failed' with no log, "
+                         f"refusal, or halted to say why")
+    path = records_dir / f"{stage}-{nn:02d}.json"
+    if log is not None:
+        path.with_suffix(".log").write_text(log)
+    path.write_text(json.dumps(record, indent=2) + "\n")
+    return path
+
+
+# --- stop: every non-pass build or verify record's class and cause (issue
+# #89) -- derived here, at write time, from the refusal, halted, and log
+# the caller already has. Never a fresh read of anything: the tenant zero
+# specimens this retires (#576 build-11, #659 build-01 and verify-01) are
+# exactly a stop the product wrote with nothing beside it to explain
+# itself after the fact. ---
+
+STOP_CLASSES = ("non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
+               "ceiling", "claims-boundary", "repeated-act", "unclassed", "question",
+               "environment", "gate")
+STOP_PROVENANCES = ("product", "tenant", "executor", "spec")
+
+# Beyond the enum spelling itself, the prose issue #88 actually shipped
+# (adapters/claude-code/run and adapters/codex/run, on main since
+# v0.16.0) once put a class's own name, or a real specimen's wording of
+# it, in the transcript for the generic match below to find. Issue #94
+# moves non-question and outlived-invocation onto report_class instead
+# (below): non-question's own halt line ("halted: class non-question")
+# would otherwise still satisfy the bare-name match here with no adapter
+# report-line field involved at all, and outlived-invocation's refusal
+# never named its class in text to begin with, so both are disabled here
+# -- the same pattern issue #93 established for ceiling, just below,
+# rather than removed outright.
+CLASS_TEXT_MARKERS: dict[str, tuple[str, ...]] = {
+    "non-question": (),
+    "outlived-invocation": (),
+    # Issue #93: ceiling's own text-based check is CEILING_MARKERS, below,
+    # with provenance "product" -- a fact about the tool, not an executor
+    # judgment like non-question/outlived-invocation are. Left at the
+    # default (the class's own name, "ceiling"), the generic match above
+    # would instead catch adapters/codex/run's and
+    # adapters/claude-code/run's own pre-emptive refusal -- which must
+    # carry the word "ceiling" by the same issue's own brief -- as
+    # provenance "executor", before CEILING_MARKERS is ever consulted.
+    "ceiling": (),
+    # A genuine question (issue #100's own followups) is read structurally
+    # -- status "halted" carrying a non-empty halted.question -- not by
+    # scanning for the literal word "question", which the question's own
+    # text very often contains regardless of what it is actually asking.
+    # Left at the default, the generic match above would misclassify any
+    # question that happens to use the word "question" as executor
+    # provenance, before the structural check in derive_stop is reached.
+    "question": (),
+    # environment/tenant (issue #115) is set directly by cmd_build's own
+    # preflight -- the one caller who knows a [checks].command exited 2
+    # on the approved tree -- never derived from adapter text. Left at
+    # the default, the generic match above would catch the word
+    # "environment" anywhere in a log or refusal (e.g. codex's own
+    # OPENAI_API_KEY auth-mismatch refusal, adapters/codex/run's
+    # check_auth) as an environment/executor stop that never happened.
+    "environment": (),
+}
+
+# Known tool error text for a declared ceiling -- issue #86's own specimen
+# (codex's "Input exceeds..." line on a diff too large to judge) is
+# "input_too_large"; a matching line anywhere in the log, not only its
+# last line, since cmd_build and cmd_verify both append "[adapter exited
+# N]" after whatever the tool itself printed. "ceiling exceeded" is issue
+# #93's own addition: both adapters now refuse pre-emptively, before the
+# tool is ever invoked, against a declared or fixed input limit, and
+# their refusal text is not caught by any of the three markers above.
+CEILING_MARKERS = ("input_too_large", "exceeds the maximum context length",
+                  "context_length_exceeded", "ceiling exceeded")
+
+
+# Issue #100's followups: an unclassed detail is the log's last line
+# verbatim, and that line is sometimes an adapter's own event JSON or a
+# tool's full error text -- thousands of characters wide. Capped here,
+# at write time, so a filed issue's own summary of it (file-stops'
+# log_tail already carries the full picture) stays short; the class
+# itself, "unclassed", already says the full explanation lives in the
+# log, not in this field.
+UNCLASSED_DETAIL_MAX_CHARS = 200
+
+
+def _log_last_line(log: str | None) -> str:
+    lines = [l for l in (log or "").splitlines() if l.strip()]
+    last = lines[-1] if lines else ""
+    return last[:UNCLASSED_DETAIL_MAX_CHARS]
+
+
+def _carries_a_known_class(text: str | None) -> str | None:
+    """Whichever of STOP_CLASSES this text names -- its own spelling, or
+    one of CLASS_TEXT_MARKERS' real-world phrasings of it, when that
+    class is not disabled there -- or None. Issue #88 is where an
+    adapter's own halt or refusal first named its class this way; issue
+    #93 added ceiling's own pre-emptive refusal to that set and disabled
+    its bare-name match (CEILING_MARKERS covers it instead); issue #94
+    disables non-question and outlived-invocation the same way, reading
+    both from the adapter's own report line (derive_stop's report_class)
+    now instead."""
+    text = text or ""
+    for name in STOP_CLASSES:
+        markers = CLASS_TEXT_MARKERS.get(name, (name,))
+        if any(marker in text for marker in markers):
+            return name
+    return None
+
+
+def derive_stop(status: str, *, refusal: str | None = None, halted: dict | None = None,
+                log: str | None = None, report_class: str | None = None,
+                refusal_provenance: str | None = None) -> dict | None:
+    """The stop field for a build or verify record: None for status "pass",
+    else {class, provenance, detail} from what the caller already knows.
+
+      - report_class -- payload.get("class") off the adapter's own report
+        line (issue #88, #94), when it names a STOP_CLASSES member -- is
+        that class, provenance "executor". build.schema.json and
+        verify.schema.json stay untouched by issue #88 on purpose, so the
+        class lives only on the report line, never a structured field
+        cmd_build or cmd_verify forwards on its own account; the caller
+        reads payload itself and passes this in, since only it still has
+        payload once an iteration ends. This is non-question's and
+        outlived-invocation's only path to a record now (issue #94):
+        CLASS_TEXT_MARKERS disables both for the text scan below, the
+        same way issue #93 disabled ceiling's bare-name match there. A
+        class an adapter does not yet put on its report line --
+        outlived-invocation today, since that refusal path prints no
+        report line at all -- falls to unclassed below, same as any
+        other unnamed cause, until the adapter that raises it puts a
+        class on the line the way non-question already does.
+      - a halt carrying a non-empty halted.question, once it is not a
+        non-question caught above, is a genuine question -- question/spec,
+        with the question's own first line as detail (issue #100's
+        followups). This is the specimen issue #100 itself was built to
+        retire: tenant zero's #663 build-01, a proper question, classed
+        unclassed/product and filed as a product defect with the wrong
+        provenance -- a question is about the definition of done, which is
+        a person's or a ruling's to answer, never the product's own
+        mechanism.
+      - failing that, a refusal or the log itself that already names its
+        class in text (issue #88, #93 for ceiling's own pre-emptive
+        refusal) is that class, provenance "executor" -- the log is
+        checked because neither adapter's refusal *field* carries the
+        class today; the class-naming line each adapter prints reaches
+        only the transcript
+      - a refusal that is not that -- the write-outside-claims path
+        itself, not the "commit ... not authored by the executor" shape
+        -- is claims-boundary/spec, unless the caller already knows this
+        refusal touched paths.records or paths.specs (issue #140:
+        protected_path_touched, checked ahead of the ordinary claims
+        match in cmd_build) and passes refusal_provenance="executor" --
+        the product's own directories are not a claim a spec makes, so a
+        refusal there is not the spec's boundary to answer for
+      - a returned verify (the forge was not green; no adapter ran) is
+        forge-unconcluded/tenant
+      - an adapter exit whose log carries a declared-ceiling error line is
+        ceiling/product
+      - anything else is unclassed/product, with the log's last line
+        (capped at UNCLASSED_DETAIL_MAX_CHARS) as its detail -- the other
+        class that carries a detail, since every remaining class's
+        evidence already lives in refusal, halted, forge_checks, or the
+        log itself.
+    """
+    if status == "pass":
+        return None
+    if status == "returned":
+        return {"class": "forge-unconcluded", "provenance": "tenant", "detail": None}
+    if report_class in STOP_CLASSES:
+        return {"class": report_class, "provenance": "executor", "detail": None}
+    question = (halted or {}).get("question")
+    if status == "halted" and question:
+        return {"class": "question", "provenance": "spec",
+               "detail": question.splitlines()[0]}
+    known = _carries_a_known_class(refusal) or _carries_a_known_class(log)
+    if known:
+        return {"class": known, "provenance": "executor", "detail": None}
+    if status == "refused" and refusal is not None and not refusal.startswith("commit "):
+        return {"class": "claims-boundary", "provenance": refusal_provenance or "spec",
+               "detail": None}
+    if log and any(marker in log.lower() for marker in CEILING_MARKERS):
+        return {"class": "ceiling", "provenance": "product", "detail": None}
+    return {"class": "unclassed", "provenance": "product", "detail": _log_last_line(log)}
+
+
+def gate_stop(refusal: str | None) -> dict:
+    """The stop for a refused spec-gate record: class "gate", provenance
+    "spec", the refusal string itself as cause (issue #137) -- not
+    derive_stop's generic claims-boundary/spec fallback issue #133
+    reused, which named a boundary the record never crossed: "criterion
+    fails against the tree plus stub: doctor-template-absent.sh" is not
+    a write outside claims. cmd_spec_gate is untouched by this lane, so
+    a spec record still carries no stop field of its own; this is
+    synthesized wherever a refused one is read (item_stops,
+    cmd_file_stops, proof_no_stop_lacks_cause), never persisted."""
+    return {"class": "gate", "provenance": "spec", "detail": refusal}
+
+
+def load_records(records_dir: Path) -> dict[str, dict[str, dict]]:
+    """{item_id: {stage: latest_record}} for every <records>/<item>/<stage>-NN.json."""
+    items: dict[str, dict[str, dict]] = {}
+    if not records_dir.is_dir():
+        return items
+    for item_dir in sorted(p for p in records_dir.iterdir() if p.is_dir()):
+        by_stage: dict[str, dict[int, dict]] = {}
+        for rec in sorted(item_dir.glob("*.json")):
+            m = RECORD_RE.match(rec.name)
+            if not m:
+                continue
+            stage, n = m.group(1), int(m.group(2))
+            try:
+                data = _load_record(rec, item_dir.name)
+            except json.JSONDecodeError:
+                continue
+            by_stage.setdefault(stage, {})[n] = data
+        items[item_dir.name] = {stage: attempts[max(attempts)] for stage, attempts in by_stage.items()}
+    return items
+
+
+# --- doctor's three proofs ---
+
+def proof_every_gate_rejects(root: Path, m: dict | None) -> Proof:
+    p = Proof("every-gate-rejects", "every gate rejects its fixture")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; no gate is registered")
+    gates = m.get("gates") or {}
+    if not gates:
+        return p.fail("[gates] is empty; a gate that has rejected nothing does not exist")
+    fixtures = root / m.get("paths", {}).get("rejections", "")
+    # Proposal, not yet ruled on (issue #54): a gate that retires nothing
+    # only adds, so proof one reports it here rather than waiting on the
+    # schema alone -- read_manifest never validates against the manifest
+    # schema at runtime, so a schema requirement is not an enforced one.
+    no_retires = [name for name, gate in sorted(gates.items()) if not gate.get("retires")]
+    missing, accepted = [], []
+    for name, gate in sorted(gates.items()):
+        fixture = fixtures / name
+        if not fixture.is_dir():
+            missing.append(name)
+            continue
+        env = dict(os.environ)
+        item = fixture_item_id(fixture)
+        if item is not None:
+            env["ATTAVO_ITEM"] = item
+        run = subprocess.run(gate["command"], shell=True, cwd=str(fixture),
+                             capture_output=True, text=True, check=False, env=env)
+        if run.returncode == 0:
+            accepted.append(name)
+    if missing:
+        return p.fail(f"gate(s) with no rejection fixture: {', '.join(missing)}")
+    if accepted:
+        return p.fail(f"gate(s) that accepted their rejection fixture: {', '.join(accepted)}")
+    if no_retires:
+        return p.fail(f"gate(s) with no retires: {', '.join(no_retires)}")
+    return p.hold(f"{len(gates)} gate(s) rejected their fixture")
+
+
+def merge_introducing_records(root: Path, records_rel: str, item: str,
+                              stages: tuple[str, ...]) -> str | None:
+    """The merge commit reachable from HEAD whose first-parent diff
+    introduces a record for every one of stages, under
+    records_rel/item/ -- the same derivation attest itself uses
+    (derive_attest_items), read here so proof two requires an item's
+    stage records to have arrived by an actual merge, not merely to sit
+    in the tree (issue #69, acceptance row 4)."""
+    # One process for every merge's first-parent paths, read once per
+    # HEAD and kept for the process: the ledger asks this question once
+    # per item, and the answer is the same list every time (issue: the
+    # ledger's four hundred git processes on a twelve-item corpus).
+    try:
+        head = git(root, "rev-parse", "HEAD").strip()
+    except RuntimeError:
+        return None
+    key = (str(root), head)
+    if key not in _MERGE_TOUCHES:
+        try:
+            out = git(root, "log", "--merges", "--format=%x00%H", "--name-only",
+                      "--diff-merges=first-parent", "HEAD")
+        except RuntimeError:
+            return None
+        _MERGE_TOUCHES[key] = _parse_name_only(out)
+    prefix = f"{records_rel.rstrip('/')}/{item}/"
+    for sha, diff in _MERGE_TOUCHES[key]:
+        found: set[str] = set()
+        for p in diff:
+            if p.startswith(prefix):
+                m = RECORD_RE.match(Path(p).name)
+                if m:
+                    found.add(m.group(1))
+        if all(s in found for s in stages):
+            return sha
+    return None
+
+
+def proof_one_item_every_stage(root: Path, m: dict | None) -> Proof:
+    p = Proof("one-item-every-stage", "one item has traversed every stage")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
+    records_rel = m.get("paths", {}).get("records", "")
+    records_dir = root / records_rel
+    items = load_records(records_dir)
+    if not items:
+        return p.fail(f"no work item under {records_dir.relative_to(root)}")
+    complete = [item for item, stages in items.items() if all(s in stages for s in STAGES)]
+    if not complete:
+        best = max(items.items(), key=lambda kv: len(kv[1]))
+        lacking = [s for s in STAGES if s not in best[1]]
+        return p.fail(f"no item carries every stage; item {best[0]} lacks {', '.join(lacking)}")
+
+    # issue #74: a complete item is counted only when its chain holds --
+    # attavo attest refuses a build re-approved after the fact or a
+    # verify whose build went stale, and the coherence gate refuses the
+    # merge group on exactly that; a proof that never asked would call a
+    # traversal the gate itself would not let through. The refusal text
+    # is check_attest_chain's own, never re-typed here.
+    refused, held, unmerged = [], [], []
+    for item in complete:
+        chain, message = check_attest_chain(records_dir / item, item)
+        if chain is None:
+            refused.append(f"item {item}: {message}")
+            continue
+        merge_sha = merge_introducing_records(root, records_rel, item, STAGES)
+        if merge_sha:
+            held.append((item, merge_sha))
+        else:
+            unmerged.append(item)
+
+    if held:
+        names = ", ".join(item for item, _ in held)
+        shas = ", ".join(sha[:12] for _, sha in held)
+        return p.hold(f"item(s) {names} carry {', '.join(STAGES)} with the chain held, "
+                      f"merged at {shas}")
+    if refused:
+        return p.fail("; ".join(refused))
+    return p.fail(f"item(s) {', '.join(unmerged)} carry every stage with the chain held but no "
+                  f"merge commit's first-parent diff introduces all of them")
+
+
+def commit_subject(root: Path, sha: str) -> str:
+    return git(root, "log", "-1", "--format=%s", sha).strip()
+
+
+def touches_boundary(root: Path, sha: str, boundary_paths: list[str]) -> bool:
+    """Whether sha's first-parent diff touches a path [spec.boundary].paths
+    declares governed -- an ordinary merge that does is a boundary
+    evasion (issue #72): the tenant carried a governed change around the
+    path the manifest itself names."""
+    diff = git(root, "diff", "--name-only", f"{sha}^1", sha).splitlines()
+    return any(fnmatch.fnmatch(path, pattern) for path in diff for pattern in boundary_paths)
+
+
+def proof_no_commit_lacks_record(root: Path, m: dict | None) -> Proof:
+    p = Proof("no-commit-lacks-record", "no commit lacks a record")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; the tenant has no record boundary")
+    try:
+        install = git(root, "log", "--diff-filter=A", "--format=%H",
+                      "--reverse", "--", MANIFEST).split()
+    except RuntimeError as exc:
+        return p.fail(f"git: {exc}")
+    if not install:
+        return p.fail(f"{MANIFEST} is not committed; the tenant has no record boundary")
+    install_sha = install[0]
+    full_chain = git(root, "rev-list", f"{install_sha}..HEAD", "--first-parent").split()
+    if not full_chain:
+        return p.fail(f"no commit after the install commit {install_sha[:12]}; nothing has been recorded")
+
+    # issue #74: [doctor] from lets a tenant declare the doctor's read to
+    # start at a later commit on main's first-parent line -- the point
+    # after which every push arrived through the queue -- rather than the
+    # install commit, which on a repository that adopted the product
+    # after its history began is a boundary the doctor cannot otherwise
+    # see. Any spelling git resolves is accepted (a short sha, a tag, a
+    # ref) -- resolved with rev-parse --verify before the first-parent
+    # check runs, so the two failure modes stay distinct: a spelling that
+    # names no commit at all, and a commit that names one off the line.
+    # Checked, not trusted: neither is silently forgiven back to install.
+    declared_from = (m.get("doctor") or {}).get("from")
+    window_start = install_sha
+    if declared_from is not None:
+        try:
+            resolved_from = git(root, "rev-parse", "--verify", f"{declared_from}^{{commit}}").strip()
+        except RuntimeError:
+            return p.fail(f"[doctor] from {declared_from} does not resolve to a commit")
+        if resolved_from != install_sha and resolved_from not in full_chain:
+            return p.fail(f"[doctor] from {declared_from} is not on main's first-parent "
+                          f"line after the install commit {install_sha[:12]}")
+        window_start = resolved_from
+
+    if window_start == install_sha:
+        window_spec = f"{install_sha}..HEAD"
+        commits = full_chain
+    else:
+        window_spec = f"{window_start}^..HEAD"
+        commits = git(root, "rev-list", window_spec, "--first-parent").split()
+    before_window = len(full_chain) - len(commits)
+
+    records_rel = m.get("paths", {}).get("records", "")
+    records_dir = root / records_rel
+    named: set[str] = set()
+    for stages in load_records(records_dir).values():
+        for rec in stages.values():
+            sha = rec.get("sha")
+            if isinstance(sha, str):
+                named.add(sha)
+            for c in rec.get("commits", []) or []:
+                if isinstance(c, str):
+                    named.add(c)
+    record_commits = set(git(root, "rev-list", window_spec, "--first-parent",
+                             "--", records_rel).split()) if records_rel else set()
+    merges = set(git(root, "rev-list", window_spec, "--first-parent", "--merges").split())
+    boundary_paths = ((m.get("spec") or {}).get("boundary") or {}).get("paths") or []
+
+    # Every first-parent commit in the window is exactly one of three
+    # (issue #72): recorded (a record names it, or its diff touches
+    # paths.records), ordinary (a merge that doesn't), or unrecorded
+    # (anything else -- on a protected main with a queue, a non-merge
+    # commit is the only way a change arrives without the forge).
+    recorded, ordinary, unrecorded = [], [], []
+    ordinary_commits, unrecorded_commits = [], []
+    boundary_evasions = 0
+    for c in commits:
+        if c in named or c in record_commits:
+            recorded.append(c)
+        elif c in merges:
+            ordinary.append(c)
+            evasion = bool(boundary_paths and touches_boundary(root, c, boundary_paths))
+            if evasion:
+                boundary_evasions += 1
+            ordinary_commits.append({"sha": c, "subject": commit_subject(root, c),
+                                     "boundary_evasion": evasion})
+        else:
+            unrecorded.append(c)
+            unrecorded_commits.append({"sha": c, "subject": commit_subject(root, c)})
+
+    counts = f"{len(recorded)} recorded, {len(ordinary)} ordinary, {len(unrecorded)} unrecorded"
+    evasions = boundary_evasions if boundary_paths else "n/a"
+    extra = {"recorded": len(recorded), "ordinary": len(ordinary),
+             "unrecorded": len(unrecorded), "boundary_evasions": evasions,
+             "before_window": before_window,
+             "ordinary_commits": ordinary_commits, "unrecorded_commits": unrecorded_commits}
+    if unrecorded:
+        return p.fail(f"{unrecorded[-1][:12]} lacks a record; {counts}; boundary evasions: "
+                      f"{evasions}; before the window: {before_window}", **extra)
+    return p.hold(f"{counts}; boundary evasions: {evasions}; before the window: {before_window}",
+                  **extra)
+
+
+ADAPTER_EXIT_RE = re.compile(r"^\[adapter exited \d+\]$")
+
+
+def _log_owes_tool_error(log: str | None) -> bool:
+    """True when a log's last non-empty line is exactly an adapter-exit
+    marker and every line before it parses as JSON -- an adapter's own
+    event stream, never a tool's own words (issue #94's own specimen,
+    tenant zero's attest/records/659/verify-01.log: codex's
+    "thread.started" event, then nothing but "[adapter exited 1]" -- the
+    tool's real error line dropped before this reached the log, issue
+    #86's own bug in split_adapter_stdout). A log that is only the exit
+    marker, nothing before it at all, still owes the same line."""
+    if not log:
+        return False
+    lines = [l for l in log.splitlines() if l.strip()]
+    if not lines or not ADAPTER_EXIT_RE.match(lines[-1]):
+        return False
+    for l in lines[:-1]:
+        try:
+            json.loads(l)
+        except ValueError:
+            return False
+    return True
+
+
+def proof_no_stop_lacks_cause(root: Path, m: dict | None) -> Proof:
+    p = Proof("no-stop-lacks-cause", "no stop lacks its cause")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
+    records_rel = m.get("paths", {}).get("records", "")
+    records_dir = root / records_rel
+    if not records_dir.is_dir():
+        return p.fail(f"no records directory under {records_dir}")
+
+    # issue #89's own window lesson, proof three's already: a record
+    # before record_version 3 has no stop by construction (schema
+    # versions 1 and 2 predate it) -- counted here, never refused.
+    older = 0
+    checked = 0
+    problems: list[str] = []
+    for item_dir in sorted(d for d in records_dir.iterdir() if d.is_dir()):
+        for stage in STOP_STAGES:
+            for n, rec in sorted(parse_attempts(item_dir, stage).items()):
+                if rec.get("record_version", 1) < 3:
+                    older += 1
+                    continue
+                if rec.get("status") == "pass":
+                    continue
+                checked += 1
+                name = f"{stage}-{n:02d}"
+                stop = rec.get("stop")
+                if not stop:
+                    problems.append(f"item {item_dir.name} {name} carries no stop")
+                    continue
+                cls, provenance = stop.get("class"), stop.get("provenance")
+                if cls not in STOP_CLASSES:
+                    problems.append(f"item {item_dir.name} {name} stop.class {cls!r} names "
+                                    f"no enumerated class")
+                    continue
+                if provenance not in STOP_PROVENANCES:
+                    problems.append(f"item {item_dir.name} {name} stop.provenance "
+                                    f"{provenance!r} names no enumerated provenance")
+                    continue
+                if cls == "unclassed" and not stop.get("detail"):
+                    problems.append(f"item {item_dir.name} {name} is unclassed with no detail")
+                    continue
+                log_path = item_dir / f"{name}.log"
+                log = log_path.read_text() if log_path.is_file() else None
+                # Issue #89, rejection test 1's own specimen (tenant
+                # zero's #659 build-01): a failed build that actually ran
+                # the gates -- selected_tests is set only once cmd_build
+                # reaches them -- owes their heading in the log, whatever
+                # else stop already says.
+                if (stage == "build" and rec.get("status") == "failed"
+                        and rec.get("selected_tests") is not None
+                        and "--- attavo gates, iteration" not in (log or "")):
+                    problems.append(f"item {item_dir.name} {name} failed after the gates ran "
+                                    f"but its log carries no gates heading")
+                    continue
+                if _log_owes_tool_error(log):
+                    problems.append(f"item {item_dir.name} {name}'s log ends in an adapter "
+                                    f"exit with nothing before it but event lines; the tool's "
+                                    f"own error line is owed")
+
+        # issue #137: a refused spec-gate record is a stop too, class
+        # "gate" -- synthesized the same way item_stops and
+        # cmd_file_stops already read it, since cmd_spec_gate itself
+        # carries no stop field to check for one. No record_version
+        # gate here: unlike build/verify's own stop field, gate is never
+        # persisted, so there is no older shape that predates it.
+        for n, rec in sorted(parse_attempts(item_dir, "spec").items()):
+            if rec.get("status") != "refused":
+                continue
+            checked += 1
+            name = f"spec-{n:02d}"
+            stop = gate_stop(rec.get("refusal"))
+            cls, provenance = stop["class"], stop["provenance"]
+            if cls not in STOP_CLASSES:
+                problems.append(f"item {item_dir.name} {name} stop.class {cls!r} names "
+                                f"no enumerated class")
+                continue
+            if provenance not in STOP_PROVENANCES:
+                problems.append(f"item {item_dir.name} {name} stop.provenance "
+                                f"{provenance!r} names no enumerated provenance")
+                continue
+            if not stop.get("detail"):
+                problems.append(f"item {item_dir.name} {name} is a gate stop with no cause")
+
+    older_note = f"{older} record(s) before stop was recorded"
+    if problems:
+        return p.fail("; ".join(problems), older_records=older)
+    return p.hold(f"{checked} checked ({older_note})" if checked == 0
+                 else f"{checked} non-pass record(s) carry stop with a cause ({older_note})",
+                 older_records=older)
+
+
+def doctor(root: Path) -> list[Proof]:
+    m = read_manifest(root)
+    return [proof_every_gate_rejects(root, m),
+            proof_one_item_every_stage(root, m),
+            proof_no_commit_lacks_record(root, m),
+            proof_no_stop_lacks_cause(root, m)]
+
+
+def cmd_doctor(argv: list[str]) -> int:
+    as_json = "--json" in argv
+    args = [a for a in argv if a != "--json"]
+    root = Path(args[0] if args else ".").resolve()
+    proofs = doctor(root)
+    if as_json:
+        print(json.dumps({"root": str(root), "done": all(p.holds for p in proofs),
+                          "proofs": [p.as_dict() for p in proofs]}, indent=2))
+    else:
+        for i, p in enumerate(proofs, 1):
+            print(f"proof {i} {p.key}: {'HOLDS' if p.holds else 'FAILS'}: {p.reason}")
+        print("doctor: done" if all(p.holds for p in proofs)
+              else f"doctor: not done ({sum(not p.holds for p in proofs)} of "
+                   f"{len(proofs)} proofs fail)")
+    return 0 if all(p.holds for p in proofs) else 1
+
+
+# --- the spec contract ---
+
+def parse_spec(spec_md: Path) -> tuple[dict | None, str | None]:
+    lines = spec_md.read_text().splitlines()
+    heading_idx = [i for i, l in enumerate(lines) if l.startswith("## ")]
+    headings = [lines[i].rstrip() for i in heading_idx]
+    expected = ["## Problem", "## Claims", "## Criteria"]
+    if headings != expected:
+        bad = next((h for h in headings if h not in expected), None)
+        if bad is None:
+            missing = [h for h in expected if h not in headings]
+            bad = missing[0] if missing else "heading order"
+        return None, f"headings: found {headings or ['(none)']}, expected {expected} ({bad})"
+    idx_problem, idx_claims, idx_criteria = heading_idx
+    claims = [l.strip()[2:].strip() for l in lines[idx_claims + 1:idx_criteria]
+              if l.strip().startswith("- ")]
+    criteria = []
+    for l in lines[idx_criteria + 1:]:
+        s = l.strip()
+        if not s.startswith("- ") or ":" not in s:
+            continue
+        name = s[2:].split(":", 1)[0].strip()
+        criteria.append(name)
+    return {"claims": claims, "criteria": criteria}, None
+
+
+def run_criterion(exe: Path, cwd: Path) -> int:
+    try:
+        run = subprocess.run([str(exe)], cwd=str(cwd), capture_output=True,
+                             timeout=CRITERION_TIMEOUT, check=False)
+        return run.returncode
+    except subprocess.TimeoutExpired:
+        return 124
+    except OSError:
+        return 126
+
+
+def parse_removed(stub_dir: Path) -> list[str]:
+    """The paths listed in stub/.removed, one per line, comments (lines
+    starting with #) and blank lines ignored. [] when the stub carries no
+    .removed at all.
+    """
+    removed_file = stub_dir / ".removed"
+    if not removed_file.is_file():
+        return []
+    paths = []
+    for line in removed_file.read_text().splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        paths.append(s)
+    return paths
+
+
+def removed_path_refusal(root: Path, stub_dir: Path, rel: str) -> str | None:
+    p = Path(rel)
+    if p.is_absolute() or ".." in p.parts:
+        return f"stub/.removed names a path outside the tree: {rel}"
+    if not (root / p).exists():
+        return f"stub/.removed names a path not in the tree: {rel}"
+    if (stub_dir / p).exists():
+        return f"stub/.removed names a path the stub also supplies: {rel}"
+    return None
+
+
+def stub_removed_refusal(root: Path, spec_dir: Path) -> str | None:
+    """Validated by name, before any criterion runs -- a stub whose
+    .removed cannot be applied has no meaning to gate against.
+    """
+    stub_dir = spec_dir / "stub"
+    for rel in parse_removed(stub_dir):
+        refusal = removed_path_refusal(root, stub_dir, rel)
+        if refusal:
+            return refusal
+    return None
+
+
+def run_criteria(root: Path, spec_dir: Path, names: list[str]) -> list[dict]:
+    criteria_dir = spec_dir / "criteria"
+    stub_dir = spec_dir / "stub"
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = Path(tmp) / "tree"
+        stubbed = Path(tmp) / "stubbed"
+        shutil.copytree(root, tree, ignore=shutil.ignore_patterns(".git"))
+        shutil.copytree(root, stubbed, ignore=shutil.ignore_patterns(".git"))
+        if stub_dir.is_dir():
+            shutil.copytree(stub_dir, stubbed, dirs_exist_ok=True)
+            for rel in parse_removed(stub_dir):
+                target = stubbed / rel
+                if target.is_dir():
+                    shutil.rmtree(target)
+                elif target.exists():
+                    target.unlink()
+            removed_marker = stubbed / ".removed"
+            if removed_marker.exists():
+                removed_marker.unlink()
+        results = []
+        for name in names:
+            exe = criteria_dir / name
+            results.append({"name": name,
+                            "on_tree": run_criterion(exe, tree),
+                            "on_stub": run_criterion(exe, stubbed)})
+        return results
+
+
+def commit_postdates(root: Path, earlier: str, later: str) -> bool:
+    """Whether later is a strict descendant of earlier on this branch."""
+    if earlier == later:
+        return False
+    run = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", earlier, later],
+                         capture_output=True, check=False)
+    return run.returncode == 0
+
+
+def cmd_spec_gate(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attavo spec-gate: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo spec-gate: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    spec_dir = root / specs_rel / item_id
+    spec_md = spec_dir / "spec.md"
+    if not spec_md.is_file():
+        print(f"attavo spec-gate: no spec at {spec_dir}", file=sys.stderr)
+        return 2
+    spec_rel = str(Path(specs_rel) / item_id)
+    try:
+        spec_sha = last_commit_touching(root, spec_rel)
+    except ShallowCheckoutError as exc:
+        print(f"attavo spec-gate: refused: {exc}", file=sys.stderr)
+        return 2
+
+    records_dir = root / records_rel / item_id
+    try:
+        approved = approval_status(root, m, item_id) == "valid"
+    except ShallowCheckoutError as exc:
+        print(f"attavo spec-gate: refused: {exc}", file=sys.stderr)
+        return 2
+    latest_approval = latest_record(records_dir, "approval")
+    if approved:
+        record = {"sha": git(root, "rev-parse", "HEAD").strip(), "spec_sha": spec_sha,
+                  "at": now_iso(), "status": "approved",
+                  "approval_sha": latest_approval.get("sha") if latest_approval else None,
+                  "criteria": [], "refusal": None}
+        write_record(records_dir, "spec", record, m, item_id)
+        print("attavo spec-gate: approved (no criteria run)")
+        return 0
+
+    # Third verdict, beside "approved" and Phase 1's "pass": the approval
+    # is not valid, but a build already ran after it -- the amendment that
+    # expired the approval landed above the line, not below it, and the
+    # tree the build produced is what must satisfy the criteria now, not
+    # the stub that only ever proved they were reachable before approval.
+    # Issue #98: whatever the build's status, including a halt -- the
+    # executor commits then asks, so a halted build's sha postdating the
+    # approval means it did the work. commit_postdates already excludes a
+    # halt that committed nothing, since such a build's sha equals its
+    # start_sha and so postdates nothing.
+    latest_build = latest_record(records_dir, "build")
+    built = bool(
+        latest_approval and latest_build
+        and commit_postdates(root, latest_approval["sha"], latest_build["sha"]))
+
+    parsed, refusal = parse_spec(spec_md)
+    results: list[dict] = []
+    if refusal is None:
+        if built:
+            refusal = stub_removed_refusal(root, spec_dir)
+            if refusal is None:
+                # Per criterion, not the set: passing on the tree is what
+                # the build already satisfied; failing on the tree but
+                # passing on the stub is a new obligation the next build
+                # must meet -- an operator scripting a ruling the executor
+                # skipped. Refused only when a criterion satisfies neither.
+                results = run_criteria(root, spec_dir, parsed["criteria"])
+                fail = next((c for c in results if c["on_tree"] != 0 and c["on_stub"] != 0), None)
+                if fail:
+                    refusal = f"criterion fails against the tree plus stub: {fail['name']}"
+        elif not parsed["claims"]:
+            refusal = "claims: empty; the build may touch nothing"
+        else:
+            criteria_dir = spec_dir / "criteria"
+            listed = parsed["criteria"]
+            existing = sorted(p.name for p in criteria_dir.iterdir()) if criteria_dir.is_dir() else []
+            prose = None
+            for name in listed:
+                if name not in existing:
+                    prose = name
+                    break
+            if prose is None:
+                for name in existing:
+                    if name not in listed:
+                        prose = name
+                        break
+            if prose is None:
+                for name in listed:
+                    if not os.access(criteria_dir / name, os.X_OK):
+                        prose = name
+                        break
+            if prose:
+                refusal = f"criterion is prose: {prose}"
+            else:
+                refusal = stub_removed_refusal(root, spec_dir)
+                if refusal is None:
+                    results = run_criteria(root, spec_dir, listed)
+                    fail_tree = next((c for c in results if c["on_tree"] == 0), None)
+                    if fail_tree:
+                        refusal = f"criterion passes against the tree: {fail_tree['name']}"
+                    else:
+                        fail_stub = next((c for c in results if c["on_stub"] != 0), None)
+                        if fail_stub:
+                            refusal = f"criterion fails against the tree plus stub: {fail_stub['name']}"
+
+    status = "refused" if refusal else ("built" if built else "pass")
+    record = {"sha": git(root, "rev-parse", "HEAD").strip(),
+              "spec_sha": spec_sha,
+              "at": now_iso(), "status": status, "approval_sha": None,
+              "criteria": results, "refusal": refusal}
+    write_record(records_dir, "spec", record, m, item_id)
+
+    if refusal:
+        print(f"attavo spec-gate: refused: {refusal}")
+        return 1
+    print(f"attavo spec-gate: {status} ({len(results)} criterion/criteria)")
+    return 0
+
+
+# --- approval, bound to a commit ---
+
+def cmd_approve(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    by = None
+    positional: list[str] = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--by":
+            by = argv[i + 1] if i + 1 < len(argv) else None
+            i += 2
+        else:
+            positional.append(argv[i])
+            i += 1
+    item_id = positional[0] if positional else derive_item_id(root)
+    if not item_id:
+        print("attavo approve: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    if not by:
+        print("attavo approve: --by LOGIN is required", file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo approve: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    spec_rel = str(Path(specs_rel) / item_id)
+    try:
+        spec_sha_now = last_commit_touching(root, spec_rel)
+    except ShallowCheckoutError as exc:
+        print(f"attavo approve: refused: {exc}", file=sys.stderr)
+        return 2
+    records_dir = root / records_rel / item_id
+    latest_spec = latest_record(records_dir, "spec")
+    approvers = ((m.get("operators") or {}).get("approvers")) or []
+
+    refusal = None
+    if latest_spec is None or latest_spec.get("status") not in ("pass", "built"):
+        refusal = f"no passing spec-gate record for item {item_id}"
+    elif latest_spec.get("spec_sha") != spec_sha_now:
+        refusal = (f"spec-gate record is stale: recorded {latest_spec.get('spec_sha')}, "
+                   f"spec now at {spec_sha_now}")
+    elif by not in approvers:
+        refusal = f"{by} is not in [operators].approvers"
+
+    if refusal:
+        print(f"attavo approve: refused: {refusal}")
+        return 1
+
+    record = {"sha": git(root, "rev-parse", "HEAD").strip(), "spec_sha": spec_sha_now,
+              "approved_by": by, "at": now_iso()}
+    write_record(records_dir, "approval", record, m, item_id)
+    print(f"attavo approve: item {item_id} approved by {by}")
+    return 0
+
+
+def approval_status(root: Path, m: dict, item_id: str) -> str:
+    """"absent", "expired", or "valid": whether the latest approval record
+    for item_id still binds to the spec's current commit. Raises
+    ShallowCheckoutError on a shallow checkout, same as last_commit_touching.
+    Shared by cmd_approval_status and cmd_build so build refuses on exactly
+    what `attavo approval-status` would print.
+    """
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    spec_rel = str(Path(specs_rel) / item_id)
+    spec_sha_now = last_commit_touching(root, spec_rel)
+    records_dir = root / records_rel / item_id
+    latest_approval = latest_record(records_dir, "approval")
+
+    if latest_approval is None:
+        return "absent"
+    if latest_approval.get("spec_sha") == spec_sha_now:
+        return "valid"
+    return "expired"
+
+
+def cmd_approval_status(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attavo approval-status: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo approval-status: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    try:
+        status = approval_status(root, m, item_id)
+    except ShallowCheckoutError as exc:
+        print(f"attavo approval-status: refused: {exc}", file=sys.stderr)
+        return 2
+
+    print(status)
+    return 0 if status == "valid" else 1
+
+
+# --- build: adapter, claims boundary, criteria, and the tenant's tests ---
+
+STAGE_NAMES = ("build", "verify", "counsel")
+
+
+def merge_adapter_config(m: dict, adapter_name: str, stage: str) -> dict:
+    """[executor.<adapter>] merged with [executor.<adapter>.<stage>], the
+    stage table shadowing the parent for that stage only. Both build and
+    verify call this before setting ATTAVO_ADAPTER_CONFIG, and the
+    record's adapter_config is the merged result."""
+    parent = (m.get("executor") or {}).get(adapter_name) or {}
+    if not isinstance(parent, dict):
+        return {}
+    merged = {k: v for k, v in parent.items() if k not in STAGE_NAMES}
+    stage_table = parent.get(stage)
+    if isinstance(stage_table, dict):
+        merged.update(stage_table)
+    return merged
+
+
+def resolve_adapter(root: Path, name: str) -> Path | None:
+    """adapters/<name>/run, resolved first under the tenant's own
+    attavo/adapters/, then under this product's adapters/."""
+    for base in (root / "attavo" / "adapters", PRODUCT_ROOT / "adapters"):
+        candidate = base / name / "run"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def adapter_reports(adapter_path: Path) -> list[str]:
+    """Field names adapters/<name>/conformance.json declares this adapter
+    can supply with a real value -- vendor independence (2026-09-09
+    ruling): the record carries the declaration, so an adapter claiming
+    a field and returning null for it fails the conformance suite
+    instead of writing a silent, uncomparable null. [] when the
+    resolved adapter (a tenant override included) declares no
+    conformance.json at all -- an absent declaration, not a refusal."""
+    manifest_path = adapter_path.parent / "conformance.json"
+    if not manifest_path.is_file():
+        return []
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError:
+        return []
+    return manifest.get("reports", [])
+
+
+def changed_paths(root: Path, start_sha: str, records_rel: str) -> list[str]:
+    """Paths changed between start_sha and HEAD, other than paths.records --
+    the records directory is where build itself writes, not a claim."""
+    out = git(root, "diff", "--name-only", start_sha, "HEAD").splitlines()
+    prefix = records_rel.rstrip("/") + "/"
+    return [p for p in out if p and p != records_rel and not p.startswith(prefix)]
+
+
+def matches_a_claim(path: str, claims: list[str]) -> bool:
+    return any(fnmatch.fnmatch(path, pattern) for pattern in claims)
+
+
+def protected_path_touched(root: Path, start_sha: str, records_rel: str,
+                           specs_rel: str) -> str | None:
+    """The first path an executor's own commits touched under
+    paths.records or paths.specs since start_sha, or None (issue #140).
+    Neither directory is a claim a spec can make -- paths.records is
+    where the product itself writes, paths.specs is the definition of
+    done -- yet changed_paths above excludes paths.records from the
+    ordinary claims check entirely, so a path there never even reached
+    matches_a_claim to be refused: tenant zero's own item #688 committed
+    its own events file this way, under its records directory, on a
+    build that then passed. Checked directly against the raw diff, not
+    changed_paths's already-filtered list."""
+    touched = git(root, "diff", "--name-only", start_sha, "HEAD").splitlines()
+    protected = []
+    for rel in (records_rel, specs_rel):
+        stripped = rel.rstrip("/")
+        protected.append((stripped, stripped + "/"))
+    for p in touched:
+        if not p:
+            continue
+        for exact, prefix in protected:
+            if p == exact or p.startswith(prefix):
+                return p
+    return None
+
+
+def executor_identity(adapter_name: str) -> dict:
+    """The executor's identity (issue #33): set by the product, never the
+    tenant's git config, so an executor commit is never indistinguishable
+    from an operator's own -- the specimen is attavo/code-factory@e22fa85.
+    A reserved, undeliverable domain (.invalid) so no mailbox is implied.
+    Distinct from the records app identity: the app says the product
+    pushed this, this says an invocation authored this -- different
+    facts, neither borrows the other's name."""
+    return {"name": f"attavo executor ({adapter_name})",
+            "email": f"executor+{adapter_name}@attavo.invalid"}
+
+
+def driver_identity() -> dict:
+    """The driver's identity: set by the product, never the tenant's git
+    config, so a driver's own transport commit -- a record commit
+    `commit_record` makes on the driver's behalf -- is never
+    indistinguishable from an operator's own; `git log --author='attavo
+    driver'` on a driven item lists exactly those commits. Distinct from
+    executor_identity: that names an adapter invocation's own commits,
+    this names the transport that carries a stage's record."""
+    return {"name": "attavo driver", "email": "driver@attavo.invalid"}
+
+
+# The stop classes issue #89 gave no code of their own beyond the guard
+# that raised them -- non-question and outlived-invocation from an
+# adapter's own pre-emptive refusal, forge-unconcluded from a returned
+# verify, ceiling from a declared-input-limit error, claims-boundary from
+# the write-outside-claims refusal, repeated-act from... the same shape,
+# environment from cmd_build's own [checks].command preflight (issue
+# #115). question (a person's to answer) and the residual (no-cause,
+# unclassed -- nobody has looked yet) are not in this tuple; attavo stops
+# (issue #129) is the one reader, so it lives beside driver_identity,
+# not beside derive_stop, which never needs to tell a guard from any
+# other class once it has already named one.
+GUARDED_STOP_CLASSES = ("non-question", "outlived-invocation", "forge-unconcluded", "ceiling",
+                        "claims-boundary", "repeated-act", "environment")
+
+
+def stop_class_enum() -> tuple[str, ...]:
+    """Every class a stop can name, read from the build record schema's own
+    enum (issue #129) rather than retyped -- STOP_CLASSES already drifted
+    once (environment arrived in the schema before anything but derive_stop
+    read it); a second copy is a second place to forget. build's schema is
+    read, not verify's: verify's own enum is a strict subset (it never
+    raises environment, cmd_build's own preflight alone)."""
+    schema = stage_schema("build")
+    return tuple(schema["properties"]["stop"]["properties"]["class"]["enum"])
+
+
+def commits_since(root: Path, start_sha: str, end: str = "HEAD") -> list[dict]:
+    """(sha, name, email) for every commit after start_sha up to and
+    including end, first-parent only, oldest first. cmd_build's own call
+    (start_sha at the invocation, end left at the default HEAD) never sees
+    a merge in that window, so --first-parent changes nothing there;
+    issue #128's ledger is the caller that needs it, to walk one branch's
+    own line without a concurrent merge to main expanding into every
+    commit main gained meanwhile."""
+    out = git(root, "log", "--first-parent", "--reverse",
+             "--format=%H\x1f%an\x1f%ae", f"{start_sha}..{end}")
+    commits = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        sha, name, email = line.split("\x1f")
+        commits.append({"sha": sha, "name": name, "email": email})
+    return commits
+
+
+def split_adapter_stdout(stdout: str) -> tuple[str, dict | None]:
+    """(transcript, payload): the adapter's last non-empty stdout line is
+    its JSON report, and everything before it is transcript, only when
+    that last line actually parses as JSON. When it does not -- a tool's
+    own error line printed last on a non-zero exit (issue #86: tenant
+    zero attest/records/659/verify-01.log, codex's own "Input exceeds..."
+    line, dropped because it was mistaken for an attempted payload) --
+    nothing here is a report, and the whole stdout is the transcript, so
+    that last line is not silently lost.
+    """
+    lines = stdout.splitlines()
+    non_empty = [i for i, l in enumerate(lines) if l.strip()]
+    if not non_empty:
+        return stdout, None
+    last = non_empty[-1]
+    try:
+        payload = json.loads(lines[last])
+    except ValueError:
+        return stdout, None
+    transcript = "\n".join(lines[:last])
+    return transcript, payload
+
+
+# --- events: the adapter contract's one optional output (issue #26) --
+# an uncommitted <stage>-NN.events.jsonl the screen tails while a stage
+# runs, never a record and never committed (commit_record names only
+# .json, .log, and .filed; this suffix is never among them). Written
+# under the checkout's own git directory, not the working tree (issue
+# #140): tenant zero's own item #688 committed its events file for
+# real -- the executor's own commit staged it, because it sat inside
+# the tree the executor runs `git status` against. ---
+
+EVENT_TEXT_MAX_CHARS = 400
+
+
+def stage_events_dir(root: Path) -> Path:
+    """<git-dir>/attavo, absolute -- <checkout>/.git/attavo for an
+    ordinary checkout, <main-repo>/.git/worktrees/<name>/attavo for a
+    linked worktree (issue #140). Outside the working tree either way,
+    so a file written here never appears in `git status` in root and is
+    never at risk of being staged and committed by the executor; the
+    screen's seam finds it the same way, with the same command, in its
+    own worktree."""
+    git_dir = Path(git(root, "rev-parse", "--absolute-git-dir").strip())
+    events_dir = git_dir / "attavo"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    return events_dir
+
+
+def append_event(events_path: Path, kind: str, text: str) -> None:
+    """One {at, kind, text} JSON line appended to events_path and flushed
+    at once (open-write-close, not a kept handle) -- the screen tails
+    this file while the stage is still running, so a line held in a
+    buffer is a line the feed does not move on. text is collapsed to one
+    line and capped at EVENT_TEXT_MAX_CHARS: a tool result can be a whole
+    file, and the feed renders lines, not files."""
+    line = {"at": now_iso(), "kind": kind,
+            "text": " ".join(text.split())[:EVENT_TEXT_MAX_CHARS]}
+    with events_path.open("a") as fh:
+        fh.write(json.dumps(line) + "\n")
+
+
+def cmd_build(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attavo build: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo build: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    adapter_name = (m.get("executor") or {}).get("build")
+    if not adapter_name:
+        print("attavo build: refused: no [executor].build in the manifest")
+        return 1
+
+    tests_cfg = m.get("tests") or {}
+    if not tests_cfg.get("select") or not tests_cfg.get("run"):
+        print("attavo build: refused: no [tests] table in the manifest "
+              "([tests].select and [tests].run are both required)")
+        return 1
+
+    try:
+        status = approval_status(root, m, item_id)
+    except ShallowCheckoutError as exc:
+        print(f"attavo build: refused: {exc}", file=sys.stderr)
+        return 2
+    if status != "valid":
+        print(f"attavo build: refused: approval is {status}")
+        return 1
+
+    adapter_path = resolve_adapter(root, adapter_name)
+    if adapter_path is None:
+        print(f"attavo build: refused: no adapter named {adapter_name!r}")
+        return 1
+
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    spec_dir = root / specs_rel / item_id
+    item_records_dir = root / records_rel / item_id
+    spec_sha = last_commit_touching(root, str(Path(specs_rel) / item_id))
+    latest_approval = latest_record(item_records_dir, "approval")
+    parsed, _ = parse_spec(spec_dir / "spec.md")
+    claims = parsed["claims"] if parsed else []
+    criteria_names = parsed["criteria"] if parsed else []
+    adapter_config = merge_adapter_config(m, adapter_name, "build")
+    checks_command = (m.get("checks") or {}).get("command")
+    identity = executor_identity(adapter_name)
+    reports = adapter_reports(adapter_path)
+
+    start_sha = git(root, "rev-parse", "HEAD").strip()
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    started = time.monotonic()
+
+    # Issue #115: the tenant's whole-tree checks run once here, on the
+    # approved tree, before the adapter is ever invoked -- exit 2 means
+    # the command itself cannot run (e.g. a missing import at test
+    # collection, item #106's build-01), not a failing check, and no
+    # build could have passed against it. Exit 0 or 1 -- the checks run
+    # and pass or fail, the expected states before a build -- proceeds;
+    # the per-iteration checks below run (and are recorded) exactly as
+    # before.
+    if checks_command:
+        preflight = subprocess.run(checks_command, shell=True, cwd=str(root),
+                                   capture_output=True, text=True, check=False)
+        if preflight.returncode == 2:
+            detail = _log_last_line(preflight.stdout + "\n" + preflight.stderr)
+            record = {
+                "sha": start_sha,
+                "start_sha": start_sha,
+                "spec_sha": spec_sha,
+                "approval_sha": latest_approval.get("sha") if latest_approval else None,
+                "at": now_iso(),
+                "adapter": adapter_name,
+                "adapter_config": adapter_config,
+                "executor_identity": identity,
+                "reports": reports,
+                "adapter_version": None,
+                "model": None,
+                "model_version": None,
+                "iterations": 1,
+                "criteria": [],
+                "selected_tests": None,
+                "checks": {"command": checks_command, "exit": preflight.returncode},
+                "tokens": {"input": 0, "output": 0},
+                "cost_usd": None,
+                "wall_clock_s": round(time.monotonic() - started, 3),
+                "status": "refused",
+                "refusal": "[checks].command exited 2 on the approved tree",
+                "halted": None,
+                "stop": {"class": "environment", "provenance": "tenant", "detail": detail},
+            }
+            record_path = write_record(item_records_dir, "build", record, m, item_id,
+                                       log=preflight.stdout + preflight.stderr)
+            print(f"attavo build: refused ({record_path.name})")
+            return 1
+
+    adapter_version = model = model_version = None
+    tokens = {"input": 0, "output": 0}
+    cost_usd = None
+    transcripts: list[str] = []
+    criteria_results: list[dict] = []
+    selected_tests: dict | None = None
+    checks_result: dict | None = None
+    status_out = "failed"
+    refusal = None
+    refusal_provenance = None
+    halted = None
+    iterations_used = 0
+
+    events_path = stage_events_dir(root) / f"build-{next_attempt_number(item_records_dir, 'build'):02d}.events.jsonl"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        feedback_path = Path(tmp) / "feedback.txt"
+        feedback_path.write_text("")
+
+        for iteration in range(1, BUILD_ITERATION_BUDGET + 1):
+            iterations_used = iteration
+            append_event(events_path, "iteration", f"iteration {iteration} of {BUILD_ITERATION_BUDGET}")
+            env = dict(os.environ)
+            env["ATTAVO_SPEC_DIR"] = str(spec_dir)
+            env["ATTAVO_RECORDS_DIR"] = str(item_records_dir)
+            env["ATTAVO_RULINGS"] = str(root / m["paths"]["rulings"])
+            env["ATTAVO_BRANCH"] = branch
+            env["ATTAVO_ITERATION"] = str(iteration)
+            env["ATTAVO_FEEDBACK"] = str(feedback_path)
+            env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(adapter_config)
+            env["ATTAVO_STAGE"] = "build"
+            env["ATTAVO_EVENTS"] = str(events_path)
+            if checks_command:
+                env["ATTAVO_CHECKS_COMMAND"] = checks_command
+            env["GIT_AUTHOR_NAME"] = identity["name"]
+            env["GIT_AUTHOR_EMAIL"] = identity["email"]
+            env["GIT_COMMITTER_NAME"] = identity["name"]
+            env["GIT_COMMITTER_EMAIL"] = identity["email"]
+
+            run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
+                                 capture_output=True, text=True, check=False)
+            transcript, payload = split_adapter_stdout(run.stdout)
+            if run.returncode != 0:
+                # The guarantee behind issue #53's refusal: an adapter that
+                # exits non-zero always leaves a non-empty log, even one
+                # that printed nothing at all on stderr.
+                detail = f"[adapter exited {run.returncode}]"
+                if run.stderr.strip():
+                    detail += "\n" + run.stderr.rstrip("\n")
+                transcript = (transcript + "\n" if transcript else "") + detail
+            transcripts.append(transcript)
+
+            if run.returncode != 0 or payload is None or not payload.get("model"):
+                status_out = "failed"
+                break
+
+            adapter_version = payload.get("adapter_version")
+            model = payload.get("model")
+            model_version = payload.get("model_version")
+            tok = payload.get("tokens") or {}
+            tokens["input"] += tok.get("input", 0) or 0
+            tokens["output"] += tok.get("output", 0) or 0
+            iter_cost = payload.get("cost_usd")
+            if iter_cost is not None:
+                cost_usd = (cost_usd or 0) + iter_cost
+
+            if payload.get("status") == "question":
+                status_out = "halted"
+                halted = {"question": payload.get("question")}
+                break
+
+            foreign = next((c for c in commits_since(root, start_sha)
+                           if c["name"] != identity["name"] or c["email"] != identity["email"]),
+                          None)
+            if foreign:
+                status_out = "refused"
+                refusal = f"commit {foreign['sha']} not authored by the executor"
+                break
+
+            protected = protected_path_touched(root, start_sha, records_rel, specs_rel)
+            if protected:
+                status_out = "refused"
+                refusal = protected
+                refusal_provenance = "executor"
+                break
+
+            touched = sorted(changed_paths(root, start_sha, records_rel))
+            bad_path = next((p for p in touched if not matches_a_claim(p, claims)), None)
+            if bad_path:
+                status_out = "refused"
+                refusal = bad_path
+                break
+
+            criteria_results = [
+                {"name": name, "exit": run_criterion(spec_dir / "criteria" / name, root)}
+                for name in criteria_names]
+            for c in criteria_results:
+                append_event(events_path, "gate", f"{c['name']}: exit {c['exit']}")
+
+            select_in = "".join(p + "\n" for p in touched)
+            select_run = subprocess.run(tests_cfg["select"], shell=True, cwd=str(root),
+                                        input=select_in, capture_output=True,
+                                        text=True, check=False)
+            identifiers = [l for l in select_run.stdout.splitlines() if l.strip()]
+            run_in = "".join(i + "\n" for i in identifiers)
+            test_run = subprocess.run(tests_cfg["run"], shell=True, cwd=str(root),
+                                      input=run_in, capture_output=True,
+                                      text=True, check=False)
+            selected_tests = {"select": tests_cfg["select"], "run": tests_cfg["run"],
+                              "count": len(identifiers), "exit": test_run.returncode}
+
+            checks_run = None
+            if checks_command:
+                checks_run = subprocess.run(checks_command, shell=True, cwd=str(root),
+                                            capture_output=True, text=True, check=False)
+                checks_result = {"command": checks_command, "exit": checks_run.returncode}
+
+            # Issue #89, rejection test 1: the gate output that decides pass
+            # or fail is appended to the build log itself, under a heading
+            # per iteration, before this temporary directory goes away --
+            # tenant zero's #576 build-11 and #659 build-01 are a failed
+            # record with nothing beside it to say what was red, because
+            # this output previously lived only in feedback.txt, in a
+            # tempfile.TemporaryDirectory() cmd_build deletes on return.
+            gate_lines = [f"criterion {c['name']}: exit {c['exit']}" for c in criteria_results]
+            gate_lines.append(f"selected tests ({selected_tests['count']}): exit "
+                              f"{selected_tests['exit']}")
+            if test_run.stdout.strip():
+                gate_lines += ["--- selected tests stdout ---", test_run.stdout.rstrip("\n")]
+            if test_run.stderr.strip():
+                gate_lines += ["--- selected tests stderr ---", test_run.stderr.rstrip("\n")]
+            if checks_run is not None:
+                tail = (checks_run.stdout.splitlines() + checks_run.stderr.splitlines())
+                tail = tail[-CHECKS_FEEDBACK_TAIL_LINES:]
+                gate_lines.append(f"tenant checks: exit {checks_run.returncode}")
+                gate_lines += ["--- checks output (tail) ---", *tail]
+            transcripts[-1] += (f"\n--- attavo gates, iteration {iteration} ---\n"
+                               + "\n".join(gate_lines))
+
+            failing = [c for c in criteria_results if c["exit"] != 0]
+            checks_ok = checks_run is None or checks_run.returncode == 0
+            if not failing and test_run.returncode == 0 and checks_ok:
+                status_out = "pass"
+                break
+
+            if iteration == BUILD_ITERATION_BUDGET:
+                status_out = "failed"
+                break
+
+            feedback_lines = []
+            if failing:
+                feedback_lines.append("criteria failing:")
+                feedback_lines += [f"- {c['name']}: exit {c['exit']}" for c in failing]
+            if test_run.returncode != 0:
+                feedback_lines += [f"test run exit {test_run.returncode}",
+                                   "--- stdout ---", test_run.stdout,
+                                   "--- stderr ---", test_run.stderr]
+            if checks_run is not None and checks_run.returncode != 0:
+                tail = (checks_run.stdout.splitlines() + checks_run.stderr.splitlines())
+                tail = tail[-CHECKS_FEEDBACK_TAIL_LINES:]
+                feedback_lines += [f"checks exit {checks_run.returncode}",
+                                   "--- checks output (tail) ---", *tail]
+            feedback_path.write_text("\n".join(feedback_lines) + "\n")
+
+    record = {
+        "sha": git(root, "rev-parse", "HEAD").strip(),
+        "start_sha": start_sha,
+        "spec_sha": spec_sha,
+        "approval_sha": latest_approval.get("sha") if latest_approval else None,
+        "at": now_iso(),
+        "adapter": adapter_name,
+        "adapter_config": adapter_config,
+        "executor_identity": identity,
+        "reports": reports,
+        "adapter_version": adapter_version,
+        "model": model,
+        "model_version": model_version,
+        "iterations": iterations_used,
+        "criteria": criteria_results,
+        "selected_tests": selected_tests,
+        "checks": checks_result,
+        "tokens": tokens,
+        "cost_usd": cost_usd,
+        "wall_clock_s": round(time.monotonic() - started, 3),
+        "status": status_out,
+        "refusal": refusal,
+        "halted": halted,
+        "stop": derive_stop(status_out, refusal=refusal, halted=halted,
+                            log="\n".join(transcripts),
+                            report_class=(payload or {}).get("class"),
+                            refusal_provenance=refusal_provenance),
+    }
+    record_path = write_record(item_records_dir, "build", record, m, item_id,
+                               log="\n".join(transcripts))
+
+    print(f"attavo build: {status_out} ({record_path.name})")
+    if status_out == "halted":
+        return BUILD_HALT_EXIT
+    return 0 if status_out == "pass" else 1
+
+
+# --- verify: the forge's own read first, a judge only once it is green ---
+
+FORGE_OK_CONCLUSIONS = {"success", "neutral", "skipped"}
+# issue #84: a concluded check's second token is a conclusion --
+# FORGE_OK_CONCLUSIONS, or another concluded one such as failure,
+# cancelled, or timed_out; an unconcluded check's is a status instead,
+# one of these. drive's own poll (poll_forge_checks) is the one reader
+# that needs to tell a still-running check apart from a concluded, not-ok
+# one -- read_forge_checks itself only ever needed "green or not".
+FORGE_UNCONCLUDED_STATUSES = {"queued", "in_progress", "pending", "waiting"}
+
+
+def read_forge_checks(root: Path, checks_command: str, sha: str) -> dict:
+    """Runs the tenant's [forge].checks_command on sha; the product does
+    not know what forge that command reads. One line per check as
+    "<name> <conclusion>"; a command that fails to run, or any conclusion
+    other than success/neutral/skipped, is not green."""
+    run = subprocess.run(f"{checks_command} {shlex.quote(sha)}", shell=True, cwd=str(root),
+                         capture_output=True, text=True, check=False)
+    conclusions = []
+    for line in run.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.rsplit(" ", 1)
+        if len(parts) == 2:
+            conclusions.append({"name": parts[0], "conclusion": parts[1]})
+    # A commit the forge has no record of is not green -- it is unread.
+    # The executor's own commit is exactly this: the forge attaches
+    # checks to a pull request's head, and that commit stops being the
+    # head the moment a record commit lands on top of it. all() over an
+    # empty list is True, which is why this is spelled out rather than
+    # implied by the loop above.
+    ok = run.returncode == 0 and bool(conclusions) and all(
+        c["conclusion"] in FORGE_OK_CONCLUSIONS for c in conclusions)
+    return {"command": checks_command, "sha": sha, "conclusions": conclusions}, ok
+
+
+def diff_since_approval(root: Path, approval_sha: str | None) -> tuple[str, str | None]:
+    """(diff_text, refusal): the item's own work since approval, not
+    everything merged onto the branch since then (issue #52) -- a
+    three-dot diff against approval_sha itself is not enough, since
+    approval_sha is already an ancestor of HEAD in the normal flow and
+    merge-base(approval_sha, HEAD) is just approval_sha again (verified
+    empirically, see issue #52). Diffing from the merge-base of HEAD and
+    the remote's default branch instead excludes content that arrived by
+    merging that branch in, because that content is already present on
+    both sides of the merge base. refs/remotes/origin/HEAD is what names
+    the default branch without hard-coding "main"; when it is not set,
+    there is nothing to diff against and this refuses rather than guess.
+    ("", None) when approval_sha is falsy -- nothing to diff from at all.
+    Shared by cmd_verify and cmd_counsel, which both hand an adapter this
+    same diff."""
+    if not approval_sha:
+        return "", None
+    symref = subprocess.run(
+        ["git", "-C", str(root), "symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
+        capture_output=True, text=True, check=False)
+    if symref.returncode != 0:
+        return "", "refs/remotes/origin/HEAD is not set; run `git remote set-head origin -a`"
+    diff_base = git(root, "merge-base", symref.stdout.strip(), "HEAD").strip()
+    return git(root, "diff", diff_base, "HEAD"), None
+
+
+def cmd_verify(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attavo verify: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo verify: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    item_records_dir = root / records_rel / item_id
+
+    latest_build = latest_record(item_records_dir, "build")
+    if latest_build is None:
+        print(f"attavo verify: refused: no build record for item {item_id}")
+        return 1
+    if latest_build.get("status") != "pass":
+        print(f"attavo verify: refused: latest build record is "
+              f"{latest_build.get('status')!r}, not pass")
+        return 1
+
+    forge_cfg = m.get("forge") or {}
+    checks_command = forge_cfg.get("checks_command")
+    if not checks_command:
+        print("attavo verify: refused: no [forge].checks_command in the manifest")
+        return 1
+
+    build_sha = latest_build["sha"]
+    build_record_path = latest_attempt_path(item_records_dir, "build")
+    started = time.monotonic()
+    head_sha = git(root, "rev-parse", "HEAD").strip()
+    # The forge attaches checks to a pull request's head, not to the
+    # executor's own commit -- that commit stops being the head the
+    # moment a record commit lands on top of it (issue #44). Reading the
+    # forge on head_sha is what the forge actually checked and what will
+    # be merged; build_sha and forge_checks["sha"] can differ, and both
+    # are kept on the record rather than one sha serving two purposes.
+    forge_checks, forge_ok = read_forge_checks(root, checks_command, head_sha)
+
+    if not forge_ok:
+        record = {
+            "sha": head_sha,
+            "build_sha": build_sha,
+            "build_record": build_record_path.stem if build_record_path else None,
+            "approval_sha": latest_build.get("approval_sha"),
+            "at": now_iso(),
+            "adapter": None, "adapter_config": {}, "adapter_version": None,
+            "model": None, "model_version": None,
+            "reports": [],
+            "forge_checks": forge_checks,
+            "findings": None,
+            "tests_named": [],
+            "commits": [],
+            "mutation": None, "weak_stub": False, "stub_ratio": None,
+            "tokens": {"input": 0, "output": 0}, "cost_usd": None,
+            "wall_clock_s": round(time.monotonic() - started, 3),
+            "status": "returned",
+            "stop": derive_stop("returned"),
+        }
+        record_path = write_record(item_records_dir, "verify", record, m, item_id)
+        print(f"attavo verify: returned ({record_path.name}); the forge checks are not green")
+        return 0
+
+    executor = m.get("executor") or {}
+    adapter_name = executor.get("verify") or executor.get("build")
+    if not adapter_name:
+        print("attavo verify: refused: no [executor].verify or [executor].build in the manifest")
+        return 1
+    adapter_path = resolve_adapter(root, adapter_name)
+    if adapter_path is None:
+        print(f"attavo verify: refused: no adapter named {adapter_name!r}")
+        return 1
+
+    adapter_config = merge_adapter_config(m, adapter_name, "verify")
+    reports = adapter_reports(adapter_path)
+    approval_sha = latest_build.get("approval_sha")
+    spec_dir = root / specs_rel / item_id
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+
+    diff_text, diff_refusal = diff_since_approval(root, approval_sha)
+    if diff_refusal:
+        print(f"attavo verify: refused: {diff_refusal}")
+        return 1
+
+    events_path = stage_events_dir(root) / f"verify-{next_attempt_number(item_records_dir, 'verify'):02d}.events.jsonl"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        diff_path = Path(tmp) / "diff.patch"
+        diff_path.write_text(diff_text)
+
+        env = dict(os.environ)
+        env["ATTAVO_SPEC_DIR"] = str(spec_dir)
+        env["ATTAVO_RECORDS_DIR"] = str(item_records_dir)
+        env["ATTAVO_RULINGS"] = str(root / m["paths"]["rulings"])
+        env["ATTAVO_BRANCH"] = branch
+        env["ATTAVO_STAGE"] = "verify"
+        env["ATTAVO_DIFF"] = str(diff_path)
+        env["ATTAVO_BUILD_RECORD"] = str(build_record_path) if build_record_path else ""
+        env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(adapter_config)
+        env["ATTAVO_EVENTS"] = str(events_path)
+
+        run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
+                             capture_output=True, text=True, check=False)
+        transcript, payload = split_adapter_stdout(run.stdout)
+        if run.returncode != 0:
+            # Same guarantee as cmd_build's, issue #53: a non-zero adapter
+            # exit always leaves a non-empty log.
+            detail = f"[adapter exited {run.returncode}]"
+            if run.stderr.strip():
+                detail += "\n" + run.stderr.rstrip("\n")
+            transcript = (transcript + "\n" if transcript else "") + detail
+
+    # Verify is a report, not a commit (issue #46): the adapter is invoked
+    # on the branch head it was handed, and must leave that head alone.
+    # Checked by comparing the head before the invocation (head_sha,
+    # already read above for the forge) against the head after it.
+    post_adapter_head = git(root, "rev-parse", "HEAD").strip()
+    commits: list[str] = []
+    if post_adapter_head != head_sha:
+        commits = git(root, "rev-list", f"{head_sha}..{post_adapter_head}", "--reverse").split()
+
+    status_out = "failed"
+    findings = None
+    tests_named: list[str] = []
+    model = model_version = adapter_version_out = None
+    tokens = {"input": 0, "output": 0}
+    cost_usd = None
+
+    if run.returncode == 0 and payload is not None and payload.get("model"):
+        model = payload.get("model")
+        model_version = payload.get("model_version")
+        adapter_version_out = payload.get("adapter_version")
+        tok = payload.get("tokens") or {}
+        tokens = {"input": tok.get("input", 0) or 0, "output": tok.get("output", 0) or 0}
+        cost_usd = payload.get("cost_usd")
+        # "findings" absent (or explicitly null) is not the same as an
+        # empty list: the adapter had no channel to report one at all,
+        # which is not a clean bill of health (issue #46). A commit
+        # during verify fails the attempt regardless of what it reported.
+        if not commits and "findings" in payload and payload["findings"] is not None:
+            findings = payload["findings"]
+            tests_named = payload.get("tests_named") or []
+            status_out = "pass"
+
+    record = {
+        "sha": head_sha,
+        "build_sha": build_sha,
+        "build_record": build_record_path.stem if build_record_path else None,
+        "approval_sha": approval_sha,
+        "at": now_iso(),
+        "adapter": adapter_name,
+        "adapter_config": adapter_config,
+        "adapter_version": adapter_version_out,
+        "model": model,
+        "model_version": model_version,
+        "reports": reports,
+        "forge_checks": forge_checks,
+        "findings": findings,
+        "tests_named": tests_named,
+        "commits": commits,
+        "mutation": None, "weak_stub": False, "stub_ratio": None,
+        "tokens": tokens,
+        "cost_usd": cost_usd,
+        "wall_clock_s": round(time.monotonic() - started, 3),
+        "status": status_out,
+        "stop": derive_stop(status_out, log=transcript,
+                            report_class=(payload or {}).get("class")),
+    }
+    record_path = write_record(item_records_dir, "verify", record, m, item_id, log=transcript)
+
+    print(f"attavo verify: {status_out} ({record_path.name})")
+    return 0 if status_out == "pass" else 1
+
+
+# --- counsel: a stop is read inside the product first, before a person
+# (issue #100). Read-only -- it commits nothing and writes nothing outside
+# paths.records/<N>/ -- and it never acts: it proposes a ruling, a patch,
+# or names the one-line question a person must answer. ---
+
+COUNSEL_STAGES = ("build", "verify")
+
+
+def latest_non_pass_stage_record(records_dir: Path) -> tuple[str | None, dict | None, Path | None]:
+    """(stage, record, path) for the item's most recent non-pass build or
+    verify record, by its own "at" timestamp -- or, when neither stage
+    carries one, the item's latest refused spec-gate record (issue #133):
+    a refused gate is the same shape of stop, earlier, and it is read only
+    once a build or verify record exists to counsel first, since either
+    one already implies the gate that produced it passed. (None, None,
+    None) when none of the three exists. "Most recent" rather than
+    "build, else verify" so a stop on the stage that ran later (typically
+    verify, bound to a build that already passed) is the one counseled."""
+    candidates: list[tuple[str, dict, Path]] = []
+    for stage in COUNSEL_STAGES:
+        path = latest_attempt_path(records_dir, stage)
+        if path is None:
+            continue
+        rec = latest_record(records_dir, stage)
+        if rec.get("status") == "pass":
+            continue
+        candidates.append((stage, rec, path))
+    if candidates:
+        candidates.sort(key=lambda c: c[1].get("at") or "")
+        return candidates[-1]
+    spec_path = latest_attempt_path(records_dir, "spec")
+    if spec_path is not None:
+        spec_rec = latest_record(records_dir, "spec")
+        if spec_rec.get("status") == "refused":
+            return "spec", spec_rec, spec_path
+    return None, None, None
+
+
+def cmd_counsel(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attavo counsel: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo counsel: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    item_records_dir = root / records_rel / item_id
+
+    stage, stop_record, record_path = latest_non_pass_stage_record(item_records_dir)
+    if stop_record is None:
+        print(f"attavo counsel: refused: no non-pass build, verify, or spec-gate record "
+              f"for item {item_id}")
+        return 1
+
+    executor = m.get("executor") or {}
+    adapter_name = executor.get("counsel") or executor.get("verify")
+    if not adapter_name:
+        print("attavo counsel: refused: no [executor].counsel or [executor].verify "
+              "in the manifest")
+        return 1
+    adapter_path = resolve_adapter(root, adapter_name)
+    if adapter_path is None:
+        print(f"attavo counsel: refused: no adapter named {adapter_name!r}")
+        return 1
+
+    adapter_config = merge_adapter_config(m, adapter_name, "counsel")
+    reports = adapter_reports(adapter_path)
+    spec_dir = root / specs_rel / item_id
+    log_path = record_path.with_suffix(".log")
+
+    diff_text, diff_refusal = diff_since_approval(root, stop_record.get("approval_sha"))
+    if diff_refusal:
+        print(f"attavo counsel: refused: {diff_refusal}")
+        return 1
+
+    started = time.monotonic()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        diff_path = Path(tmp) / "diff.patch"
+        diff_path.write_text(diff_text)
+
+        env = dict(os.environ)
+        env["ATTAVO_SPEC_DIR"] = str(spec_dir)
+        env["ATTAVO_RECORDS_DIR"] = str(item_records_dir)
+        env["ATTAVO_RULINGS"] = str(root / m["paths"]["rulings"])
+        env["ATTAVO_STAGE"] = "counsel"
+        env["ATTAVO_COUNSEL_RECORD"] = str(record_path)
+        env["ATTAVO_COUNSEL_LOG"] = str(log_path) if log_path.is_file() else ""
+        env["ATTAVO_COUNSEL_DIFF"] = str(diff_path)
+        env["ATTAVO_MANIFEST"] = str(root / MANIFEST)
+        env["ATTAVO_PRODUCT_ROOT"] = str(PRODUCT_ROOT)
+        env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(adapter_config)
+
+        run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
+                             capture_output=True, text=True, check=False)
+        transcript, payload = split_adapter_stdout(run.stdout)
+        if run.returncode != 0:
+            detail = f"[adapter exited {run.returncode}]"
+            if run.stderr.strip():
+                detail += "\n" + run.stderr.rstrip("\n")
+            transcript = (transcript + "\n" if transcript else "") + detail
+
+    status_out = "failed"
+    model = model_version = adapter_version_out = None
+    tokens = {"input": 0, "output": 0}
+    cost_usd = None
+    cls = verdict = None
+    citations: list = []
+    proposal = {"ruling_text": None, "patch": None, "question": None}
+
+    if (run.returncode == 0 and payload is not None
+            and payload.get("verdict") in ("answer", "patch", "person")):
+        status_out = "done"
+        model = payload.get("model")
+        model_version = payload.get("model_version")
+        adapter_version_out = payload.get("adapter_version")
+        tok = payload.get("tokens") or {}
+        tokens = {"input": tok.get("input", 0) or 0, "output": tok.get("output", 0) or 0}
+        cost_usd = payload.get("cost_usd")
+        cls = payload.get("class")
+        verdict = payload.get("verdict")
+        citations = payload.get("citations") or []
+        proposal = payload.get("proposal") or proposal
+
+    record = {
+        "sha": git(root, "rev-parse", "HEAD").strip(),
+        "record_stage": stage,
+        "record": record_path.stem,
+        "at": now_iso(),
+        "adapter": adapter_name,
+        "adapter_config": adapter_config,
+        "adapter_version": adapter_version_out,
+        "model": model,
+        "model_version": model_version,
+        "reports": reports,
+        "tokens": tokens,
+        "cost_usd": cost_usd,
+        "wall_clock_s": round(time.monotonic() - started, 3),
+        "status": status_out,
+        "class": cls,
+        "verdict": verdict,
+        "citations": citations,
+        "proposal": proposal,
+    }
+    record_out_path = write_record(item_records_dir, "counsel", record, m, item_id, log=transcript)
+
+    print(f"attavo counsel: {status_out} ({record_out_path.name})")
+    return 0 if status_out == "done" else 1
+
+
+# --- drive: the mechanical transitions between approval and ready-to-merge
+# (issue #84) -- one step per invocation, and only that step, until a
+# state that belongs to a person. Writes no record of its own; the stage
+# records already on disk are the only state it reads. ---
+
+def forge_checks_unconcluded(forge_checks: dict) -> bool:
+    """Whether poll_forge_checks should keep waiting rather than stop at
+    once: an empty read (the forge has not attached any check to this sha
+    yet) or any one check still carrying a status (queued, in_progress,
+    pending, waiting) rather than a concluded conclusion. A concluded
+    conclusion that is not green (failure, cancelled, timed_out, and
+    anything else read_forge_checks did not recognize as ok) is not this
+    -- that check is done, whether or not it passed."""
+    conclusions = forge_checks["conclusions"]
+    if not conclusions:
+        return True
+    return any(c["conclusion"] in FORGE_UNCONCLUDED_STATUSES for c in conclusions)
+
+
+def poll_forge_checks(root: Path, checks_command: str, sha: str) -> tuple[dict, bool]:
+    """read_forge_checks, retried within drive_forge_poll_bound_s() while
+    some check is still unconcluded (forge_checks_unconcluded) -- a check
+    still running is not yet red, and drive gives it a little room to
+    conclude before it gives up. A read where every check has already
+    concluded, green or not, stops here at once: there is nothing left to
+    wait on. The bound and interval are constants this lane names, not a
+    manifest key, re-read at call time so a test's own clock
+    (ATTAVO_DRIVE_POLL_BOUND_S, ATTAVO_DRIVE_POLL_INTERVAL_S) never has to
+    survive past when it was set."""
+    bound = drive_forge_poll_bound_s()
+    interval = drive_forge_poll_interval_s()
+    deadline = time.monotonic() + bound
+    forge_checks, ok = read_forge_checks(root, checks_command, sha)
+    while not ok and forge_checks_unconcluded(forge_checks) and time.monotonic() < deadline:
+        time.sleep(interval)
+        forge_checks, ok = read_forge_checks(root, checks_command, sha)
+    return forge_checks, ok
+
+
+def commit_record(root: Path, record_paths: Path | list[Path], message: str) -> None:
+    """`git commit --only` on every record path given, and each one's .log
+    and .filed, each if one exists -- never the whole index. A transport
+    commit that sweeps the index is exactly the regression issue #46
+    already guards build and verify against on the adapter side; drive
+    must not reintroduce it on the transport side. The .filed marker
+    (issue #89) is committed alongside the record it names, in the same
+    commit and the same push, so a second worktree or a fresh clone reads
+    the same filed fact rather than refiling every stop it finds with no
+    marker of its own. A single Path is accepted for the common one-record
+    case; issue #100 passes a list so the counsel record lands in the same
+    commit as the stage record it counsels. Authored and committed as
+    driver_identity(), set by the product and never the tenant's git
+    config, so a driven item's record commits are never indistinguishable
+    from an operator's own."""
+    if isinstance(record_paths, Path):
+        record_paths = [record_paths]
+    paths: list[str] = []
+    for record_path in record_paths:
+        paths.append(str(record_path.relative_to(root)))
+        log_path = record_path.with_suffix(".log")
+        if log_path.is_file():
+            paths.append(str(log_path.relative_to(root)))
+        marker_path = record_path.with_suffix(".filed")
+        if marker_path.is_file():
+            paths.append(str(marker_path.relative_to(root)))
+    identity = driver_identity()
+    env = dict(os.environ)
+    env["GIT_AUTHOR_NAME"] = identity["name"]
+    env["GIT_AUTHOR_EMAIL"] = identity["email"]
+    env["GIT_COMMITTER_NAME"] = identity["name"]
+    env["GIT_COMMITTER_EMAIL"] = identity["email"]
+    git(root, "add", *paths)
+    git(root, "commit", "--only", "-m", message, *paths, env=env)
+
+
+def push_record_commit(root: Path, branch: str) -> tuple[bool, str | None]:
+    """Push HEAD to branch on origin. A push a divergent remote rejects is
+    retried once after `git pull --no-rebase --no-edit origin branch` -- a
+    merge, never a rebase, because a rebase would change the sha the record
+    commit just wrote already names."""
+    def attempt() -> tuple[bool, str]:
+        run = subprocess.run(["git", "-C", str(root), "push", "origin", f"HEAD:{branch}"],
+                             capture_output=True, text=True, check=False)
+        return run.returncode == 0, run.stderr.strip()
+
+    ok, err = attempt()
+    if ok:
+        return True, None
+    pull = subprocess.run(["git", "-C", str(root), "pull", "--no-rebase", "--no-edit",
+                           "origin", branch], capture_output=True, text=True, check=False)
+    if pull.returncode != 0:
+        return False, f"push rejected and the retry merge failed: {pull.stderr.strip() or err}"
+    ok, err = attempt()
+    if not ok:
+        return False, f"push rejected again after merging {branch}: {err}"
+    return True, None
+
+
+def drive_state(root: Path, m: dict, item_id: str) -> tuple[str, str | None, Path]:
+    """("no-approval" | "build" | "verify" | "ready", detail, records_dir):
+    the next mechanical step for item_id, read from its latest records
+    alone. A build only counts as current when it is a pass bound to the
+    valid approval's own sha; a verify only counts as current when it is a
+    pass bound to that build's own sha -- the same staleness a re-approval
+    or a re-build must force, attest's own chain check already enforces
+    (check_attest_chain), read here rather than re-typed."""
+    records_rel = m["paths"]["records"]
+    records_dir = root / records_rel / item_id
+
+    status = approval_status(root, m, item_id)
+    if status != "valid":
+        return "no-approval", status, records_dir
+
+    latest_approval = latest_record(records_dir, "approval")
+    latest_build = latest_record(records_dir, "build")
+    build_current = (latest_build is not None and latest_build.get("status") == "pass"
+                     and latest_build.get("approval_sha") == (latest_approval or {}).get("sha"))
+    if not build_current:
+        return "build", None, records_dir
+
+    latest_verify = latest_record(records_dir, "verify")
+    verify_current = (latest_verify is not None and latest_verify.get("status") == "pass"
+                      and latest_verify.get("build_sha") == latest_build.get("sha"))
+    if not verify_current:
+        return "verify", None, records_dir
+
+    return "ready", None, records_dir
+
+
+def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, item_id: str) -> int:
+    """Runs build or verify in-process -- the same command `attavo build`
+    or `attavo verify` would run, printing the same reason on a refusal,
+    failure, or halt. A non-pass record is counseled (cmd_counsel, issue
+    #100) and filed (cmd_file_stops, issue #89) before it is transported,
+    so a stop's own counsel record and .filed marker -- the filing
+    command's stdout, the issue file-stops just opened -- exist on disk
+    in time to be committed and pushed in the very same commit as the
+    stage record and its log; a marker written only after the push would
+    never reach the ledger at all, and a second worktree or a fresh clone
+    would refile every stop it finds with no marker beside it. The stage
+    record and the counsel record (when one was written) are then
+    transported together: committed with commit_record and pushed with
+    push_record_commit, whatever the stage record's status -- the record
+    pushes stay the same pushes, made by drive in the run that produced
+    the record (issue #84's rule 42 row)."""
+    before = latest_attempt_path(records_dir, stage)
+    rc = cmd_build([item_id]) if stage == "build" else cmd_verify([item_id])
+    after = latest_attempt_path(records_dir, stage)
+
+    if after is None or after == before:
+        # Refused before writing anything at all (e.g. no adapter
+        # configured) -- the stage command already printed why.
+        return rc if rc != 0 else 1
+
+    record = latest_record(records_dir, stage)
+    status_out = record.get("status")
+    to_commit = [after]
+    if status_out != "pass":
+        counsel_before = latest_attempt_path(records_dir, "counsel")
+        cmd_counsel([item_id])
+        counsel_after = latest_attempt_path(records_dir, "counsel")
+        if counsel_after is not None and counsel_after != counsel_before:
+            to_commit.append(counsel_after)
+        # file-stops is its own idempotent read of the item's records, so
+        # calling it here on every run that wrote a non-pass record is
+        # safe to call again on a later run: an already-filed stop's own
+        # marker is what stops it from being filed twice.
+        cmd_file_stops([item_id])
+
+    message = f"attavo: {stage} record for item {item_id} ({after.stem})"
+    try:
+        commit_record(root, to_commit, message)
+    except RuntimeError as exc:
+        print(f"attavo drive: stopped: could not commit the {stage} record: {exc}")
+        return 1
+
+    ok, err = push_record_commit(root, branch)
+    if not ok:
+        print(f"attavo drive: stopped: could not push the {stage} record: {err}")
+        return 1
+
+    if status_out == "halted":
+        question = (record.get("halted") or {}).get("question")
+        print(f"attavo drive: stopped: {stage} halted: {question} ({after.name}); "
+              f"pushed to {branch}")
+    elif status_out != "pass":
+        reason = record.get("refusal") or status_out
+        print(f"attavo drive: stopped: {stage} {status_out}: {reason} ({after.name}); "
+              f"pushed to {branch}")
+    else:
+        print(f"attavo drive: pushed {after.name} to {branch}")
+    return rc
+
+
+def _drive_step(root: Path, m: dict, item_id: str) -> tuple[int, bool]:
+    """One mechanical step, exactly as a single `attavo drive` call always
+    has -- and whether repetition under --until-ready should stop here:
+    True for every refusal or stop (no valid approval, no
+    [forge].checks_command, the forge not green, or a stage that wrote a
+    non-pass record) and for the ready-to-merge terminal state; False
+    only when a stage just passed, so drive_state may have a further
+    stage to pursue on the next call."""
+    try:
+        stage, extra, records_dir = drive_state(root, m, item_id)
+    except ShallowCheckoutError as exc:
+        print(f"attavo drive: refused: {exc}", file=sys.stderr)
+        return 2, True
+
+    if stage == "no-approval":
+        print(f"attavo drive: refused: approval is {extra}")
+        return 1, True
+
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+
+    if stage == "build":
+        rc = _drive_run_stage(root, records_dir, branch, "build", item_id)
+        return rc, rc != 0
+
+    checks_command = (m.get("forge") or {}).get("checks_command")
+    if not checks_command:
+        print("attavo drive: refused: no [forge].checks_command in the manifest")
+        return 1, True
+    head_sha = git(root, "rev-parse", "HEAD").strip()
+    forge_checks, ok = poll_forge_checks(root, checks_command, head_sha)
+    if not ok:
+        conclusions = (", ".join(f"{c['name']} {c['conclusion']}"
+                                 for c in forge_checks["conclusions"])
+                      or "no checks reported")
+        print(f"attavo drive: stopped: forge checks not green on {head_sha[:12]}: {conclusions}")
+        return 1, True
+
+    if stage == "verify":
+        rc = _drive_run_stage(root, records_dir, branch, "verify", item_id)
+        return rc, rc != 0
+
+    print(f"attavo drive: item {item_id} is ready to merge")
+    return 0, True
+
+
+def cmd_drive(argv: list[str]) -> int:
+    until_ready = "--until-ready" in argv
+    positional = [a for a in argv if a != "--until-ready"]
+    root = Path(".").resolve()
+    item_id = positional[0] if positional else derive_item_id(root)
+    if not item_id:
+        print("attavo drive: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo drive: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    # Without --until-ready this is exactly one call to _drive_step,
+    # letter for letter what cmd_drive always did: `not until_ready`
+    # returns on the very first iteration regardless of `done`. With it,
+    # a step that just passed (done False) repeats -- step, wait (the
+    # forge poll already inside _drive_step), step, wait -- until the
+    # item is ready to merge or a step stops on its own account.
+    while True:
+        rc, done = _drive_step(root, m, item_id)
+        if done or not until_ready:
+            return rc
+
+
+# --- file-findings: one tenant issue per finding, nothing filed silently ---
+
+def cmd_file_findings(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attavo file-findings: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo file-findings: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    records_rel = m["paths"]["records"]
+    item_records_dir = root / records_rel / item_id
+
+    forge_cfg = m.get("forge") or {}
+    file_issue_command = forge_cfg.get("file_issue_command")
+    if not file_issue_command:
+        print("attavo file-findings: refused: no [forge].file_issue_command in the manifest")
+        return 1
+
+    latest_verify = latest_record(item_records_dir, "verify")
+    if latest_verify is None:
+        print(f"attavo file-findings: refused: no verify record for item {item_id}")
+        return 1
+
+    findings = latest_verify.get("findings") or []
+    if not findings:
+        print("attavo file-findings: no findings to file")
+        return 0
+
+    for finding in findings:
+        if not finding.get("retires"):
+            title = finding.get("title", "<untitled>")
+            print(f"attavo file-findings: refused: finding {title!r} carries no retires; "
+                  f"nothing filed")
+            return 1
+
+    for finding in findings:
+        run = subprocess.run(file_issue_command, shell=True, cwd=str(root),
+                             input=json.dumps(finding) + "\n", capture_output=True,
+                             text=True, check=False)
+        if run.returncode != 0:
+            title = finding.get("title", "<untitled>")
+            print(f"attavo file-findings: refused: filing {title!r} exited {run.returncode}: "
+                  f"{run.stderr.strip()}")
+            return 1
+
+    print(f"attavo file-findings: filed {len(findings)} issue(s)")
+    return 0
+
+
+# --- file-stops: one tenant issue per stop record, nothing filed silently,
+# nothing filed twice (issue #89) ---
+
+STOP_STAGES = ("build", "verify")
+FILE_STOPS_LOG_TAIL_LINES = 20
+
+
+def compose_stop_title(item_id: str, stage: str, n: int, stop: dict) -> str:
+    """`stop <class>/<provenance> on item <N>: <stage>-<NN>` -- the title
+    the tenant's file-issue script would otherwise fall back to
+    <untitled> for. An empty class or provenance is a record defect, not
+    a filing: this returns "" rather than a title with a blank half, so
+    the caller can refuse on it."""
+    cls = stop.get("class")
+    provenance = stop.get("provenance")
+    if not cls or not provenance:
+        return ""
+    return f"stop {cls}/{provenance} on item {item_id}: {stage}-{n:02d}"
+
+
+def counsel_record_for(item_records_dir: Path, stage: str, n: int) -> dict | None:
+    """The latest counsel-NN.json (issue #100) whose own "record" field
+    names f"{stage}-{n:02d}" -- the counsel invocation, if any, that read
+    this exact stage record -- or None when counsel never ran against it
+    (e.g. file-stops run standalone, outside drive)."""
+    target = f"{stage}-{n:02d}"
+    attempts = parse_attempts(item_records_dir, "counsel")
+    matches = [rec for _, rec in sorted(attempts.items()) if rec.get("record") == target]
+    return matches[-1] if matches else None
+
+
+def cmd_file_stops(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attavo file-stops: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo file-stops: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    records_rel = m["paths"]["records"]
+    item_records_dir = root / records_rel / item_id
+
+    forge_cfg = m.get("forge") or {}
+    file_issue_command = forge_cfg.get("file_issue_command")
+    if not file_issue_command:
+        print("attavo file-stops: refused: no [forge].file_issue_command in the manifest")
+        return 1
+
+    # A stop record's own .filed marker beside it -- the same convention as
+    # its .log sidecar -- is what makes a second run file nothing: no new
+    # artifact beside the records (the gate output already lives in the
+    # log), just a fact about this one record, in the one place a reader
+    # already looks. It carries the filing command's own stdout (the
+    # issue it opened), so that fact is kept, not just the fact of
+    # filing. This command never commits it -- the same as build and
+    # verify, which write their own records uncommitted -- a caller that
+    # wants it on the ledger commits it itself; drive does, in the same
+    # commit as the record and its log (issue #89).
+    pending: list[tuple[str, int, dict, Path]] = []
+    for stage in STOP_STAGES:
+        attempts = parse_attempts(item_records_dir, stage)
+        for n in sorted(attempts):
+            stop = attempts[n].get("stop")
+            if not stop:
+                continue
+            marker = item_records_dir / f"{stage}-{n:02d}.filed"
+            if marker.exists():
+                continue
+            pending.append((stage, n, stop, marker))
+
+    # A refused spec-gate record is the same shape of stop, earlier (issue
+    # #133); its own class is "gate" (issue #137), never persisted -- it
+    # never carries a stop field of its own (cmd_spec_gate is untouched
+    # by this lane), so it is synthesized here from its refusal.
+    for n, rec in sorted(parse_attempts(item_records_dir, "spec").items()):
+        if rec.get("status") != "refused":
+            continue
+        marker = item_records_dir / f"spec-{n:02d}.filed"
+        if marker.exists():
+            continue
+        pending.append(("spec", n, gate_stop(rec.get("refusal")), marker))
+
+    if not pending:
+        print("attavo file-stops: no stops to file")
+        return 0
+
+    for stage, n, stop, _marker in pending:
+        if stop["class"] == "unclassed" and not stop.get("detail"):
+            print(f"attavo file-stops: refused: {stage}-{n:02d} is unclassed with no detail; "
+                  f"nothing filed")
+            return 1
+
+    for stage, n, stop, _marker in pending:
+        if not compose_stop_title(item_id, stage, n, stop):
+            print(f"attavo file-stops: refused: {stage}-{n:02d} composes an empty title; "
+                  f"nothing filed")
+            return 1
+
+    for stage, n, stop, marker in pending:
+        record_path = item_records_dir / f"{stage}-{n:02d}.json"
+        log_path = record_path.with_suffix(".log")
+        log_tail = ("\n".join(log_path.read_text().splitlines()[-FILE_STOPS_LOG_TAIL_LINES:])
+                   if log_path.is_file() else "")
+        counsel = counsel_record_for(item_records_dir, stage, n)
+        body = {
+            "title": compose_stop_title(item_id, stage, n, stop),
+            "class": stop["class"],
+            "provenance": stop["provenance"],
+            "record": str(record_path.relative_to(root)),
+            "log_tail": log_tail,
+            "counsel_verdict": counsel.get("verdict") if counsel else None,
+            "counsel_citations": counsel.get("citations") if counsel else [],
+            "counsel_proposal": counsel.get("proposal") if counsel else None,
+        }
+        run = subprocess.run(file_issue_command, shell=True, cwd=str(root),
+                             input=json.dumps(body) + "\n", capture_output=True,
+                             text=True, check=False)
+        if run.returncode != 0:
+            print(f"attavo file-stops: refused: filing {stage}-{n:02d} exited {run.returncode}: "
+                  f"{run.stderr.strip()}")
+            return 1
+        marker.write_text(run.stdout)
+
+    print(f"attavo file-stops: filed {len(pending)} issue(s)")
+    return 0
+
+
+# --- record-only: whether HEAD, against its first parent, touches only
+# paths.records. Core logic about a git checkout, not a forge's shell
+# (issue #19); a workflow template's push-and-retrigger guard is one line
+# calling this instead of carrying its own copy. ---
+
+def cmd_record_only(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo record-only: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+    records_rel = m["paths"]["records"]
+    try:
+        changed = git(root, "diff", "--name-only", "HEAD^1", "HEAD").splitlines()
+    except RuntimeError as exc:
+        print(f"attavo record-only: refused: {exc}", file=sys.stderr)
+        return 2
+    prefix = records_rel.rstrip("/") + "/"
+    only_records = all(p == records_rel or p.startswith(prefix) for p in changed if p)
+    print("attavo record-only: yes" if only_records else "attavo record-only: no")
+    return 0 if only_records else 1
+
+
+# --- attest: the signed envelope over one item's whole traversal ---
+
+def derive_attest_items(root: Path, records_rel: str) -> tuple[set[str], str | None]:
+    """The item ids from the merge commit's own first-parent diff -- record
+    paths under records_rel/<N>/, not a branch name, which a squash merge
+    discards and which names a forge's convention the product does not
+    know. Returns (items, None), else (empty set, reason) only when the
+    diff itself could not be read -- zero items found is not an error
+    here (issue #58): not every merge is an item merge, and the caller
+    decides what zero, one, or more than one means."""
+    try:
+        changed = git(root, "diff", "--name-only", "HEAD^1", "HEAD").splitlines()
+    except RuntimeError as exc:
+        return set(), f"git: {exc}"
+    prefix = records_rel.rstrip("/") + "/"
+    items: set[str] = set()
+    for p in changed:
+        if p.startswith(prefix):
+            rest = p[len(prefix):]
+            item = rest.split("/", 1)[0]
+            if item:
+                items.add(item)
+    return items, None
+
+
+NOT_YET = object()
+
+
+def check_attest_chain(records_dir: Path, item_id: str, partial: bool = False):
+    """The two assertions attavo attest refuses on: the latest spec,
+    approval, build, and verify records for item_id all exist, and
+    build's approval_sha names the latest approval -- a re-approval after
+    a build must force a re-run of what changed. Returns (None, message)
+    on either of them, the message being the same text attest prints, not
+    a copy of it a caller re-types (issue #74: proof two reuses it);
+    returns ((spec, approval, build, verify), None) when the chain holds.
+
+    A verify record can only name a build that existed when it was
+    written (issue #109), so a latest verify whose build_sha is not the
+    latest build's sha is never a corrupt chain -- it is a verify
+    superseded by a later build, and is treated as absent: the next
+    stage is verify, not a refusal, exactly as if no verify record
+    existed yet.
+
+    partial (issue #67) is for a pull request, where a later stage's
+    record cannot exist yet because the stage that would produce it is
+    itself waiting on this check. Under partial, a missing (or
+    superseded) record is not a refusal -- the chain assertion still
+    runs over whatever records exist, and (NOT_YET, message) is
+    returned, the message naming the item and the stages present and
+    absent -- or, for a superseded verify, the superseded record and the
+    build it named -- when a stage is still missing once that assertion
+    holds."""
+    latest_spec = latest_record(records_dir, "spec")
+    latest_approval = latest_record(records_dir, "approval")
+    latest_build = latest_record(records_dir, "build")
+    latest_verify = latest_record(records_dir, "verify")
+
+    # A verify naming a sha other than the latest build's is superseded:
+    # treated as absent for the chain, never as a mismatch.
+    superseded = None
+    if latest_build is not None and latest_verify is not None:
+        named_sha = latest_verify.get("build_sha")
+        if named_sha != latest_build.get("sha"):
+            verify_n = max(parse_attempts(records_dir, "verify"))
+            build_attempts = parse_attempts(records_dir, "build")
+            named_build_n = next((n for n, rec in build_attempts.items()
+                                  if rec.get("sha") == named_sha), None)
+            named_build = f"build-{named_build_n:02d}" if named_build_n is not None else named_sha
+            superseded = (verify_n, named_sha, named_build, max(build_attempts))
+            latest_verify = None
+
+    stages = (("spec", latest_spec), ("approval", latest_approval),
+              ("build", latest_build), ("verify", latest_verify))
+
+    if not partial:
+        for stage, rec in stages:
+            if rec is None:
+                if stage == "verify" and superseded is not None:
+                    verify_n, named_sha, _, _ = superseded
+                    return None, (f"no verify names the latest build "
+                                 f"(verify-{verify_n:02d} names {named_sha})")
+                return None, f"no {stage} record for item {item_id}"
+
+    if latest_approval is not None and latest_build is not None:
+        if latest_build.get("approval_sha") != latest_approval.get("sha"):
+            return None, ("build's approval_sha does not name the latest approval; a "
+                          "re-approval after the build must force a re-run")
+
+    missing = [stage for stage, rec in stages if rec is None]
+    if partial and missing:
+        present = [stage for stage, rec in stages if rec is not None]
+        if missing == ["verify"] and superseded is not None:
+            verify_n, _, named_build, latest_build_n = superseded
+            return NOT_YET, (f"item {item_id} not yet (present: {', '.join(present) or 'none'}; "
+                             f"verify-{verify_n:02d} names {named_build}, "
+                             f"superseded by build-{latest_build_n:02d})")
+        return NOT_YET, (f"item {item_id} not yet (present: {', '.join(present) or 'none'}; "
+                         f"absent: {', '.join(missing)})")
+
+    return (latest_spec, latest_approval, latest_build, latest_verify), None
+
+
+def cmd_attest(argv: list[str]) -> int:
+    partial = "--partial" in argv
+    positional = [a for a in argv if not a.startswith("--")]
+    unknown = [a for a in argv if a.startswith("--") and a != "--partial"]
+    if unknown:
+        print(f"attavo attest: unknown argument {unknown[0]!r}", file=sys.stderr)
+        return 2
+
+    root = Path(".").resolve()
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo attest: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    records_rel = m["paths"]["records"]
+    item_id = positional[0] if positional else None
+    if item_id is None:
+        items, err = derive_attest_items(root, records_rel)
+        if err:
+            print(f"attavo attest: refused: {err}", file=sys.stderr)
+            return 1
+        # Not every merge is an item merge -- a merge that carries no item
+        # at all is an ordinary fact, not a defect (issue #58); the
+        # attest template runs this on every push and has nothing to
+        # sign or commit when nothing was attested, and its existing
+        # `if:` guards already read this step's own exit code.
+        if not items:
+            print("attavo attest: no item derived from the merge commit's record paths; "
+                  "nothing to attest")
+            return 0
+        if len(items) > 1:
+            print(f"attavo attest: refused: {len(items)} items derived from the merge "
+                  f"commit's record paths: {', '.join(sorted(items))}", file=sys.stderr)
+            return 1
+        item_id = next(iter(items))
+
+    records_dir = root / records_rel / item_id
+    chain, message = check_attest_chain(records_dir, item_id, partial=partial)
+    if chain is None:
+        print(f"attavo attest: refused: {message}", file=sys.stderr)
+        return 1
+    if chain is NOT_YET:
+        print(f"attavo attest --partial: {message}")
+        return 0
+    latest_spec, latest_approval, latest_build, latest_verify = chain
+
+    spec_path = latest_attempt_path(records_dir, "spec")
+    approval_path = latest_attempt_path(records_dir, "approval")
+    build_path = latest_attempt_path(records_dir, "build")
+    verify_path = latest_attempt_path(records_dir, "verify")
+
+    # sha and merge_sha are the same commit here -- the one this statement
+    # was computed at. On the merge group that commit is the one main will
+    # hold; kept as two fields because a forge-specific template signs
+    # this statement against "the commit that lands", naming it merge_sha
+    # is what makes that unambiguous to a reader who has never seen attest
+    # run anywhere but the merge group.
+    head_sha = git(root, "rev-parse", "HEAD").strip()
+
+    statement = {
+        "sha": head_sha,
+        "merge_sha": head_sha,
+        "item": item_id,
+        "spec": spec_path.stem if spec_path else None,
+        "spec_sha": latest_spec.get("sha"),
+        "approval": approval_path.stem if approval_path else None,
+        "approval_sha": latest_approval.get("sha"),
+        "build": build_path.stem if build_path else None,
+        "build_sha": latest_build.get("sha"),
+        "verify": verify_path.stem if verify_path else None,
+        "verify_sha": latest_verify.get("sha"),
+        "at": now_iso(),
+        # Neither is populated by anything today -- no ruling or amendment
+        # log exists yet for either to read from. Carried as empty rather
+        # than omitted, since the schema names them.
+        "interventions": [],
+        "acts": [],
+        "tokens_by_stage": {"build": latest_build.get("tokens"), "verify": latest_verify.get("tokens")},
+        # Never summed across stages -- the 2026-09-09 ruling on reporting
+        # across vendors: a stage's executor may report no cost at all.
+        "cost_by_stage_usd": {"build": latest_build.get("cost_usd"), "verify": latest_verify.get("cost_usd")},
+        "wall_clock_by_stage_s": {"build": latest_build.get("wall_clock_s"),
+                                  "verify": latest_verify.get("wall_clock_s")},
+        "product_version": product_version(),
+        "product_pin": (m.get("attavo") or {}).get("version"),
+    }
+    print(json.dumps(statement, indent=2))
+    return 0
+
+
+# --- ledger: every act on an item by identity and class (issue #128) ---
+
+# operator acts (a person's own decisions and transport) vs. product acts
+# (the driver's or the records app's own automated commits) vs. the
+# executor's own code changes -- the three totals the plan's status table
+# and every reviewing session used to count by hand. record-or-launch
+# (below) contributes to neither: an honest count never guesses which
+# side of that line a pre-v0.18.0 commit falls on.
+LEDGER_OPERATOR_CLASSES = ("approve", "amend", "launch", "transport", "merge")
+LEDGER_V018_CUTOFF = (0, 18, 0)
+
+
+def _semver_tuple(version: str | None) -> tuple[int, int, int] | None:
+    m = re.match(r"^v(\d+)\.(\d+)\.(\d+)", version or "")
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
+def _is_records_app(name: str) -> bool:
+    """The forge's own app-bot login -- exactly the identity the
+    attavo-spec-gate and attavo-approve templates commit spec-gate and
+    approval records as (an app-token step mints it at run time from the
+    tenant's own app credentials): "<app-slug>[bot]". Never a name this
+    product can name in advance, so the one fact it can check is the
+    shape the forge itself gives every app identity, not a specific one."""
+    return name.endswith("[bot]")
+
+
+def first_commit_touching(root: Path, relpath: str) -> str | None:
+    """The earliest commit touching relpath -- the mirror of
+    last_commit_touching, which answers the latest. Ledger's own walk
+    starts here: the item's first spec commit."""
+    out = git(root, "log", "--reverse", "--format=%H", "--", relpath)
+    lines = out.split()
+    return lines[0] if lines else None
+
+
+# The ledger's read-once maps: every merge's first-parent paths per HEAD,
+# every walked commit's paths, and every record blob the walk will ask
+# for -- filled by one git process each, read by the loop below. Keyed by
+# root so two tenants in one process never share an answer.
+_MERGE_TOUCHES: dict[tuple[str, str], list[tuple[str, list[str]]]] = {}
+_TOUCHES: dict[tuple[str, str], list[str]] = {}
+_BLOBS: dict[tuple[str, str, str], str] = {}
+
+
+def _parse_name_only(out: str) -> list[tuple[str, list[str]]]:
+    """(sha, paths) per commit from `git log --format=%x00%H --name-only`:
+    a NUL-led line opens a commit, every other non-empty line is a path
+    it touched against its first parent."""
+    entries: list[tuple[str, list[str]]] = []
+    for line in out.splitlines():
+        if line.startswith("\x00"):
+            entries.append((line[1:].strip(), []))
+        elif line.strip() and entries:
+            entries[-1][1].append(line)
+    return entries
+
+
+def _prefill_touches(root: Path, start: str, end: str) -> None:
+    """One process for the paths of every first-parent commit in
+    start..end -- the same answer _commit_touches gives one commit at a
+    time, for the whole walk at once."""
+    try:
+        out = git(root, "log", "--first-parent", "--format=%x00%H", "--name-only",
+                  "--diff-merges=first-parent", f"{start}..{end}")
+    except RuntimeError:
+        return
+    for sha, paths in _parse_name_only(out):
+        _TOUCHES[(str(root), sha)] = paths
+
+
+def _prefill_records(root: Path, commits: list[dict], records_prefix: str) -> None:
+    """One `git cat-file --batch` for every record blob the walk will
+    read through _record_at: the first stage record each non-executor
+    commit introduces under records_prefix, the same choice the loop
+    makes."""
+    wanted: list[tuple[str, str]] = []
+    for c in commits:
+        email = c["email"]
+        if email.startswith("executor+") and email.endswith("@attavo.invalid"):
+            continue
+        touched = _TOUCHES.get((str(root), c["sha"]))
+        if touched is None:
+            continue
+        for p in touched:
+            if not p.startswith(records_prefix):
+                continue
+            rm = RECORD_RE.match(Path(p).name)
+            if rm and rm.group(1) in STAGES:
+                wanted.append((c["sha"], p))
+                break
+    if not wanted:
+        return
+    out = subprocess.run(["git", "-C", str(root), "cat-file", "--batch"],
+                         input="".join(f"{s}:{p}\n" for s, p in wanted).encode(),
+                         capture_output=True, check=False)
+    if out.returncode != 0:
+        return
+    data, pos = out.stdout, 0
+    for sha, relpath in wanted:
+        nl = data.find(b"\n", pos)
+        if nl < 0:
+            break
+        header = data[pos:nl].decode("utf-8", errors="replace").split()
+        pos = nl + 1
+        if len(header) == 3 and header[1] == "blob":
+            size = int(header[2])
+            _BLOBS[(str(root), sha, relpath)] = data[pos:pos + size].decode("utf-8", errors="replace")
+            pos += size + 1
+        # a "missing" answer has no body; _record_at reads that one itself
+
+
+def _commit_touches(root: Path, sha: str) -> list[str]:
+    key = (str(root), sha)
+    if key not in _TOUCHES:
+        _TOUCHES[key] = git(root, "diff", "--name-only", f"{sha}^1", sha).splitlines()
+    return _TOUCHES[key]
+
+
+def _record_at(root: Path, sha: str, relpath: str, item_id: str) -> dict:
+    """A record's own dict at a past commit, not the working tree --
+    ledger's only need for one (issue #128). Read through _load_record
+    (issue #60, acceptance 6: the one place a record's bytes become a
+    dict) by spilling the blob to a throwaway file, rather than a second
+    json.loads of its own: `git show` has no path on disk to hand
+    _load_record directly."""
+    blob = _BLOBS.get((str(root), sha, relpath))
+    if blob is None:
+        out = subprocess.run(["git", "-C", str(root), "show", f"{sha}:{relpath}"],
+                             capture_output=True, text=True, check=False)
+        if out.returncode != 0:
+            return {}
+        blob = out.stdout
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        fh.write(blob)
+        blob_path = Path(fh.name)
+    try:
+        return _load_record(blob_path, item_id)
+    except json.JSONDecodeError:
+        return {}
+    finally:
+        blob_path.unlink(missing_ok=True)
+
+
+def item_ledger(root: Path, m: dict, item_id: str) -> dict:
+    """{"item", "rows", "summary"}: one row per act between item_id's first
+    spec commit and its merge (merge_introducing_records, the same
+    derivation doctor's proof two and attest both already read) or HEAD
+    when the item has not merged yet.
+
+    Each commit gets exactly one class, in this order: the merge commit
+    itself is "merge"; a commit authored by the executor identity
+    (executor_identity) is "change"; a commit introducing an approval
+    record is "approve", whoever committed it -- an operator's decision,
+    however it reached git; a commit introducing a spec-gate, build, or
+    verify record, authored by the driver identity (driver_identity) or
+    the records app, is "record"; the same, authored by a person, is
+    "launch" for build or verify (spec-gate records the app always
+    commits, in every template this product ships) -- unless that
+    record's own product_version predates v0.18.0, when driver_identity
+    did not yet exist to tell the two apart, and the row is
+    "record-or-launch" with a note, counted in neither summary total
+    rather than guessed; a person's commit touching the spec is "spec"
+    before the first approval record and "amend" after; anything else by
+    a person is "transport" (a merge of main among them)."""
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    specs_prefix = f"{specs_rel.rstrip('/')}/{item_id}/"
+    records_prefix = f"{records_rel.rstrip('/')}/{item_id}/"
+    empty_summary = {"operator_acts": 0, "product_acts": 0, "executor_commits": 0,
+                     "stops": 0, "since": None}
+
+    first_spec_sha = first_commit_touching(root, str(Path(specs_rel) / item_id))
+    if first_spec_sha is None:
+        return {"item": item_id, "rows": [], "summary": empty_summary}
+
+    merge_sha = merge_introducing_records(root, records_rel, item_id, STAGES)
+    if merge_sha is not None:
+        branch_tip = git(root, "rev-parse", f"{merge_sha}^2").strip()
+        commits = commits_since(root, f"{first_spec_sha}^", end=branch_tip)
+        commits += commits_since(root, f"{merge_sha}^1", end=merge_sha)
+        walk_end = branch_tip
+    else:
+        commits = commits_since(root, f"{first_spec_sha}^", end="HEAD")
+        walk_end = "HEAD"
+    # Two processes for the whole walk, before the loop asks one commit
+    # at a time: the paths of every commit, then every record blob.
+    _prefill_touches(root, f"{first_spec_sha}^", walk_end)
+    _prefill_records(root, commits, records_prefix)
+
+    driver = driver_identity()
+    rows: list[dict] = []
+    operator_acts = product_acts = executor_commits = 0
+    since = None
+    approval_seen = False
+
+    for c in commits:
+        sha, name, email = c["sha"], c["name"], c["email"]
+
+        if merge_sha is not None and sha == merge_sha:
+            rows.append({"sha": sha, "identity": name, "class": "merge"})
+            operator_acts += 1
+            continue
+
+        if email.startswith("executor+") and email.endswith("@attavo.invalid"):
+            rows.append({"sha": sha, "identity": name, "class": "change"})
+            executor_commits += 1
+            continue
+
+        touched = _commit_touches(root, sha)
+        record_touch = None
+        for p in touched:
+            if not p.startswith(records_prefix):
+                continue
+            rm = RECORD_RE.match(Path(p).name)
+            if rm and rm.group(1) in STAGES:
+                record_touch = (rm.group(1), p)
+                break
+
+        if record_touch is not None:
+            stage, relpath = record_touch
+            content = _record_at(root, sha, relpath, item_id)
+            if since is None:
+                since = content.get("product_version")
+
+            if stage == "approval":
+                rows.append({"sha": sha, "identity": name, "class": "approve"})
+                operator_acts += 1
+                approval_seen = True
+                continue
+
+            is_driver = name == driver["name"] and email == driver["email"]
+            is_records_app = _is_records_app(name)
+            if stage == "spec" or is_driver or is_records_app:
+                rows.append({"sha": sha, "identity": name, "class": "record"})
+                product_acts += 1
+                continue
+
+            version = _semver_tuple(content.get("product_version"))
+            if version is not None and version < LEDGER_V018_CUTOFF:
+                rows.append({"sha": sha, "identity": name, "class": "record-or-launch",
+                            "note": "not distinguishable before v0.18.0"})
+                continue
+
+            rows.append({"sha": sha, "identity": name, "class": "launch"})
+            operator_acts += 1
+            continue
+
+        if any(p.startswith(specs_prefix) for p in touched):
+            cls = "amend" if approval_seen else "spec"
+            rows.append({"sha": sha, "identity": name, "class": cls})
+            if cls == "amend":
+                operator_acts += 1
+            continue
+
+        rows.append({"sha": sha, "identity": name, "class": "transport"})
+        operator_acts += 1
+
+    # issue #137: the same set attavo stops counts, from the same reader
+    # (item_stops) -- not a second, independent count kept in sync by
+    # hand. One non-pass record per row, whatever its stage; a gate
+    # refusal is included the same as a non-pass build or verify record.
+    stops = len(item_stops(root, m, item_id)["rows"])
+
+    summary = {"operator_acts": operator_acts, "product_acts": product_acts,
+              "executor_commits": executor_commits, "stops": stops, "since": since}
+    return {"item": item_id, "rows": rows, "summary": summary}
+
+
+def cmd_ledger(argv: list[str]) -> int:
+    as_json = "--json" in argv
+    positional = [a for a in argv if a != "--json"]
+    root = Path(".").resolve()
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo ledger: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    records_rel = m["paths"]["records"]
+    if positional:
+        item_ids = [positional[0]]
+    else:
+        records_root = root / records_rel
+        item_ids = (sorted((p.name for p in records_root.iterdir() if p.is_dir()))
+                   if records_root.is_dir() else [])
+
+    ledgers = [item_ledger(root, m, item_id) for item_id in item_ids]
+
+    if as_json:
+        if positional:
+            print(json.dumps(ledgers[0], indent=2))
+        else:
+            print(json.dumps({"items": ledgers}, indent=2))
+        return 0
+
+    for entry in ledgers:
+        print(f"attavo ledger: item {entry['item']}")
+        for row in entry["rows"]:
+            note = f"  ({row['note']})" if "note" in row else ""
+            print(f"  {row['sha'][:12]}  {row['identity']:<32}  {row['class']}{note}")
+        s = entry["summary"]
+        print(f"  operator acts: {s['operator_acts']}  product acts: {s['product_acts']}  "
+             f"executor commits: {s['executor_commits']}  stops: {s['stops']}  "
+             f"since: {s['since']}")
+    if not ledgers:
+        print(f"attavo ledger: no item found under {records_rel}")
+    return 0
+
+
+# --- stops: every non-pass record by class, provenance, and answerer
+# (issue #129) ---
+
+def item_stops(root: Path, m: dict, item_id: str) -> dict:
+    """{"item", "rows", "totals"}: one row per non-pass build or verify
+    record (STOP_STAGES), plus every refused spec-gate record (issue
+    #133), class "gate" (issue #137) -- read from status and refusal
+    rather than a stop field spec-gate records never carry (gate_stop
+    synthesizes it) -- under item_id, whatever the record's own
+    record_version -- a record too old to carry stop at all still gets
+    a row, its class printed as the doctor's own phrase for it.
+
+    The answerer, a closed choice: "counsel:<verdict>" when
+    counsel_record_for finds a counsel record naming this exact stage and
+    number -- the product's own answer, which wins over whatever the stop
+    itself says, since a counseled stop was already read once; failing
+    that, "person" for class question (a person's to answer, not a
+    guard's); failing that, "guard" for a class in GUARDED_STOP_CLASSES
+    (a guard's own rejection needed no further reading); anything else
+    -- no-cause, unclassed, or no stop at all -- is "none": nobody has
+    answered it yet."""
+    records_rel = m["paths"]["records"]
+    item_records_dir = root / records_rel / item_id
+    by_class = {c: 0 for c in stop_class_enum()}
+    by_answerer: dict[str, int] = {}
+    before_stop_was_recorded = 0
+    rows: list[dict] = []
+
+    def add_row(stage: str, n: int, stop: dict | None) -> None:
+        nonlocal before_stop_was_recorded
+        name = f"{stage}-{n:02d}"
+        marker = item_records_dir / f"{name}.filed"
+        filed_issue = marker.read_text() if marker.is_file() else None
+        counsel = counsel_record_for(item_records_dir, stage, n)
+
+        if counsel is not None:
+            answerer = f"counsel:{counsel.get('verdict')}"
+        elif stop and stop.get("class") == "question":
+            answerer = "person"
+        elif stop and stop.get("class") in GUARDED_STOP_CLASSES:
+            answerer = "guard"
+        else:
+            answerer = "none"
+
+        if stop:
+            cls, provenance, detail = (stop.get("class"), stop.get("provenance"),
+                                      stop.get("detail"))
+            if cls in by_class:
+                by_class[cls] += 1
+        else:
+            cls, provenance, detail = "before stop was recorded", None, None
+            before_stop_was_recorded += 1
+
+        by_answerer[answerer] = by_answerer.get(answerer, 0) + 1
+        rows.append({"item": item_id, "record": name, "class": cls,
+                    "provenance": provenance, "detail": detail,
+                    "answerer": answerer, "filed_issue": filed_issue})
+
+    if item_records_dir.is_dir():
+        for stage in STOP_STAGES:
+            for n, rec in sorted(parse_attempts(item_records_dir, stage).items()):
+                if rec.get("status") == "pass":
+                    continue
+                add_row(stage, n, rec.get("stop"))
+        for n, rec in sorted(parse_attempts(item_records_dir, "spec").items()):
+            if rec.get("status") != "refused":
+                continue
+            add_row("spec", n, gate_stop(rec.get("refusal")))
+
+    totals = {"by_class": by_class, "by_answerer": by_answerer,
+             "before_stop_was_recorded": before_stop_was_recorded}
+    return {"item": item_id, "rows": rows, "totals": totals}
+
+
+def cmd_stops(argv: list[str]) -> int:
+    as_json = "--json" in argv
+    positional = [a for a in argv if a != "--json"]
+    root = Path(".").resolve()
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo stops: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    records_rel = m["paths"]["records"]
+    if positional:
+        item_ids = [positional[0]]
+    else:
+        records_root = root / records_rel
+        item_ids = (sorted((p.name for p in records_root.iterdir() if p.is_dir()))
+                   if records_root.is_dir() else [])
+
+    reports = [item_stops(root, m, item_id) for item_id in item_ids]
+
+    if as_json:
+        if positional:
+            print(json.dumps(reports[0], indent=2))
+        else:
+            print(json.dumps({"items": reports}, indent=2))
+        return 0
+
+    for entry in reports:
+        print(f"attavo stops: item {entry['item']}")
+        for row in entry["rows"]:
+            filed = f"  filed: {row['filed_issue'].strip()}" if row["filed_issue"] else ""
+            print(f"  {row['record']:<10} {row['class']:<24} {row['provenance'] or '-':<10} "
+                 f"{row['answerer']:<16}{filed}")
+        t = entry["totals"]
+        print(f"  by class: {t['by_class']}")
+        print(f"  by answerer: {t['by_answerer']}")
+        print(f"  before stop was recorded: {t['before_stop_was_recorded']}")
+    if not reports:
+        print(f"attavo stops: no item found under {records_rel}")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0 if argv else 2
+    if argv[0] == "doctor":
+        return cmd_doctor(argv[1:])
+    if argv[0] == "spec-gate":
+        return cmd_spec_gate(argv[1:])
+    if argv[0] == "approve":
+        return cmd_approve(argv[1:])
+    if argv[0] == "approval-status":
+        return cmd_approval_status(argv[1:])
+    if argv[0] == "build":
+        return cmd_build(argv[1:])
+    if argv[0] == "verify":
+        return cmd_verify(argv[1:])
+    if argv[0] == "file-findings":
+        return cmd_file_findings(argv[1:])
+    if argv[0] == "file-stops":
+        return cmd_file_stops(argv[1:])
+    if argv[0] == "counsel":
+        return cmd_counsel(argv[1:])
+    if argv[0] == "record-only":
+        return cmd_record_only(argv[1:])
+    if argv[0] == "attest":
+        return cmd_attest(argv[1:])
+    if argv[0] == "drive":
+        return cmd_drive(argv[1:])
+    if argv[0] == "ledger":
+        return cmd_ledger(argv[1:])
+    if argv[0] == "stops":
+        return cmd_stops(argv[1:])
+    print(f"attavo: unknown subcommand {argv[0]!r}; only doctor, spec-gate, approve, "
+          f"approval-status, build, verify, file-findings, file-stops, counsel, record-only, "
+          f"attest, drive, ledger, stops exist at this commit", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
