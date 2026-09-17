@@ -1,0 +1,83 @@
+{
+  "sha": "9d2fafc78b9e91e0165ea864c585a1d0d4a2ef60",
+  "build_sha": "ffd20d2b9718587c315186da8c4a7e88cdd09eb5",
+  "build_record": "build-04",
+  "approval_sha": "2ba29e72f22c533e8606f8baf83394034e8c16fb",
+  "at": "2026-09-17T22:13:33Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "9d2fafc78b9e91e0165ea864c585a1d0d4a2ef60",
+    "conclusions": [
+      {
+        "name": "doctor",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "The real forge reader accepts the first attestation for a digest without checking its predicate type",
+      "specimen": ".attavo/bin/forge-attestation:23 and bin/attavo:1116",
+      "retires": "The assumption that any JSON attestation stored under the synthetic merge digest proves the Attavo traversal was sealed.",
+      "rejection_test": "test_forge_attestation_ignores_unrelated_predicate_types",
+      "severity": "Blocking when the digest has an unrelated attestation\u2014especially when it is first in the API response\u2014because doctor reports the item sealed without an Attavo statement."
+    },
+    {
+      "title": "The merge-group doctor races the workflow that creates the attestation",
+      "specimen": ".github/workflows/ci.yml:32 and .github/workflows/attavo-coherence.yml:114",
+      "retires": "The assumption that enabling the new proof in merge-group CI guarantees the statement is already readable.",
+      "rejection_test": "test_merge_group_doctor_runs_only_after_attestation_is_published",
+      "severity": "Blocking when the doctor job reads the merge-group digest before the independent coherence workflow finishes actions/attest@v2; the valid merge group fails nondeterministically with a 404."
+    },
+    {
+      "title": "Complete items are silently omitted unless one merge introduced every stage record",
+      "specimen": "bin/attavo:1160",
+      "retires": "The claim that the proof accounts for every merged, fully staged item rather than only the repository's customary single-merge record layout.",
+      "rejection_test": "test_doctor_proof_six_fails_when_stage_records_arrive_across_multiple_merges",
+      "severity": "Blocking when an item's four stage records reach the branch across multiple merges or direct commits and another item satisfies proof two; merge_introducing_records returns null, the item is skipped, and doctor can report done without checking its seal."
+    }
+  ],
+  "tests_named": [
+    "test_forge_attestation_ignores_unrelated_predicate_types",
+    "test_merge_group_doctor_runs_only_after_attestation_is_published",
+    "test_doctor_proof_six_fails_when_stage_records_arrive_across_multiple_merges"
+  ],
+  "commits": [],
+  "mutation": null,
+  "weak_stub": false,
+  "stub_ratio": null,
+  "tokens": {
+    "input": 260012,
+    "output": 2703
+  },
+  "cost_usd": null,
+  "wall_clock_s": 109.352,
+  "status": "pass",
+  "stop": null,
+  "record_version": 5,
+  "item": "158",
+  "product_version": "v0.25.0-39-g5525019",
+  "product_pin": "v0.25.0"
+}
