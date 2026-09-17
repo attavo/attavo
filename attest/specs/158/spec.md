@@ -13,6 +13,7 @@ Retires: the doctor's `done` on an unattested traversal; `not read` as the rende
 - .github/workflows/ci.yml
 - tests/test_doctor_sealed.py
 - tests/test_doctor.py
+- tests/test_record_schemas.py
 
 ## Criteria
 
