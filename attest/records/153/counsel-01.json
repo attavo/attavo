@@ -1,0 +1,54 @@
+{
+  "sha": "e18dfffe25a8868418127528ba7a229f1ff6a1ed",
+  "record_stage": "build",
+  "record": "build-01",
+  "at": "2026-09-17T16:21:57Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 258016,
+    "output": 1910
+  },
+  "cost_usd": null,
+  "wall_clock_s": 53.93,
+  "status": "done",
+  "class": "no-cause",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "attest/specs/153/spec.md",
+      "symbol": "Criteria",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "attest/records/153/build-01.log",
+      "symbol": "StructuredOutput(status=\"question\", question=null)",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/adapters/claude-code/run",
+      "symbol": "question_class",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "The null question is not a question and changes no definition of done. The adapter correctly rejected it, leaving a no-cause executor stop. Retry the build from the existing worktree, complete the claimed ledger implementation, and conclude only after the criteria and required checks finish; an unfinished background test run is not grounds to halt.",
+    "patch": null,
+    "question": null
+  },
+  "record_version": 2,
+  "item": "153",
+  "product_version": "v0.25.0-12-g243e9fe",
+  "product_pin": "v0.25.0"
+}
