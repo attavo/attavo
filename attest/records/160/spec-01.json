@@ -1,0 +1,29 @@
+{
+  "sha": "8ca690c67eb5cf67bb2da5fa03ce53e282d1bff2",
+  "spec_sha": "8ca690c67eb5cf67bb2da5fa03ce53e282d1bff2",
+  "at": "2026-09-17T20:01:08Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "a-string-message-is-transcript-not-a-crash.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "a-null-question-is-a-report.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "the-boundary-has-its-tests.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "160",
+  "product_version": "v0.25.0",
+  "product_pin": "v0.25.0"
+}
