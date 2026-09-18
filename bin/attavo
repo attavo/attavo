@@ -48,7 +48,10 @@ tenant root and exits 1 until every proof holds:
                              attestation store for its merge commit, read
                              through [forge].attestation_command -- a
                              merge at or before [forge].sealed_since is
-                             named as before the window instead of failed
+                             named as before the window instead of failed.
+                             [forge].attestation_command exiting 2 means
+                             the store itself could not be read, reported
+                             as not_read by item and never as unsealed
 
 Nothing in doctor is a gate. The doctor reads; it never writes and it never
 blocks a merge by itself. It is what CI runs to say whether the product
@@ -1415,18 +1418,21 @@ def attestation_command(m: dict) -> str | None:
     return cmd if isinstance(cmd, str) and cmd.strip() else None
 
 
-def statement_for(root: Path, cmd: str, merge_sha: str) -> dict | None:
-    """The statement the forge holds for merge_sha, or None when the
-    command exits non-zero or prints anything but a JSON object."""
+def statement_for(root: Path, cmd: str, merge_sha: str) -> tuple[dict | None, int]:
+    """The statement the forge holds for merge_sha and the command's exit
+    code. The statement is None when the command exits non-zero or prints
+    anything but a JSON object -- exit 2 means the store itself could not
+    be read (issue #158, amended after build-05: distinct from exit 1,
+    the store read fine and simply held no statement)."""
     run = subprocess.run(cmd, shell=True, cwd=str(root), input=merge_sha + "\n",
                          capture_output=True, text=True, check=False)
     if run.returncode != 0:
-        return None
+        return None, run.returncode
     try:
         parsed = json.loads(run.stdout)
     except ValueError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+        return None, run.returncode
+    return (parsed if isinstance(parsed, dict) else None), run.returncode
 
 
 def _is_ancestor(root: Path, earlier: str, later: str) -> bool:
@@ -1462,6 +1468,7 @@ def proof_every_attested_item_is_sealed(root: Path, m: dict | None) -> Proof:
     before_window: list[str] = []
     unsealed: list[str] = []
     not_merged: list[str] = []
+    not_read: list[str] = []
     reasons: list[str] = []
     for item in complete:
         merge_sha, _ = merge_introducing_records(root, records_rel, item, STAGES, merges=merges)
@@ -1470,17 +1477,24 @@ def proof_every_attested_item_is_sealed(root: Path, m: dict | None) -> Proof:
             continue
         if isinstance(since, str) and since.strip() and _is_ancestor(root, merge_sha, since):
             before_window.append(item)
-        elif statement_for(root, cmd, merge_sha) is not None:
+            continue
+        statement, exit_code = statement_for(root, cmd, merge_sha)
+        if statement is not None:
             sealed.append(item)
+        elif exit_code == 2:
+            not_read.append(item)
+            reasons.append(f"item {item} merged at {merge_sha[:12]}: not read -- "
+                           f"the store could not be read; {cmd!r} exited 2")
         else:
             unsealed.append(item)
             reasons.append(f"item {item} merged at {merge_sha[:12]} has no statement in the store")
     if reasons:
         return p.fail("; ".join(reasons), sealed=sealed, before_window=before_window,
-                      unsealed=unsealed, not_merged=not_merged)
+                      unsealed=unsealed, not_merged=not_merged, not_read=not_read)
     return p.hold(f"{len(sealed)} merged item(s) sealed, {len(before_window)} before the window, "
                  f"{len(not_merged)} not merged",
-                 sealed=sealed, before_window=before_window, unsealed=unsealed, not_merged=not_merged)
+                 sealed=sealed, before_window=before_window, unsealed=unsealed,
+                 not_merged=not_merged, not_read=not_read)
 
 
 def doctor(root: Path) -> list[Proof]:

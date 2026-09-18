@@ -35,6 +35,14 @@ jobs:
     permissions:
       contents: read
       attestations: read
+    env:
+      # issue #158, amended after build-05: every step that runs the
+      # doctor -- the pytest step and the bin/attavo invocation both --
+      # reads the attestation store through [forge].attestation_command,
+      # which shells out to `gh`. A token scoped to only the last step
+      # left the pytest step reading an unauthenticated store, which
+      # exits 2 (not read), not the 404 (unsealed) the proof expects.
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,8 +59,6 @@ jobs:
       - name: doctor's five proofs
         run: python3 -m pytest tests/test_doctor.py -q -k "every_gate_rejects or one_item_traversed_every_stage or no_commit_lacks_a_record or no_stop_lacks_cause or every_attested_item_is_sealed"
       - run: python3 bin/attavo doctor .
-        env:
-          GH_TOKEN: ${{ github.token }}
 
   action-self-check:
     runs-on: ubuntu-latest

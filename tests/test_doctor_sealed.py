@@ -130,6 +130,34 @@ def test_doctor_proof_six_fails_without_an_attestation_command(tmp_path):
     assert not p["holds"] and "attestation_command" in p["reason"]
 
 
+def test_doctor_proof_six_says_not_read_when_the_store_cannot_be_read(tmp_path):
+    root = tmp_path / "unreadable"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", "."], cwd=root, check=True)
+    _git(root, "config", "user.email", "doctor@attavo.invalid")
+    _git(root, "config", "user.name", "doctor fixture")
+    (root / "attavo.toml").write_text(
+        '[paths]\nrecords = "records"\n\n[forge]\nattestation_command = "sh ./unreadable-store"\n')
+    (root / "unreadable-store").write_text(
+        '#!/bin/sh\nread sha\necho "gh: not logged in" >&2\nexit 2\n')
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "install")
+    _git(root, "checkout", "-q", "-b", "attavo/1-x")
+    (root / "records" / "1").mkdir(parents=True)
+    for stage in ("spec", "approval", "build", "verify"):
+        (root / "records" / "1" / f"{stage}-01.json").write_text('{"status": "pass"}')
+        _git(root, "add", "records")
+        _git(root, "commit", "-q", "-m", f"{stage} record for item 1")
+    _git(root, "checkout", "-q", "main")
+    _git(root, "merge", "-q", "--no-ff", "-m", "Merge branch 'attavo/1-x'", "attavo/1-x")
+    _git(root, "update-ref", "refs/remotes/origin/main", _git(root, "rev-parse", "main"))
+    _git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    p = _proof(root)
+    assert not p["holds"]
+    assert "not read" in p["reason"] and "unreadable-store" in p["reason"] and "exited 2" in p["reason"]
+    assert p["not_read"] == ["1"] and p["unsealed"] == [] and p["sealed"] == []
+
+
 def test_doctor_proof_six_names_an_unmerged_item(tmp_path):
     root = _tenant_with_one_merged_and_one_unmerged_item(tmp_path)
     noref = _proof(root)
