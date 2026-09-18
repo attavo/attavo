@@ -1,0 +1,54 @@
+{
+  "sha": "72d9620508c2818931b6c4b7eadc9045aff14532",
+  "record_stage": "verify",
+  "record": "verify-03",
+  "at": "2026-09-18T23:49:09Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 268981,
+    "output": 2563
+  },
+  "cost_usd": null,
+  "wall_clock_s": 59.851,
+  "status": "done",
+  "class": "forge-unconcluded",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "/Users/davidbean/Projects/attest/schema/manifest.schema.json",
+      "symbol": "properties.forge.properties.checks_command",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attavo-worktree-158/.attavo/bin/forge-checks",
+      "symbol": "main",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/bin/attavo",
+      "symbol": "read_forge_checks and derive_stop",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "The stop is forge-unconcluded/tenant: for commit 72d9620508c2818931b6c4b7eadc9045aff14532, the tenant's forge command supplied no parseable check conclusions, so the forge was unread or had no check runs for that exact commit. The product correctly treated an empty conclusion set as not green, returned before invoking the verifier, and guarded the stop by name. Retry verification after the forge exposes at least one concluded green check for that commit; if the result remains empty, repair the tenant command's GitHub authentication or API visibility. An empty set must not be accepted as green.",
+    "patch": null,
+    "question": null
+  },
+  "record_version": 2,
+  "item": "158",
+  "product_version": "v0.25.0-42-g5da8b82",
+  "product_pin": "v0.25.0"
+}
