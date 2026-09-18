@@ -1,0 +1,74 @@
+{
+  "sha": "59cb49a3a0bcbd5429696242029d601a55241143",
+  "start_sha": "1028456750927539dc8d3073016d99ee336ef46e",
+  "spec_sha": "f2c4bc718bbd408edf7a1f4b500d7896edd8506b",
+  "approval_sha": "bdb42bae4a724d6a6a70675017e66fe69ed023b6",
+  "at": "2026-09-18T23:43:24Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.277 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "doctor-fails-on-an-unsealed-merge.sh",
+      "exit": 0
+    },
+    {
+      "name": "doctor-fails-without-attestation-command.sh",
+      "exit": 0
+    },
+    {
+      "name": "doctor-names-an-unmerged-item.sh",
+      "exit": 0
+    },
+    {
+      "name": "doctor-says-not-read-when-the-store-cannot-be-read.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-doctor-job-carries-the-token.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-proof-has-its-test.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "count": 1,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m pytest tests -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 3427219,
+    "output": 23258
+  },
+  "cost_usd": 1.1503545999999996,
+  "wall_clock_s": 1021.19,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "stop": null,
+  "record_version": 7,
+  "item": "158",
+  "product_version": "v0.25.0-42-g5da8b82",
+  "product_pin": "v0.25.0"
+}
