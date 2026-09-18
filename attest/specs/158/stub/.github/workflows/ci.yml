@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  merge_group:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest jsonschema
+      - run: >
+          python3 -m pytest tests -q
+          --deselect tests/test_doctor.py::test_every_gate_rejects
+          --deselect tests/test_doctor.py::test_one_item_traversed_every_stage
+          --deselect tests/test_doctor.py::test_no_commit_lacks_a_record
+          --deselect tests/test_doctor.py::test_no_stop_lacks_cause
+          --deselect tests/test_doctor.py::test_every_attested_item_is_sealed
+
+  # Since #103, this repository is Attavo's own second tenant (attavo.toml
+  # at the root) and the doctor's six proofs run for real, not under
+  # || true. #106's first item merged (fdd1981, v0.18.0), so the six
+  # proofs hold on main and this job reports on pull requests and merge
+  # groups too -- where a refusal is cheap. It does not report on a
+  # branch push: a branch's own boundary commits precede their records,
+  # so proof three (no commit lacks a record) cannot hold there (#113).
+  doctor:
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: read
+    # issue #158: proof six reads the attestation store through
+    # [forge].attestation_command, a gh call; every step that runs the
+    # doctor (the pytest step included) needs the token, so it is set
+    # on the job, not on one step.
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # issue #169: _merges_reachable reads refs/remotes/origin/HEAD to
+      # name the default branch without hard-coding "main"; actions/checkout
+      # does not set it, so every trigger this job runs on -- pull_request,
+      # merge_group, and push -- needs it set explicitly, after the fetch.
+      - run: git remote set-head origin -a
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest jsonschema
+      - name: doctor's six proofs
+        run: python3 -m pytest tests/test_doctor.py -q -k "every_gate_rejects or one_item_traversed_every_stage or no_commit_lacks_a_record or no_stop_lacks_cause or no_invocation_lacks_record or every_attested_item_is_sealed"
+      - run: python3 bin/attavo doctor .
+
+  action-self-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./
+      - run: test "$ATTAVO_ATTESTATION_PREDICATE_TYPE" = "$(python3 -c "import json; print(json.load(open('schema/attestation.schema.json'))['\$id'])")"
+      - run: attavo spec-gate
+        working-directory: tests/fixtures/valid
+        env:
+          ATTAVO_ITEM: "1"
+
+  # merge_group added alongside pull_request (#103): the merge queue
+  # requires every required check to report on the merge group, not only
+  # on the pull request that entered it (tenant zero's #662 was the same
+  # class of miss, on pull_request only). github.base_ref is empty on a
+  # merge_group event; the target branch comes from
+  # github.event.merge_group.base_ref there instead.
+  schema-version:
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Resolve the target branch
+        id: base
+        run: |
+          if [ "${{ github.event_name }}" = "merge_group" ]; then
+            branch="${{ github.event.merge_group.base_ref }}"
+            branch="${branch#refs/heads/}"
+          else
+            branch="${{ github.base_ref }}"
+          fi
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+      - run: git fetch --no-tags origin "${{ steps.base.outputs.branch }}"
+      - run: python3 scripts/check_record_schema_version.py "origin/${{ steps.base.outputs.branch }}"

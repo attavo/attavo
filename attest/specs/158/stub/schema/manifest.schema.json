@@ -109,7 +109,7 @@
         "attestation_command": {
           "type": "string",
           "minLength": 1,
-          "description": "reads a merge sha on stdin and prints its attestation statement as JSON on exit 0; nothing and a non-zero exit when the store holds none"
+          "description": "reads a merge sha on stdin and prints its attestation statement as JSON on exit 0; nothing and exit 1 when the store holds none; any other exit means the store could not be read"
         },
         "sealed_since": {
           "type": "string",

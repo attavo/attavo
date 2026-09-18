@@ -113,6 +113,19 @@ def test_doctor_proof_six_refuses_without_a_default_branch_ref(tmp_path):
     assert not p["holds"] and "refs/remotes/origin/HEAD" in p["reason"]
 
 
+def test_doctor_proof_six_says_not_read_when_the_store_cannot_be_read(tmp_path):
+    """Exit 2 from the attestation command (gh unauthenticated on a
+    runner, the command missing) is "the store could not be read", never
+    "unsealed": the item lands in not_read and the reason names the
+    command and its exit."""
+    root, m1, m2 = _tenant_with_two_merged_items(tmp_path)
+    (root / "fake-attest").write_text('#!/bin/sh\nread sha\necho "gh: not logged in" >&2\nexit 2\n')
+    p = _proof(root)
+    assert not p["holds"]
+    assert "not read" in p["reason"] and "exited 2" in p["reason"]
+    assert p["not_read"] == ["1", "2"] and p["unsealed"] == [] and p["sealed"] == []
+
+
 def test_doctor_proof_six_fails_without_an_attestation_command(tmp_path):
     root = tmp_path / "bare"
     root.mkdir()

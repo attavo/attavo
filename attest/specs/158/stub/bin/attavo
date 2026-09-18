@@ -1418,18 +1418,30 @@ def attestation_command(m: dict) -> str | None:
     return cmd if isinstance(cmd, str) and cmd.strip() else None
 
 
-def statement_for(root: Path, cmd: str, merge_sha: str) -> dict | None:
-    """The statement the forge holds for merge_sha, or None when the
-    command exits non-zero or prints anything but a JSON object."""
+def statement_for(root: Path, cmd: str, merge_sha: str) -> tuple[dict | None, str | None]:
+    """(statement, unreadable): the statement the forge holds for
+    merge_sha as a dict on exit 0; (None, None) when the command exits 1,
+    the contract's word for "the store holds nothing for this sha"; and
+    (None, detail) on any other exit or on output that is not a JSON
+    object, the store could not be read at all -- an unauthenticated gh
+    on a runner, a missing command, a network refusal. The two Nones are
+    different facts and proof six reports them differently (issue #158,
+    2026-09-18: the doctor job's pytest step ran gh with no token, the
+    command exited 2, and the proof called a sealed merge unsealed)."""
     run = subprocess.run(cmd, shell=True, cwd=str(root), input=merge_sha + "\n",
                          capture_output=True, text=True, check=False)
+    if run.returncode == 1:
+        return None, None
     if run.returncode != 0:
-        return None
+        first = (run.stderr.strip().splitlines() or [""])[0]
+        return None, f"{cmd} exited {run.returncode}" + (f": {first}" if first else "")
     try:
         parsed = json.loads(run.stdout)
     except ValueError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+        return None, f"{cmd} printed something other than JSON"
+    if not isinstance(parsed, dict):
+        return None, f"{cmd} printed a JSON value that is not an object"
+    return parsed, None
 
 
 def _is_ancestor(root: Path, earlier: str, later: str) -> bool:
@@ -1468,6 +1480,7 @@ def proof_every_attested_item_is_sealed(root: Path, m: dict | None) -> Proof:
     before_window: list[str] = []
     unsealed: list[str] = []
     not_merged: list[str] = []
+    not_read: list[str] = []
     reasons: list[str] = []
     merges, refusal = _merges_reachable(root)
     if refusal:
@@ -1479,12 +1492,20 @@ def proof_every_attested_item_is_sealed(root: Path, m: dict | None) -> Proof:
             continue
         if isinstance(since, str) and since.strip() and _is_ancestor(root, merge_sha, since):
             before_window.append(item)
-        elif statement_for(root, cmd, merge_sha) is not None:
+            continue
+        statement, unreadable = statement_for(root, cmd, merge_sha)
+        if unreadable:
+            # The store could not be read: not the same fact as "the
+            # store holds nothing", and never reported as unsealed.
+            not_read.append(item)
+            reasons.append(f"item {item} merged at {merge_sha[:12]}: not read: {unreadable}")
+        elif statement is not None:
             sealed.append(item)
         else:
             unsealed.append(item)
             reasons.append(f"item {item} merged at {merge_sha[:12]} has no statement in the store")
-    lists = dict(sealed=sealed, before_window=before_window, unsealed=unsealed, not_merged=not_merged)
+    lists = dict(sealed=sealed, before_window=before_window, unsealed=unsealed,
+                 not_merged=not_merged, not_read=not_read)
     if reasons:
         return p.fail("; ".join(reasons), **lists)
     return p.hold(f"{len(sealed)} merged item(s) sealed, {len(before_window)} before the window, "
