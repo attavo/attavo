@@ -614,7 +614,10 @@ def question_class(status: str, question: str | None) -> str:
     if status != "question":
         return "done"
     if not question or len(question) < MIN_QUESTION_CHARS:
-        return "fail"
+        # An absent or too-short question is a report with nothing in
+        # it: a status update in the question channel (issue #150, five
+        # specimens on 2026-09-17), never an exit with no report line.
+        return "report"
     if "?" not in question:
         return "report"
     return "question"

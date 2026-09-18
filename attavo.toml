@@ -48,3 +48,6 @@ approvers = ["dbean10"]
 
 [checks]
 command = "python3 -m pytest tests -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed"
+
+[drive]
+stall_after_s = 1800

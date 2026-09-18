@@ -1,0 +1,59 @@
+{
+  "sha": "5151258fe068db0bf06220f6d2ca97ad8593c347",
+  "record_stage": "build",
+  "record": "build-02",
+  "at": "2026-09-17T16:43:26Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 206685,
+    "output": 3056
+  },
+  "cost_usd": null,
+  "wall_clock_s": 78.371,
+  "status": "done",
+  "class": "unclassed",
+  "verdict": "patch",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "/Users/davidbean/Projects/attest/adapters/README.md",
+      "symbol": "Events (issue #26)",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/adapters/claude-code/run",
+      "symbol": "stream_line_events",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/tests/test_adapter_claude_code.py",
+      "symbol": "test_claude_code_maps_a_recorded_stream_to_events_and_the_same_report_fields",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": null,
+    "patch": {
+      "file": "/Users/davidbean/Projects/attest/adapters/claude-code/run",
+      "symbol": "stream_line_events",
+      "rejection_test": "Feed ATTAVO_ADAPTER_STREAM_FILE a non-content stream event whose message is a string followed by a valid result; the adapter must exit 0, preserve the raw event on stdout, emit no event for it, and still report done.",
+      "diff": "diff --git a/adapters/claude-code/run b/adapters/claude-code/run\n--- a/adapters/claude-code/run\n+++ b/adapters/claude-code/run\n@@ -671,7 +671,10 @@ def stream_line_events(obj: dict) -> list[tuple[str, str]]:\n     line -- maps to nothing.\"\"\"\n     events: list[tuple[str, str]] = []\n-    content = ((obj.get(\"message\") or {}).get(\"content\") or [])\n+    message = obj.get(\"message\")\n+    if not isinstance(message, dict):\n+        return events\n+    content = message.get(\"content\") or []\n     if obj.get(\"type\") == \"assistant\":\n         for block in content:\n             if not isinstance(block, dict):\ndiff --git a/tests/test_adapter_claude_code.py b/tests/test_adapter_claude_code.py\n--- a/tests/test_adapter_claude_code.py\n+++ b/tests/test_adapter_claude_code.py\n@@ -135,6 +135,20 @@ def test_claude_code_tool_call_event_is_one_line_and_capped_at_400_chars(tmp_pa\n     assert len(text) <= 400\n \n \n+def test_claude_code_ignores_a_stream_event_with_a_string_message(tmp_path):\n+    \"\"\"A non-content stream event may carry a diagnostic string in\n+    message; it remains transcript evidence but is not a feed event and\n+    must not prevent the terminal result from being read.\"\"\"\n+    diagnostic = {\"type\": \"rate_limit_event\", \"message\": \"rate limit status\"}\n+    run = run_with_stream(tmp_path, [diagnostic, RESULT_LINE])\n+\n+    assert run.returncode == 0, run.stdout + run.stderr\n+    assert json.dumps(diagnostic) in run.stdout\n+    assert json.loads(run.stdout.splitlines()[-1])[\"status\"] == \"done\"\n+    assert read_events(tmp_path) == []\n+\n+\n def test_claude_code_no_events_file_when_atavo_events_is_unset(tmp_path):\n     \"\"\"An adapter invocation with no ATTAVO_EVENTS writes no events file\n     -- the mapping only ever writes to a path the product handed it.\"\"\"\n"
+    },
+    "question": null
+  },
+  "record_version": 2,
+  "item": "151",
+  "product_version": "v0.25.0-12-g243e9fe",
+  "product_pin": "v0.25.0"
+}

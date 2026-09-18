@@ -8,7 +8,9 @@ when the capability it names has landed and been used for real.
 Run: python3 -m pytest tests -q
 """
 import json
+import os
 import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -55,6 +57,14 @@ def test_no_stop_lacks_cause():
     """Proof 4, issue #94. Every non-pass build or verify record at
     record_version 3 or later carries a stop naming its class and cause."""
     p = run_doctor(ROOT)["no-stop-lacks-cause"]
+    assert p["holds"], p["reason"]
+
+
+def test_no_invocation_lacks_record():
+    """Proof 5, issue #151. Every <stage>-NN.started marker under
+    paths.records has arrived at its own <stage>-NN.json, or is still a
+    live process on this host."""
+    p = run_doctor(ROOT)["no-invocation-lacks-record"]
     assert p["holds"], p["reason"]
 
 
@@ -752,3 +762,98 @@ def test_doctor_proof_four_fails_on_an_unclassed_stop_with_no_detail(tmp_path):
     p = run_doctor(root)["no-stop-lacks-cause"]
     assert not p["holds"]
     assert "unclassed with no detail" in p["reason"]
+
+
+def _dead_pid() -> int:
+    """A pid guaranteed not to be running: a real child, spawned and
+    reaped, on this host."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+def test_doctor_proof_five_fails_on_a_dead_invocation_with_no_record(tmp_path):
+    """Issue #151: a build-01.started marker naming a dead pid on this
+    host, with no build-01.json to retire it, is exactly the silence two
+    build attempts of item #148 left behind -- proof five names it."""
+    root = tmp_path / "dead_invocation"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n\n'
+                                      '[drive]\nstall_after_s = 60\n')
+    init_repo(root, "install")
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "build-01.started").write_text(json.dumps({
+        "at": "2026-09-17T13:16:08Z", "host": socket.gethostname(), "pid": _dead_pid(),
+        "sha": "0" * 40, "product_version": "fixture"}))
+    commit_all(root, "invocation marker for item 1")
+
+    p = run_doctor(root)["no-invocation-lacks-record"]
+    assert not p["holds"]
+    assert "build-01" in p["reason"] and "never wrote its record" in p["reason"]
+
+
+def test_doctor_proof_five_holds_once_the_record_arrives(tmp_path):
+    """The same marker, retired by its own build-01.json: proof five
+    holds -- the record's arrival is what retires a marker, not its
+    removal."""
+    root = tmp_path / "recorded_invocation"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n\n'
+                                      '[drive]\nstall_after_s = 60\n')
+    init_repo(root, "install")
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "build-01.started").write_text(json.dumps({
+        "at": "2026-09-17T13:16:08Z", "host": socket.gethostname(), "pid": _dead_pid(),
+        "sha": "0" * 40, "product_version": "fixture"}))
+    (records / "build-01.json").write_text(json.dumps({"status": "pass"}))
+    commit_all(root, "invocation marker and its record for item 1")
+
+    p = run_doctor(root)["no-invocation-lacks-record"]
+    assert p["holds"], p["reason"]
+
+
+def test_doctor_proof_five_reports_a_live_invocation_as_running_not_failed(tmp_path):
+    """A marker naming this test's own pid, on this host, with no
+    record: alive, so proof five holds and names it running rather than
+    failing the tenant for a drive that has not had the chance to finish
+    yet."""
+    root = tmp_path / "live_invocation"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n\n'
+                                      '[drive]\nstall_after_s = 60\n')
+    init_repo(root, "install")
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "build-01.started").write_text(json.dumps({
+        "at": "2026-09-17T13:16:08Z", "host": socket.gethostname(), "pid": os.getpid(),
+        "sha": "0" * 40, "product_version": "fixture"}))
+    commit_all(root, "invocation marker for a still-running invocation")
+
+    p = run_doctor(root)["no-invocation-lacks-record"]
+    assert p["holds"], p["reason"]
+    assert len(p["running_invocations"]) == 1
+    assert "build-01" in p["running_invocations"][0]
+
+
+def test_doctor_proof_five_fails_without_stall_after_s_in_the_manifest(tmp_path):
+    """A tenant with no [drive].stall_after_s carries no bound past which
+    a live invocation is hung -- proof five cannot tell a hung drive from
+    a running one, and refuses to guess a default."""
+    root = tmp_path / "no_stall_bound"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "build-01.json").write_text(json.dumps({"status": "pass"}))
+    commit_all(root, "a record with no [drive].stall_after_s declared")
+
+    p = run_doctor(root)["no-invocation-lacks-record"]
+    assert not p["holds"]
+    assert "stall_after_s" in p["reason"]

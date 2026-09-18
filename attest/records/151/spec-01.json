@@ -1,0 +1,29 @@
+{
+  "sha": "3c5bbc2e94fed19ce12f29ffa543b1a0781c143c",
+  "spec_sha": "3c5bbc2e94fed19ce12f29ffa543b1a0781c143c",
+  "at": "2026-09-17T16:05:11Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "doctor-fails-on-an-invocation-without-record.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "recover-writes-a-died-record.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "died-and-hung-are-stop-classes.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "151",
+  "product_version": "v0.25.0",
+  "product_pin": "v0.25.0"
+}
