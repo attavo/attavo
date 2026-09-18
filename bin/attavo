@@ -1455,13 +1455,18 @@ def proof_every_attested_item_is_sealed(root: Path, m: dict | None) -> Proof:
     # named, never failed, the same window convention proof three keeps
     # for commits before the manifest's own install.
     since = (m.get("forge") or {}).get("sealed_since")
+    merges, refusal = _merges_reachable(root)
+    if refusal:
+        return p.fail(refusal)
     sealed: list[str] = []
     before_window: list[str] = []
     unsealed: list[str] = []
+    not_merged: list[str] = []
     reasons: list[str] = []
     for item in complete:
-        merge_sha = merge_introducing_records(root, records_rel, item, STAGES)
+        merge_sha, _ = merge_introducing_records(root, records_rel, item, STAGES, merges=merges)
         if merge_sha is None:
+            not_merged.append(item)
             continue
         if isinstance(since, str) and since.strip() and _is_ancestor(root, merge_sha, since):
             before_window.append(item)
@@ -1471,9 +1476,11 @@ def proof_every_attested_item_is_sealed(root: Path, m: dict | None) -> Proof:
             unsealed.append(item)
             reasons.append(f"item {item} merged at {merge_sha[:12]} has no statement in the store")
     if reasons:
-        return p.fail("; ".join(reasons), sealed=sealed, before_window=before_window, unsealed=unsealed)
-    return p.hold(f"{len(sealed)} merged item(s) sealed, {len(before_window)} before the window",
-                 sealed=sealed, before_window=before_window, unsealed=unsealed)
+        return p.fail("; ".join(reasons), sealed=sealed, before_window=before_window,
+                      unsealed=unsealed, not_merged=not_merged)
+    return p.hold(f"{len(sealed)} merged item(s) sealed, {len(before_window)} before the window, "
+                 f"{len(not_merged)} not merged",
+                 sealed=sealed, before_window=before_window, unsealed=unsealed, not_merged=not_merged)
 
 
 def doctor(root: Path) -> list[Proof]:
