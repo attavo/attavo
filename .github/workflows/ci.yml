@@ -35,6 +35,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # issue #169: _merges_reachable reads refs/remotes/origin/HEAD to
+      # name the default branch without hard-coding "main"; actions/checkout
+      # does not set it, so every trigger this job runs on -- pull_request,
+      # merge_group, and push -- needs it set explicitly, after the fetch.
+      - run: git remote set-head origin -a
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
