@@ -1,0 +1,66 @@
+{
+  "sha": "a1352196273cec80e1fa37abd7ce0c1807ecfa02",
+  "start_sha": "eda5ce15e8c955e9f800cb4280ef64da985a23c6",
+  "spec_sha": "d7cbca1df942648b30f87d490fab4b4ceeb85133",
+  "approval_sha": "87450131e8a224a48935260b639cf89982365dc2",
+  "at": "2026-09-18T22:37:26Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.277 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "doctor-fails-on-an-unsealed-merge.sh",
+      "exit": 0
+    },
+    {
+      "name": "doctor-fails-without-attestation-command.sh",
+      "exit": 0
+    },
+    {
+      "name": "doctor-names-an-unmerged-item.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-proof-has-its-test.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "count": 1,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m pytest tests -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 2314520,
+    "output": 21599
+  },
+  "cost_usd": 0.9892057999999998,
+  "wall_clock_s": 954.14,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "stop": null,
+  "record_version": 7,
+  "item": "158",
+  "product_version": "v0.25.0-42-g5da8b82",
+  "product_pin": "v0.25.0"
+}
