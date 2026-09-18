@@ -41,7 +41,16 @@ def _tenant_with_two_merged_items(tmp_path: Path) -> tuple[Path, str, str]:
         _git(root, "checkout", "-q", "main")
         _git(root, "merge", "-q", "--no-ff", "-m", f"Merge branch 'attavo/{item}-x'", f"attavo/{item}-x")
         merges.append(_git(root, "rev-parse", "HEAD"))
+    _set_default_branch_ref(root)
     return root, merges[0], merges[1]
+
+
+def _set_default_branch_ref(root: Path) -> None:
+    """The walk behind proof six starts at the default branch as
+    refs/remotes/origin/HEAD names it and refuses by name without it
+    (issue #169); a fixture with no remote sets the ref by hand."""
+    _git(root, "update-ref", "refs/remotes/origin/main", _git(root, "rev-parse", "main"))
+    _git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 
 
 def _proof(root: Path) -> dict:
@@ -77,11 +86,43 @@ def test_doctor_proof_six_names_a_merge_before_the_window_without_failing(tmp_pa
     assert p["holds"] and p["before_window"] == ["1"] and p["sealed"] == ["2"]
 
 
+def test_doctor_proof_six_names_an_unmerged_item(tmp_path):
+    """An item whose records sit on a branch, or on a pull_request
+    checkout's synthetic merge, has no merge on the default branch's
+    first-parent line: it is named in not_merged, never failed."""
+    root, m1, m2 = _tenant_with_two_merged_items(tmp_path)
+    (root / "sealed.txt").write_text(m1 + "\n" + m2 + "\n")
+    _git(root, "checkout", "-q", "-b", "attavo/3-x")
+    (root / "records" / "3").mkdir(parents=True)
+    for stage in ("spec", "approval", "build", "verify"):
+        (root / "records" / "3" / f"{stage}-01.json").write_text('{"status": "pass"}')
+        _git(root, "add", "records")
+        _git(root, "commit", "-q", "-m", f"{stage} record for item 3")
+    _git(root, "checkout", "-q", "--detach")
+    _git(root, "merge", "-q", "--no-ff", "-m", "synthetic test merge", "main")
+    p = _proof(root)
+    assert p["holds"] and p["sealed"] == ["1", "2"] and p["not_merged"] == ["3"]
+    assert p["unsealed"] == []
+
+
+def test_doctor_proof_six_refuses_without_a_default_branch_ref(tmp_path):
+    root, m1, m2 = _tenant_with_two_merged_items(tmp_path)
+    (root / "sealed.txt").write_text(m1 + "\n" + m2 + "\n")
+    _git(root, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+    p = _proof(root)
+    assert not p["holds"] and "refs/remotes/origin/HEAD" in p["reason"]
+
+
 def test_doctor_proof_six_fails_without_an_attestation_command(tmp_path):
     root = tmp_path / "bare"
     root.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main", "."], cwd=root, check=True)
     (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
     (root / "records").mkdir()
+    _git(root, "config", "user.email", "doctor@attavo.invalid")
+    _git(root, "config", "user.name", "doctor fixture")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "install")
+    _set_default_branch_ref(root)
     p = _proof(root)
     assert not p["holds"] and "attestation_command" in p["reason"]

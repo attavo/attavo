@@ -24,6 +24,8 @@ do
   git checkout -q main
   git merge -q --no-ff -m "Merge branch 'attavo/$i-x'" "attavo/$i-x"
 done
+git update-ref refs/remotes/origin/main "$(git rev-parse main)"
+git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 m1=$(git log --merges --format=%H --grep="attavo/1-x" -1)
 m2=$(git log --merges --format=%H --grep="attavo/2-x" -1)
 printf '%s\n' "$m1" > sealed.txt

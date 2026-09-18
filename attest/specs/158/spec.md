@@ -4,6 +4,8 @@
 
 Retires: the doctor's `done` on an unattested traversal; `not read` as the rendering of a statement that does not exist.
 
+Amended 2026-09-18 after #169 landed on `main` under this item's approved tree: an item's merge is the merge on the default branch's first-parent line (read from `refs/remotes/origin/HEAD`, refused by name when the ref is unset), so the proof names an item with no such merge in `not_merged` rather than skipping or failing it, fails by name on the walk's refusal, and the fixtures set the ref they depend on. The approval bound to the previous spec commit expires with this amendment, as the product requires.
+
 ## Claims
 
 - bin/attavo
@@ -13,10 +15,10 @@ Retires: the doctor's `done` on an unattested traversal; `not read` as the rende
 - .github/workflows/ci.yml
 - tests/test_doctor_sealed.py
 - tests/test_doctor.py
-- tests/test_record_schemas.py
 
 ## Criteria
 
-- doctor-fails-on-an-unsealed-merge.sh: on a fixture tenant with two merged items whose [forge].attestation_command answers for one merge and not the other, attavo doctor --json fails proof every-attested-item-is-sealed naming item 2 and its merge sha, listing sealed and unsealed, and holds once the command answers for both
+- doctor-fails-on-an-unsealed-merge.sh: on a fixture tenant with two merged items whose [forge].attestation_command answers for one merge and not the other, attavo doctor --json fails proof every-attested-item-is-sealed naming item 2 and its merge sha, listing sealed, unsealed, before_window, and not_merged, and holds once the command answers for both
 - doctor-fails-without-attestation-command.sh: a manifest with no [forge].attestation_command fails the proof naming the key, and the manifest schema declares the key
-- the-proof-has-its-test.sh: a test named test_doctor_proof_six_fails_on_an_unsealed_merge exists under tests/, this repository's manifest names its attestation command, and .attavo/bin/forge-attestation is executable
+- doctor-names-an-unmerged-item.sh: on a fixture tenant with one sealed merged item and a second item whose records sit on a branch under a synthetic merge at HEAD, the proof holds with sealed ["1"], not_merged ["2"], and unsealed []; before refs/remotes/origin/HEAD is set, the proof fails naming that ref
+- the-proof-has-its-test.sh: tests named test_doctor_proof_six_fails_on_an_unsealed_merge and test_doctor_proof_six_names_an_unmerged_item exist under tests/, this repository's manifest names its attestation command, and .attavo/bin/forge-attestation is executable

@@ -246,6 +246,17 @@
           "minLength": 1
         }
       }
+    },
+    "drive": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stall_after_s": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "seconds without a new event past which a live invocation is hung; attavo drive --recover terminates and records it"
+        }
+      }
     }
   }
 }
