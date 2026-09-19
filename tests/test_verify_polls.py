@@ -22,15 +22,21 @@ ATTAVO = ROOT / "bin" / "attavo"
 
 # The real defaults (ATTAVO_DRIVE_POLL_BOUND_S=600, _INTERVAL_S=20) are a
 # real forge's clock, not a test's; poll_forge_checks re-reads both at
-# call time from these environment variables (issue #84), so every
-# `attavo verify` call here runs against this much shorter clock instead.
-# The bound gives room for three reads at this interval before it expires.
-POLL_ENV = {"ATTAVO_DRIVE_POLL_BOUND_S": "0.9", "ATTAVO_DRIVE_POLL_INTERVAL_S": "0.5"}
+# call time from these environment variables (issue #84), so every case
+# that drives it sets them to fractions of a second through
+# monkeypatch.setenv and no case waits out a real bound (issue #181).
+# The bound gives room for several reads at this interval before it expires.
+POLL_BOUND_S = "0.5"
+POLL_INTERVAL_S = "0.05"
+
+
+def set_poll_clock(monkeypatch) -> None:
+    monkeypatch.setenv("ATTAVO_DRIVE_POLL_BOUND_S", POLL_BOUND_S)
+    monkeypatch.setenv("ATTAVO_DRIVE_POLL_INTERVAL_S", POLL_INTERVAL_S)
 
 
 def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
     full_env = dict(os.environ)
-    full_env.update(POLL_ENV)
     if env:
         full_env.update(env)
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
@@ -77,10 +83,11 @@ esac
     return str(script)
 
 
-def test_verify_calls_the_adapter_once_the_forge_concludes_green(tmp_path):
+def test_verify_calls_the_adapter_once_the_forge_concludes_green(tmp_path, monkeypatch):
     """Acceptance row 1a. A checks_command that answers unconcluded twice
     and green on the third read: verify polls rather than returning on
     the first read, calls the adapter, and writes a pass-shaped record."""
+    set_poll_clock(monkeypatch)
     root = make_tenant(tmp_path, "build_valid")
     forge = make_sequenced_forge(tmp_path, "twice_then_green",
                                  ["ci in_progress", "ci in_progress", "ci success"])
@@ -97,11 +104,12 @@ def test_verify_calls_the_adapter_once_the_forge_concludes_green(tmp_path):
     assert rec["forge_checks"]["conclusions"] == [{"name": "ci", "conclusion": "success"}]
 
 
-def test_verify_returns_with_the_conclusions_once_the_forge_concludes_red(tmp_path):
+def test_verify_returns_with_the_conclusions_once_the_forge_concludes_red(tmp_path, monkeypatch):
     """Acceptance row 1b. A checks_command that answers unconcluded twice
     and red (a concluded, failing conclusion) on the third read: verify
     still polls up to that read, then returns with those conclusions on
     the record -- no adapter call."""
+    set_poll_clock(monkeypatch)
     root = make_tenant(tmp_path, "build_valid")
     forge = make_sequenced_forge(tmp_path, "twice_then_red",
                                  ["ci in_progress", "ci in_progress", "ci failure"])
@@ -118,10 +126,11 @@ def test_verify_returns_with_the_conclusions_once_the_forge_concludes_red(tmp_pa
     assert rec["forge_checks"]["conclusions"] == [{"name": "ci", "conclusion": "failure"}]
 
 
-def test_verify_returns_forge_unconcluded_at_the_bound_when_the_forge_never_concludes(tmp_path):
+def test_verify_returns_forge_unconcluded_at_the_bound_when_the_forge_never_concludes(tmp_path, monkeypatch):
     """Acceptance row 1c. A checks_command that never concludes: verify
     polls until the bound, then returns "returned"/forge-unconcluded as
     it does today on a single unconcluded read -- no adapter call."""
+    set_poll_clock(monkeypatch)
     root = make_tenant(tmp_path, "build_valid")
     forge = make_sequenced_forge(tmp_path, "never_concludes", ["ci in_progress"])
     add_forge(root, forge)
