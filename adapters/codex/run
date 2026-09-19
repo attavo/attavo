@@ -88,6 +88,11 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+# the helper beside adapters/, imported without leaving a __pycache__ there
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from executor_env import executor_env  # noqa: E402
+
 STATUS_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -635,7 +640,7 @@ def invoke(instruction: str, schema: dict, config: dict, stage: str,
 
         argv = build_argv(schema_path, output_path, config, stage)
         run = subprocess.run(argv, input=instruction, capture_output=True,
-                             text=True, check=False)
+                             text=True, check=False, env=executor_env())
         raw = run.stdout
         if run.returncode != 0 and run.stderr.strip():
             raw = (raw + "\n" if raw else "") + run.stderr.rstrip("\n")
