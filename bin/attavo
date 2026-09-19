@@ -2848,11 +2848,16 @@ def drive_state(root: Path, m: dict, item_id: str) -> tuple[str, str | None, Pat
     return "ready", None, records_dir
 
 
-def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, item_id: str) -> int:
+def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str,
+                      item_id: str) -> tuple[int, bool]:
     """Runs build or verify in-process -- the same command `attavo build`
     or `attavo verify` would run, printing the same reason on a refusal,
-    failure, or halt. A non-pass record is counseled (cmd_counsel, issue
-    #100) and filed (cmd_file_stops, issue #89) before it is transported,
+    failure, or halt -- and returns (rc, done): done is False only when
+    the record just written carries status "pass" (a stage command's own
+    exit code says nothing about that: cmd_verify exits 0 on a "returned"
+    record too, since returning is not an operational error). A non-pass
+    record is counseled (cmd_counsel, issue #100) and filed (cmd_file_stops,
+    issue #89) before it is transported,
     so a stop's own counsel record and .filed marker -- the filing
     command's stdout, the issue file-stops just opened -- exist on disk
     in time to be committed and pushed in the very same commit as the
@@ -2887,7 +2892,7 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, ite
     if after is None or after == before:
         # Refused before writing anything at all (e.g. no adapter
         # configured) -- the stage command already printed why.
-        return rc if rc != 0 else 1
+        return (rc if rc != 0 else 1), True
 
     record = latest_record(records_dir, stage)
     status_out = record.get("status")
@@ -2926,7 +2931,7 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, ite
               f"pushed to {branch}")
     else:
         print(f"attavo drive: pushed {after.name} to {branch}")
-    return rc
+    return rc, status_out != "pass"
 
 
 def _drive_step(root: Path, m: dict, item_id: str) -> tuple[int, bool]:
@@ -2950,8 +2955,7 @@ def _drive_step(root: Path, m: dict, item_id: str) -> tuple[int, bool]:
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
 
     if stage == "build":
-        rc = _drive_run_stage(root, records_dir, branch, "build", item_id)
-        return rc, rc != 0
+        return _drive_run_stage(root, records_dir, branch, "build", item_id)
 
     checks_command = (m.get("forge") or {}).get("checks_command")
     if not checks_command:
@@ -2967,8 +2971,7 @@ def _drive_step(root: Path, m: dict, item_id: str) -> tuple[int, bool]:
         return 1, True
 
     if stage == "verify":
-        rc = _drive_run_stage(root, records_dir, branch, "verify", item_id)
-        return rc, rc != 0
+        return _drive_run_stage(root, records_dir, branch, "verify", item_id)
 
     print(f"attavo drive: item {item_id} is ready to merge")
     return 0, True
