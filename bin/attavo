@@ -912,6 +912,21 @@ def invocation_alive(info: dict) -> bool:
     return True
 
 
+def invocation_age_s(info: dict) -> float | None:
+    """Seconds since the marker's own `at` timestamp -- how long ago the
+    invocation it names began, whatever host wrote it. None when `at` is
+    missing or does not parse."""
+    from datetime import datetime, timezone
+    at = info.get("at")
+    if not isinstance(at, str):
+        return None
+    try:
+        stamp = datetime.strptime(at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return (datetime.now(timezone.utc) - stamp).total_seconds()
+
+
 def invocations_without_record(item_records_dir: Path) -> list[tuple[Path, dict]]:
     """Every <stage>-NN.started under one item whose <stage>-NN.json has
     not arrived, with the marker's own dict ({} when unreadable)."""
@@ -941,6 +956,7 @@ def stall_bound_s(m: dict) -> int | None:
 
 
 def proof_no_invocation_lacks_record(root: Path, m: dict | None) -> Proof:
+    import socket
     p = Proof("no-invocation-lacks-record", "no invocation lacks its record")
     if m is None:
         return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
@@ -948,11 +964,14 @@ def proof_no_invocation_lacks_record(root: Path, m: dict | None) -> Proof:
     records_dir = root / records_rel
     if not records_dir.is_dir():
         return p.fail(f"no records directory under {records_dir}")
-    if stall_bound_s(m) is None:
+    bound = stall_bound_s(m)
+    if bound is None:
         return p.fail("no [drive].stall_after_s in the manifest; a hung invocation cannot be "
                       "told from a running one")
+    this_host = socket.gethostname()
     recorded = 0
     running: list[str] = []
+    in_flight: list[str] = []
     problems: list[str] = []
     for item_dir in sorted(d for d in records_dir.iterdir() if d.is_dir()):
         for marker in item_dir.glob(f"*{INVOCATION_MARKER_SUFFIX}"):
@@ -963,13 +982,24 @@ def proof_no_invocation_lacks_record(root: Path, m: dict | None) -> Proof:
             if invocation_alive(info):
                 running.append(f"{name} (pid {info.get('pid')} since {info.get('at')})")
                 continue
+            # A marker from another host is not alive by invocation_alive's
+            # own reckoning (its pid is unknowable from here) but is not
+            # yet a failure either: an invocation younger than the tenant's
+            # own stall bound may simply be running elsewhere, still
+            # writing toward its own record.
+            if info.get("host") != this_host:
+                age = invocation_age_s(info)
+                if age is not None and age < bound:
+                    in_flight.append(f"{name} (host {info.get('host')} since {info.get('at')})")
+                    continue
             problems.append(f"{name} started {info.get('at')} on {info.get('host')} "
                             f"pid {info.get('pid')} and never wrote its record")
     if problems:
         return p.fail("; ".join(problems), unrecorded_invocations=len(problems),
-                      running_invocations=running)
-    return p.hold(f"{recorded} invocation(s) recorded, {len(running)} running",
-                  unrecorded_invocations=0, running_invocations=running)
+                      running_invocations=running, in_flight=in_flight)
+    return p.hold(f"{recorded} invocation(s) recorded, {len(running)} running, "
+                  f"{len(in_flight)} in flight elsewhere",
+                  unrecorded_invocations=0, running_invocations=running, in_flight=in_flight)
 
 
 def _events_path_for(root: Path, stage: str, nn: int) -> Path | None:
@@ -2994,11 +3024,16 @@ def drive_state(root: Path, m: dict, item_id: str) -> tuple[str, str | None, Pat
     return "ready", None, records_dir
 
 
-def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, item_id: str) -> int:
+def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str,
+                      item_id: str) -> tuple[int, bool]:
     """Runs build or verify in-process -- the same command `attavo build`
     or `attavo verify` would run, printing the same reason on a refusal,
-    failure, or halt. A non-pass record is counseled (cmd_counsel, issue
-    #100) and filed (cmd_file_stops, issue #89) before it is transported,
+    failure, or halt -- and returns (rc, done): done is False only when
+    the record just written carries status "pass" (a stage command's own
+    exit code says nothing about that: cmd_verify exits 0 on a "returned"
+    record too, since returning is not an operational error). A non-pass
+    record is counseled (cmd_counsel, issue #100) and filed (cmd_file_stops,
+    issue #89) before it is transported,
     so a stop's own counsel record and .filed marker -- the filing
     command's stdout, the issue file-stops just opened -- exist on disk
     in time to be committed and pushed in the very same commit as the
@@ -3033,7 +3068,7 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, ite
     if after is None or after == before:
         # Refused before writing anything at all (e.g. no adapter
         # configured) -- the stage command already printed why.
-        return rc if rc != 0 else 1
+        return (rc if rc != 0 else 1), True
 
     record = latest_record(records_dir, stage)
     status_out = record.get("status")
@@ -3072,7 +3107,7 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str, ite
               f"pushed to {branch}")
     else:
         print(f"attavo drive: pushed {after.name} to {branch}")
-    return rc
+    return rc, status_out != "pass"
 
 
 def _drive_step(root: Path, m: dict, item_id: str) -> tuple[int, bool]:
@@ -3096,8 +3131,7 @@ def _drive_step(root: Path, m: dict, item_id: str) -> tuple[int, bool]:
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
 
     if stage == "build":
-        rc = _drive_run_stage(root, records_dir, branch, "build", item_id)
-        return rc, rc != 0
+        return _drive_run_stage(root, records_dir, branch, "build", item_id)
 
     checks_command = (m.get("forge") or {}).get("checks_command")
     if not checks_command:
@@ -3113,8 +3147,7 @@ def _drive_step(root: Path, m: dict, item_id: str) -> tuple[int, bool]:
         return 1, True
 
     if stage == "verify":
-        rc = _drive_run_stage(root, records_dir, branch, "verify", item_id)
-        return rc, rc != 0
+        return _drive_run_stage(root, records_dir, branch, "verify", item_id)
 
     print(f"attavo drive: item {item_id} is ready to merge")
     return 0, True
