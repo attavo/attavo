@@ -9,6 +9,7 @@ Run: python3 -m pytest tests -q
 import json
 import subprocess
 from pathlib import Path
+from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
@@ -87,14 +88,14 @@ def _tenant_with_one_merged_and_one_unmerged_item(tmp_path: Path) -> Path:
     return root
 
 
-def _proof(root: Path) -> dict:
+def _proof(root: Path) -> dict[str, Any]:
     run = subprocess.run(["python3", str(ATTAVO), "doctor", "--json", str(root)],
                          capture_output=True, text=True, check=False)
     proofs = json.loads(run.stdout)["proofs"]
-    return [p for p in proofs if p["proof"] == "every-attested-item-is-sealed"][0]
+    return cast(dict[str, Any], [p for p in proofs if p["proof"] == "every-attested-item-is-sealed"][0])
 
 
-def test_doctor_proof_six_fails_on_an_unsealed_merge(tmp_path):
+def test_doctor_proof_six_fails_on_an_unsealed_merge(tmp_path: Path) -> None:
     root, m1, m2 = _tenant_with_two_merged_items(tmp_path)
     (root / "sealed.txt").write_text(m1 + "\n")
     p = _proof(root)
@@ -103,14 +104,14 @@ def test_doctor_proof_six_fails_on_an_unsealed_merge(tmp_path):
     assert p["sealed"] == ["1"] and p["unsealed"] == ["2"]
 
 
-def test_doctor_proof_six_holds_when_every_merge_is_sealed(tmp_path):
+def test_doctor_proof_six_holds_when_every_merge_is_sealed(tmp_path: Path) -> None:
     root, m1, m2 = _tenant_with_two_merged_items(tmp_path)
     (root / "sealed.txt").write_text(m1 + "\n" + m2 + "\n")
     p = _proof(root)
     assert p["holds"] and p["sealed"] == ["1", "2"]
 
 
-def test_doctor_proof_six_names_a_merge_before_the_window_without_failing(tmp_path):
+def test_doctor_proof_six_names_a_merge_before_the_window_without_failing(tmp_path: Path) -> None:
     root, m1, m2 = _tenant_with_two_merged_items(tmp_path)
     (root / "sealed.txt").write_text(m2 + "\n")
     (root / "attavo.toml").write_text(
@@ -120,7 +121,7 @@ def test_doctor_proof_six_names_a_merge_before_the_window_without_failing(tmp_pa
     assert p["holds"] and p["before_window"] == ["1"] and p["sealed"] == ["2"]
 
 
-def test_doctor_proof_six_fails_without_an_attestation_command(tmp_path):
+def test_doctor_proof_six_fails_without_an_attestation_command(tmp_path: Path) -> None:
     root = tmp_path / "bare"
     root.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main", "."], cwd=root, check=True)
@@ -130,7 +131,7 @@ def test_doctor_proof_six_fails_without_an_attestation_command(tmp_path):
     assert not p["holds"] and "attestation_command" in p["reason"]
 
 
-def test_doctor_proof_six_says_not_read_when_the_store_cannot_be_read(tmp_path):
+def test_doctor_proof_six_says_not_read_when_the_store_cannot_be_read(tmp_path: Path) -> None:
     root = tmp_path / "unreadable"
     root.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main", "."], cwd=root, check=True)
@@ -158,7 +159,7 @@ def test_doctor_proof_six_says_not_read_when_the_store_cannot_be_read(tmp_path):
     assert p["not_read"] == ["1"] and p["unsealed"] == [] and p["sealed"] == []
 
 
-def test_doctor_proof_six_names_an_unmerged_item(tmp_path):
+def test_doctor_proof_six_names_an_unmerged_item(tmp_path: Path) -> None:
     root = _tenant_with_one_merged_and_one_unmerged_item(tmp_path)
     noref = _proof(root)
     assert not noref["holds"] and "refs/remotes/origin/HEAD" in noref["reason"]

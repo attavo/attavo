@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 from helpers import commit_all, make_tenant
 
@@ -26,7 +27,7 @@ ATTAVO = ROOT / "bin" / "attavo"
 GREEN_FORGE = "printf 'ci success\\n'"
 
 
-def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     full_env = dict(os.environ)
     if env:
         full_env.update(env)
@@ -34,13 +35,13 @@ def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.Co
                           capture_output=True, text=True, check=False, env=full_env)
 
 
-def latest_record(root: Path, stage: str, item: str = "1") -> dict:
+def latest_record(root: Path, stage: str, item: str = "1") -> dict[str, Any]:
     files = sorted((root / "records" / item).glob(f"{stage}-*.json"))
     assert files, f"no {stage} record for item {item}"
-    return json.loads(files[-1].read_text())
+    return cast(dict[str, Any], json.loads(files[-1].read_text()))
 
 
-def test_build_is_fixture_verify_is_codex_and_the_finding_is_filed(tmp_path):
+def test_build_is_fixture_verify_is_codex_and_the_finding_is_filed(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "build_valid")
     toml = root / "attavo.toml"
     toml.write_text(

@@ -12,6 +12,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import jsonschema
 
@@ -21,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
 
 
-def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     import os
     full_env = dict(os.environ)
     if env:
@@ -34,10 +35,10 @@ def builds(root: Path, item: str = "1") -> list[Path]:
     return sorted((root / "records" / item).glob("build-*.json"))
 
 
-def latest_build(root: Path, item: str = "1") -> dict:
+def latest_build(root: Path, item: str = "1") -> dict[str, Any]:
     files = builds(root, item)
     assert files, f"no build record for item {item}"
-    return json.loads(files[-1].read_text())
+    return cast(dict[str, Any], json.loads(files[-1].read_text()))
 
 
 def approve_item(root: Path, item: str = "1") -> None:
@@ -61,7 +62,7 @@ def amend_problem(root: Path) -> None:
     commit_all(root, "amend problem prose")
 
 
-def test_build_refuses_without_valid_approval(tmp_path):
+def test_build_refuses_without_valid_approval(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "valid")
 
     # no approval at all
@@ -80,7 +81,7 @@ def test_build_refuses_without_valid_approval(tmp_path):
     assert builds(root) == []
 
 
-def test_build_refuses_manifest_without_tests(tmp_path):
+def test_build_refuses_manifest_without_tests(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "gate_rejection")
     run = run_attavo(root, "build", "1")
     assert run.returncode == 1
@@ -88,7 +89,7 @@ def test_build_refuses_manifest_without_tests(tmp_path):
     assert not (root / "records").is_dir()
 
 
-def test_build_refuses_write_outside_claims(tmp_path):
+def test_build_refuses_write_outside_claims(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "build_valid")
     approve_item(root)
 
@@ -102,7 +103,7 @@ def test_build_refuses_write_outside_claims(tmp_path):
     assert (root / "unclaimed.txt").is_file()
 
 
-def test_build_events_file_lives_outside_the_working_tree(tmp_path):
+def test_build_events_file_lives_outside_the_working_tree(tmp_path: Path) -> None:
     """Issue #140, acceptance row 1. The events file sits under the
     checkout's own git directory, not the working tree the executor
     commits from: `git status` is clean after a stage that wrote
@@ -129,7 +130,7 @@ def test_build_events_file_lives_outside_the_working_tree(tmp_path):
     assert json.loads(events_path.read_text().splitlines()[0])["kind"] == "iteration"
 
 
-def test_build_refuses_an_executor_commit_under_records(tmp_path):
+def test_build_refuses_an_executor_commit_under_records(tmp_path: Path) -> None:
     """Issue #140, acceptance row 2. paths.records is the product's own
     directory, not a claim any spec can make -- an executor commit
     touching it is refused by name, class claims-boundary, provenance
@@ -150,7 +151,7 @@ def test_build_refuses_an_executor_commit_under_records(tmp_path):
     assert rec["stop"] == {"class": "claims-boundary", "provenance": "executor", "detail": None}
 
 
-def test_build_refuses_an_executor_commit_under_specs(tmp_path):
+def test_build_refuses_an_executor_commit_under_specs(tmp_path: Path) -> None:
     """Issue #140, acceptance row 3. The same guard for paths.specs --
     the definition of done, not a claim the build itself may touch."""
     root = make_tenant(tmp_path, "build_valid")
@@ -165,7 +166,7 @@ def test_build_refuses_an_executor_commit_under_specs(tmp_path):
     assert rec["stop"] == {"class": "claims-boundary", "provenance": "executor", "detail": None}
 
 
-def test_fixture_adapter_traverses_build(tmp_path):
+def test_fixture_adapter_traverses_build(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "build_valid")
     approve_item(root)
 
@@ -188,7 +189,7 @@ def test_fixture_adapter_traverses_build(tmp_path):
     assert rec["selected_tests"]["count"] == len([l for l in touched.splitlines() if l.strip()])
 
 
-def test_build_writes_an_events_file_and_leaves_the_record_unchanged(tmp_path):
+def test_build_writes_an_events_file_and_leaves_the_record_unchanged(tmp_path: Path) -> None:
     """Issue #26, acceptance row 1. The product now always sets
     ATTAVO_EVENTS before invoking the adapter: build-01.events.jsonl
     carries the product's own iteration and gate lines (one of each --
@@ -226,7 +227,7 @@ def test_build_writes_an_events_file_and_leaves_the_record_unchanged(tmp_path):
     assert "checks_built.sh" in gate_line["text"]
 
 
-def test_adapter_config_reaches_the_adapter(tmp_path):
+def test_adapter_config_reaches_the_adapter(tmp_path: Path) -> None:
     """Issue #24, acceptance 1. [executor.<adapter-name>] is an open table:
     attavo build serializes it to JSON, passes it to the adapter as
     ATTAVO_ADAPTER_CONFIG, and copies it verbatim into build-NN.json as
@@ -249,7 +250,7 @@ def test_adapter_config_reaches_the_adapter(tmp_path):
     assert json.dumps({"x": 1}) in log
 
 
-def test_build_halts_on_question(tmp_path):
+def test_build_halts_on_question(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "build_valid")
     approve_item(root)
 
@@ -263,7 +264,7 @@ def test_build_halts_on_question(tmp_path):
     assert rec["iterations"] == 1
 
 
-def test_build_iterates_with_feedback(tmp_path):
+def test_build_iterates_with_feedback(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "build_valid")
     approve_item(root)
 
@@ -276,7 +277,7 @@ def test_build_iterates_with_feedback(tmp_path):
     assert rec["iterations"] == 2
 
 
-def test_build_without_a_checks_table(tmp_path):
+def test_build_without_a_checks_table(tmp_path: Path) -> None:
     """Issue #30, acceptance 3. A tenant with no [checks] table is not
     refused -- unlike [tests], which build requires -- and the record
     carries checks: null."""
@@ -291,7 +292,7 @@ def test_build_without_a_checks_table(tmp_path):
     assert rec["checks"] is None
 
 
-def test_build_fails_when_the_tenant_checks_fail(tmp_path):
+def test_build_fails_when_the_tenant_checks_fail(tmp_path: Path) -> None:
     """Issue #30, acceptance 1. The tenant's checks are part of done: a
     build whose criteria and tests all pass still fails, and never
     writes pass, if [checks].command exits non-zero. Regression:
@@ -317,7 +318,7 @@ def test_build_fails_when_the_tenant_checks_fail(tmp_path):
     assert rec["selected_tests"]["exit"] == 0
 
 
-def test_checks_output_reaches_the_next_iteration(tmp_path):
+def test_checks_output_reaches_the_next_iteration(tmp_path: Path) -> None:
     """Issue #30, acceptance 2. A non-zero checks exit is fed back to the
     next iteration -- "checks exit N" and the bounded tail of its
     output -- beside the failing criteria and the test output.
@@ -354,7 +355,7 @@ def test_checks_output_reaches_the_next_iteration(tmp_path):
     assert "checks: built.txt missing" in log
 
 
-def test_build_records_failed_on_adapter_is_error(tmp_path):
+def test_build_records_failed_on_adapter_is_error(tmp_path: Path) -> None:
     """Issue #34, acceptance 2 (build half). The claude-code adapter's
     ATTAVO_ADAPTER_RESPONSE_FILE path, fed an is_error result, exits 1;
     attavo build records the attempt as failed, not a halt someone must
@@ -390,7 +391,7 @@ def test_build_records_failed_on_adapter_is_error(tmp_path):
     assert rec["iterations"] == 1
 
 
-def test_build_logs_adapter_stderr_on_failure(tmp_path):
+def test_build_logs_adapter_stderr_on_failure(tmp_path: Path) -> None:
     """Issue #38, acceptance 2. Whenever the adapter itself exits
     non-zero, build appends its stderr to build-NN.log -- not just its
     stdout -- so a message the adapter writes about its own failure
@@ -422,7 +423,7 @@ def test_build_logs_adapter_stderr_on_failure(tmp_path):
     assert "stderr from the failing adapter" in log
 
 
-def test_build_records_a_silently_failing_adapter_without_being_refused(tmp_path):
+def test_build_records_a_silently_failing_adapter_without_being_refused(tmp_path: Path) -> None:
     """Issue #53, rejection test 3. An adapter that exits non-zero with
     nothing on stdout and nothing on stderr -- tenant zero's build-11, the
     claude-code adapter's account error swallowed before v0.3.6 kept
@@ -456,7 +457,7 @@ def test_build_records_a_silently_failing_adapter_without_being_refused(tmp_path
     assert "1" in log  # the exit status, so the record explains itself
 
 
-def test_executor_commits_carry_the_executor_identity(tmp_path):
+def test_executor_commits_carry_the_executor_identity(tmp_path: Path) -> None:
     """Issue #33, acceptance 1. attavo build exports the executor
     identity -- set by the product, never the tenant's git config -- as
     GIT_AUTHOR_NAME/EMAIL and GIT_COMMITTER_NAME/EMAIL; every commit the
@@ -503,7 +504,7 @@ def write_failing_tests_script(root: Path) -> None:
     commit_all(root, "configure a [tests].run that always fails")
 
 
-def test_build_log_carries_each_iterations_gate_output(tmp_path):
+def test_build_log_carries_each_iterations_gate_output(tmp_path: Path) -> None:
     """Issue #89, rejection test 1. A build whose selected tests fail on
     every iteration exhausts the budget as failed; the log carries each
     iteration's gate output -- criteria exits, the selected tests' own
@@ -538,7 +539,7 @@ def test_build_log_carries_each_iterations_gate_output(tmp_path):
     assert "1 failed, 2 passed in 0.05s" in log
 
 
-def test_build_pass_record_carries_no_stop(tmp_path):
+def test_build_pass_record_carries_no_stop(tmp_path: Path) -> None:
     """Issue #89, rejection test 2 (half). A pass record carries stop:
     null -- only a non-pass record needs a class and a cause."""
     root = make_tenant(tmp_path, "build_valid")
@@ -552,7 +553,7 @@ def test_build_pass_record_carries_no_stop(tmp_path):
     assert rec["stop"] is None
 
 
-def test_build_refused_on_a_claims_violation_carries_claims_boundary_stop(tmp_path):
+def test_build_refused_on_a_claims_violation_carries_claims_boundary_stop(tmp_path: Path) -> None:
     """Issue #89, rejection test 3: a refusal naming a claims path is
     claims-boundary/spec -- the write-outside-claims specimen."""
     root = make_tenant(tmp_path, "build_valid")
@@ -566,7 +567,7 @@ def test_build_refused_on_a_claims_violation_carries_claims_boundary_stop(tmp_pa
     assert rec["stop"] == {"class": "claims-boundary", "provenance": "spec", "detail": None}
 
 
-def test_build_refused_on_a_foreign_commit_is_unclassed(tmp_path):
+def test_build_refused_on_a_foreign_commit_is_unclassed(tmp_path: Path) -> None:
     """A refusal that is not a claims path -- "commit ... not authored by
     the executor" -- carries no rule of its own in this lane; it falls to
     unclassed/product, with the log's last line as its detail."""
@@ -583,7 +584,7 @@ def test_build_refused_on_a_foreign_commit_is_unclassed(tmp_path):
     assert rec["stop"]["detail"]
 
 
-def test_build_ceiling_error_line_carries_ceiling_stop(tmp_path):
+def test_build_ceiling_error_line_carries_ceiling_stop(tmp_path: Path) -> None:
     """Issue #89, rejection test 3: an adapter exit with a tool error line
     matching a declared ceiling is ceiling/product -- issue #86's own
     specimen, codex's "input_too_large" on a diff too large to judge."""
@@ -600,7 +601,7 @@ def test_build_ceiling_error_line_carries_ceiling_stop(tmp_path):
     assert "input_too_large" in log
 
 
-def test_build_adapter_ceiling_refusal_on_a_declared_limit_carries_ceiling_stop(tmp_path):
+def test_build_adapter_ceiling_refusal_on_a_declared_limit_carries_ceiling_stop(tmp_path: Path) -> None:
     """Issue #93 union with issue #89. adapters/claude-code/run now
     refuses pre-emptively -- before claude is ever invoked -- when its
     instruction exceeds its declared or fixed input limit, naming both
@@ -629,7 +630,7 @@ def test_build_adapter_ceiling_refusal_on_a_declared_limit_carries_ceiling_stop(
     assert "10" in log
 
 
-def test_build_halted_on_a_genuine_question_carries_question_stop(tmp_path):
+def test_build_halted_on_a_genuine_question_carries_question_stop(tmp_path: Path) -> None:
     """Issue #100's own followups. A halt carrying a real question -- the
     fixture adapter's own halt, which (unlike claude-code and codex since
     issue #88) never names a class at all -- is question/spec, with the
@@ -650,7 +651,7 @@ def test_build_halted_on_a_genuine_question_carries_question_stop(tmp_path):
                            "detail": "which overlay wins?"}
 
 
-def test_build_halted_question_detail_is_only_the_first_line(tmp_path):
+def test_build_halted_question_detail_is_only_the_first_line(tmp_path: Path) -> None:
     """A real question's own account of the conflict is often long (the
     tenant zero specimen runs to several paragraphs); stop.detail holds
     only its first line -- the whole question still reaches a person
@@ -675,7 +676,7 @@ def test_build_halted_question_detail_is_only_the_first_line(tmp_path):
                            "detail": "Which overlay wins here?"}
 
 
-def attavo_module():
+def attavo_module() -> Any:
     """attavo.stops imported in-process, for a direct unit test of
     derive_stop -- getting a tool's own event JSON or error text onto the
     literal last line of a real build's transcript is not something any
@@ -685,7 +686,7 @@ def attavo_module():
     return importlib.import_module("attavo.stops")
 
 
-def test_unclassed_detail_is_capped_at_200_characters():
+def test_unclassed_detail_is_capped_at_200_characters() -> None:
     """Issue #100's own followups. An unclassed detail -- the log's last
     line -- is capped at 200 characters: some tool's own event JSON or
     error text on that line can run to thousands of characters, and the
@@ -698,7 +699,7 @@ def test_unclassed_detail_is_capped_at_200_characters():
     assert len(stop["detail"]) == 200
 
 
-def test_unclassed_detail_under_the_cap_is_unchanged():
+def test_unclassed_detail_under_the_cap_is_unchanged() -> None:
     """The cap truncates; it does not pad or otherwise alter a detail
     already under it."""
     attavo = attavo_module()
@@ -706,8 +707,9 @@ def test_unclassed_detail_under_the_cap_is_unchanged():
     assert stop["detail"] == "short last line"
 
 
-def _canned_response(question=None, status="done", subagent_stats=None,
-                     input_tokens=5, output_tokens=9, cost_usd=0.01) -> dict:
+def _canned_response(question: str | None = None, status: str = "done",
+                     subagent_stats: Any = None, input_tokens: int = 5,
+                     output_tokens: int = 9, cost_usd: float = 0.01) -> dict[str, Any]:
     """A real `claude --output-format json` shape (mirrors
     tests/test_adapters.py's own _response()): is_error and
     structured_output both present, so the response reaches model
@@ -731,7 +733,7 @@ def use_claude_code_adapter(root: Path) -> None:
     commit_all(root, "use the claude-code adapter")
 
 
-def test_build_halt_naming_non_question_in_its_report_line_carries_that_stop_class(tmp_path):
+def test_build_halt_naming_non_question_in_its_report_line_carries_that_stop_class(tmp_path: Path) -> None:
     """Issue #89 union with issue #88 (merged to main as v0.16.0, tag
     dedebef). Two non-questions in a row halt adapters/claude-code/run
     with a report line carrying "class": "non-question"; build.schema.json
@@ -765,7 +767,7 @@ def test_build_halt_naming_non_question_in_its_report_line_carries_that_stop_cla
     assert "class non-question" in log
 
 
-def test_build_subagent_refusal_carries_outlived_invocation_stop_class(tmp_path):
+def test_build_subagent_refusal_carries_outlived_invocation_stop_class(tmp_path: Path) -> None:
     """Issue #89 union with issue #88, updated by issue #94. claude-code
     refuses (exit 1, not a halt) a result whose subagent_stats.spawned is
     not zero; the record ends up failed with the refusal text only in the
@@ -802,7 +804,7 @@ def test_build_subagent_refusal_carries_outlived_invocation_stop_class(tmp_path)
     assert "subagent_stats.spawned=3" in log
 
 
-def test_build_halt_report_line_class_field_sets_stop_class(tmp_path):
+def test_build_halt_report_line_class_field_sets_stop_class(tmp_path: Path) -> None:
     """Issue #94, rejection test 4: stop.class is read from the adapter's
     report line via payload.get("class") itself -- not a text scan over
     refusal/halted/log, which CLASS_TEXT_MARKERS and its bare substring
@@ -825,7 +827,7 @@ def test_build_halt_report_line_class_field_sets_stop_class(tmp_path):
     assert rec["stop"] == {"class": "non-question", "provenance": "executor", "detail": None}
 
 
-def test_build_refuses_a_commit_not_authored_by_the_executor(tmp_path):
+def test_build_refuses_a_commit_not_authored_by_the_executor(tmp_path: Path) -> None:
     """Issue #33, acceptance 2. A commit whose author is not the executor
     identity build exported -- however it got there -- refuses the build
     the same class as a write outside the claims: the identity is only
@@ -843,7 +845,7 @@ def test_build_refuses_a_commit_not_authored_by_the_executor(tmp_path):
     assert "not authored by the executor" in rec["refusal"]
 
 
-def test_build_refuses_when_checks_command_exits_2_on_the_approved_tree(tmp_path):
+def test_build_refuses_when_checks_command_exits_2_on_the_approved_tree(tmp_path: Path) -> None:
     """Issue #115, acceptance rows 1 and 3. [checks].command exiting 2 on
     the approved tree -- the command itself cannot run, not a failing
     check -- refuses the build before the adapter is ever invoked: class
@@ -878,7 +880,7 @@ def test_build_refuses_when_checks_command_exits_2_on_the_approved_tree(tmp_path
     jsonschema.validate(rec, schema)
 
 
-def test_build_proceeds_when_checks_command_exits_1_on_the_approved_tree(tmp_path):
+def test_build_proceeds_when_checks_command_exits_1_on_the_approved_tree(tmp_path: Path) -> None:
     """Issue #115, acceptance row 2. A [checks].command exiting 1 --
     failing checks, the expected state before a build -- does not refuse:
     the preflight only catches exit 2 (the command cannot run at all).

@@ -26,12 +26,12 @@ ATTAVO = ROOT / "bin" / "attavo"
 TEMPLATE = ROOT / "templates" / "workflows" / "attavo-approve.yml"
 
 
-def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
                           capture_output=True, text=True, check=False)
 
 
-def run_step(root: Path, script: str) -> subprocess.CompletedProcess:
+def run_step(root: Path, script: str) -> subprocess.CompletedProcess[str]:
     """Run an extracted step's shell the way GitHub Actions does: bash, -e
     -o pipefail, so a failing command (e.g. `git add` of a bad pathspec)
     stops the rest of the step, same as it would in the real workflow.
@@ -97,7 +97,7 @@ def commit_subject(root: Path) -> str:
     return log.stdout.strip()
 
 
-def test_approve_template_records_the_item_from_the_branch_not_the_pr(tmp_path):
+def test_approve_template_records_the_item_from_the_branch_not_the_pr(tmp_path: Path) -> None:
     root = build_tenant(tmp_path)
 
     run_workflow(root)
@@ -110,7 +110,7 @@ def test_approve_template_records_the_item_from_the_branch_not_the_pr(tmp_path):
         "paths.records for this tenant is 'attavo/records'")
 
 
-def test_commit_subject_names_the_item_not_the_issue_number(tmp_path):
+def test_commit_subject_names_the_item_not_the_issue_number(tmp_path: Path) -> None:
     """Issue #121: tenant zero's item #651 chain read `approval record for
     #675` -- PR #675's own number (attavo/code-factory#642 read #636 for
     item #635 the same way). The record commit derives the item once, from
@@ -126,7 +126,7 @@ def test_commit_subject_names_the_item_not_the_issue_number(tmp_path):
         "not issue #12")
 
 
-def test_refuses_before_committing_when_the_branch_yields_no_item(tmp_path):
+def test_refuses_before_committing_when_the_branch_yields_no_item(tmp_path: Path) -> None:
     """Acceptance row 3: a branch that doesn't match attavo/N-* must refuse
     before the commit step ever runs `git add`/`git commit` -- there is no
     item to name."""

@@ -18,6 +18,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from helpers import FIXTURES
 
@@ -33,7 +34,7 @@ RESULT_LINE = {
     "modelUsage": {"claude-sonnet-5": {"inputTokens": 5, "outputTokens": 9}},
 }
 
-STREAM_LINES = [
+STREAM_LINES: list[dict[str, Any]] = [
     {"type": "system", "subtype": "init"},
     {"type": "assistant", "message": {"content": [
         {"type": "text", "text": "Reading the spec before I start."}]}},
@@ -45,7 +46,7 @@ STREAM_LINES = [
 ]
 
 
-def base_env(tmp_path: Path) -> dict:
+def base_env(tmp_path: Path) -> dict[str, Any]:
     spec_dir = FIXTURES / "build_valid" / "specs" / "1"
     env = dict(os.environ)
     env.pop("ATTAVO_CHECKS_COMMAND", None)
@@ -60,8 +61,8 @@ def base_env(tmp_path: Path) -> dict:
     return env
 
 
-def run_with_stream(tmp_path: Path, lines: list[dict], events: bool = True,
-                    extra_env: dict | None = None) -> subprocess.CompletedProcess:
+def run_with_stream(tmp_path: Path, lines: list[dict[str, Any]], events: bool = True,
+                    extra_env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     stream_file = tmp_path / "stream.jsonl"
     stream_file.write_text("\n".join(json.dumps(l) for l in lines) + "\n")
     env = base_env(tmp_path)
@@ -74,14 +75,14 @@ def run_with_stream(tmp_path: Path, lines: list[dict], events: bool = True,
                           check=False, env=env)
 
 
-def read_events(tmp_path: Path) -> list[dict]:
+def read_events(tmp_path: Path) -> list[dict[str, Any]]:
     path = tmp_path / "events.jsonl"
     if not path.is_file():
         return []
     return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
 
 
-def test_claude_code_maps_a_recorded_stream_to_events_and_the_same_report_fields(tmp_path):
+def test_claude_code_maps_a_recorded_stream_to_events_and_the_same_report_fields(tmp_path: Path) -> None:
     """Acceptance row 3. A recorded stream-json transcript maps to one
     event per assistant text block, tool_use block, and tool_result
     block, in order, each {at, kind, text}; the terminal "result" object
@@ -105,7 +106,7 @@ def test_claude_code_maps_a_recorded_stream_to_events_and_the_same_report_fields
     assert events[2]["text"] == "## Problem"
 
 
-def test_claude_code_stream_transcript_still_reaches_stdout(tmp_path):
+def test_claude_code_stream_transcript_still_reaches_stdout(tmp_path: Path) -> None:
     """Every raw line the stream carried, mapped or not, still reaches
     stdout (and so build-NN.log) -- issue #34's guarantee, unbroken by
     the switch to reading the stream line by line."""
@@ -115,12 +116,12 @@ def test_claude_code_stream_transcript_still_reaches_stdout(tmp_path):
         assert json.dumps(raw_line) in run.stdout
 
 
-def test_claude_code_tool_call_event_is_one_line_and_capped_at_400_chars(tmp_path):
+def test_claude_code_tool_call_event_is_one_line_and_capped_at_400_chars(tmp_path: Path) -> None:
     """Acceptance row 4. A tool's argument can be a whole file: the
     mapped event text is collapsed to one line and capped at 400
     characters, the feed renders lines."""
     long_arg = "line one\nline two\n" + ("x" * 500)
-    stream = [
+    stream: list[dict[str, Any]] = [
         {"type": "assistant", "message": {"content": [
             {"type": "tool_use", "name": "Bash", "input": {"command": long_arg}}]}},
         RESULT_LINE,
@@ -135,7 +136,7 @@ def test_claude_code_tool_call_event_is_one_line_and_capped_at_400_chars(tmp_pat
     assert len(text) <= 400
 
 
-def test_claude_code_no_events_file_when_atavo_events_is_unset(tmp_path):
+def test_claude_code_no_events_file_when_atavo_events_is_unset(tmp_path: Path) -> None:
     """An adapter invocation with no ATTAVO_EVENTS writes no events file
     -- the mapping only ever writes to a path the product handed it."""
     run = run_with_stream(tmp_path, STREAM_LINES, events=False)
@@ -143,7 +144,7 @@ def test_claude_code_no_events_file_when_atavo_events_is_unset(tmp_path):
     assert not (tmp_path / "events.jsonl").exists()
 
 
-def test_claude_code_stream_missing_result_line_fails(tmp_path):
+def test_claude_code_stream_missing_result_line_fails(tmp_path: Path) -> None:
     """A 0-exit stream that never carries a terminal "result" line is a
     failure, the same class build already treats a tool error or an
     absent structured_output as -- not a crash, and not a silent pass."""

@@ -38,6 +38,22 @@ jobs:
             exit 1
           fi
 
+  # issue #189: mypy --strict over attavo/, bin/attavo, and tests/
+  # (pyproject.toml's [tool.mypy] names the files and the interpreter; pytest
+  # and jsonschema are installed for the tests' own imports). setup-python pins the
+  # same python_version that table names; tests/test_typecheck_pin.py fails
+  # when the two disagree. mypy itself is pinned so a new release's checks
+  # never turn a required context red on a commit that did not change.
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install mypy==2.3.1 pytest jsonschema types-jsonschema==4.26.0.20260518
+      - run: python3 -m mypy
+
   # Since #103, this repository is Attavo's own second tenant (attavo.toml
   # at the root) and the doctor's five proofs run for real, not under
   # || true. #106's first item merged (fdd1981, v0.18.0), so the five

@@ -32,7 +32,7 @@ ACTIONS_ATTEST_INPUTS = set(
     json.loads((ROOT / "tests" / "fixtures" / "actions-attest-v2-inputs.json").read_text())["inputs"])
 
 
-def test_template_runs_on_pull_request_and_merge_group():
+def test_template_runs_on_pull_request_and_merge_group() -> None:
     text = TEMPLATE.read_text()
     lines = text.splitlines()
     on_idx = next(i for i, l in enumerate(lines) if l.strip() == "on:")
@@ -41,7 +41,7 @@ def test_template_runs_on_pull_request_and_merge_group():
     assert "merge_group:" in on_body
 
 
-def test_job_has_the_three_required_permissions():
+def test_job_has_the_three_required_permissions() -> None:
     """Row 6, issue #69: contents: read (checkout), id-token: write and
     attestations: write (actions/attest@v2, on merge_group) -- exactly
     these three, nothing that would let the job push or mint a token."""
@@ -53,21 +53,21 @@ def test_job_has_the_three_required_permissions():
             "      attestations: write\n") in text
 
 
-def test_job_has_no_branch_guard():
+def test_job_has_no_branch_guard() -> None:
     """Unlike spec-gate, coherence runs on any pull request -- it has
     nothing that needs an attavo/N-* branch to derive."""
     condition = job_if_condition(TEMPLATE.read_text(), JOB_NAME)
     assert condition is None
 
 
-def test_no_step_mints_a_token_or_pushes():
+def test_no_step_mints_a_token_or_pushes() -> None:
     text = TEMPLATE.read_text()
     assert "create-github-app-token" not in text
     assert "git push" not in text
     assert "secrets." not in text
 
 
-def test_attest_step_run_starts_with_attest_partial_by_event_redirected_to_a_file():
+def test_attest_step_run_starts_with_attest_partial_by_event_redirected_to_a_file() -> None:
     """Row 6: attest no longer accepts --dry-run -- the same command runs
     everywhere, --partial only on pull_request -- and its stdout, the
     statement or a not-yet/zero-item line, is captured to a file the
@@ -80,7 +80,7 @@ def test_attest_step_run_starts_with_attest_partial_by_event_redirected_to_a_fil
     )
 
 
-def test_attest_step_sets_a_statement_output_from_a_json_object_check_not_a_grep():
+def test_attest_step_sets_a_statement_output_from_a_json_object_check_not_a_grep() -> None:
     """The captured file is a statement only when attest actually printed
     one -- a not-yet or zero-item line is prose, not JSON, and a merge
     group carrying no item must not hand that prose to actions/attest.
@@ -95,7 +95,7 @@ def test_attest_step_sets_a_statement_output_from_a_json_object_check_not_a_grep
     assert 'echo "statement=false" >> "$GITHUB_OUTPUT"' in script
 
 
-def test_statement_check_discards_the_not_yet_lines_traceback():
+def test_statement_check_discards_the_not_yet_lines_traceback() -> None:
     """Issue #76: on every pull-request run before an item's later record
     lands, `attavo attest --partial` prints its not-yet line to stdout --
     the ruled contract (issue #67) -- which this step captures to the
@@ -111,7 +111,7 @@ def test_statement_check_discards_the_not_yet_lines_traceback():
     assert json_load_line.rstrip().endswith("2>/dev/null; then")
 
 
-def test_digest_and_signing_steps_require_the_statement_output():
+def test_digest_and_signing_steps_require_the_statement_output() -> None:
     """The header's promise -- a not-yet or zero-item line makes the
     captured file a non-statement the later steps skip -- must be a real
     guard, not just true on the happy path: on the merge group of a pull
@@ -126,14 +126,14 @@ def test_digest_and_signing_steps_require_the_statement_output():
                            "steps.attest.outputs.statement == 'true'"), name
 
 
-def test_checkout_step_has_no_ref_and_full_history():
+def test_checkout_step_has_no_ref_and_full_history() -> None:
     text = TEMPLATE.read_text()
     checkout_block = step_block(text, "- uses: actions/checkout@v4")
     assert "ref:" not in checkout_block
     assert "fetch-depth: 0" in checkout_block
 
 
-def test_template_carries_no_predicate_type_literal():
+def test_template_carries_no_predicate_type_literal() -> None:
     """Issue #117: v0.18.0 moved schema/attestation.schema.json's $id from
     .../v1 to .../v2 because a required field (ci_runs) left the
     predicate; the template's own typed copy of the URL did not move with
@@ -144,7 +144,7 @@ def test_template_carries_no_predicate_type_literal():
     assert "attavo.dev/attestation/v" not in TEMPLATE.read_text()
 
 
-def test_signing_step_reads_the_predicate_type_from_the_environment():
+def test_signing_step_reads_the_predicate_type_from_the_environment() -> None:
     """Issue #117, acceptance row 1. The signing step reads the variable
     action.yml exports from the schema's own $id, so the next schema
     version bump moves the label with it instead of leaving it behind
@@ -153,7 +153,7 @@ def test_signing_step_reads_the_predicate_type_from_the_environment():
     assert "predicate-type: ${{ env.ATTAVO_ATTESTATION_PREDICATE_TYPE }}" in block
 
 
-def test_action_yml_exports_the_predicate_type_from_the_schema_id(tmp_path):
+def test_action_yml_exports_the_predicate_type_from_the_schema_id(tmp_path: Path) -> None:
     """Issue #117, acceptance row 2. action.yml already writes
     ATTAVO_PRODUCT_VERSION into GITHUB_ENV; it must also write
     ATTAVO_ATTESTATION_PREDICATE_TYPE, read from
@@ -197,7 +197,7 @@ def test_action_yml_exports_the_predicate_type_from_the_schema_id(tmp_path):
     assert env_lines.get("ATTAVO_ATTESTATION_PREDICATE_TYPE") == schema_id
 
 
-def test_signing_step_inputs_are_a_subset_of_actions_attest_v2_and_include_predicate_path():
+def test_signing_step_inputs_are_a_subset_of_actions_attest_v2_and_include_predicate_path() -> None:
     """Issue #70: the template once passed predicate-file, an input the
     action has never declared, and continue-on-error swallowed the
     resulting warning as a signing refusal. Reading the action's own
@@ -211,7 +211,7 @@ def test_signing_step_inputs_are_a_subset_of_actions_attest_v2_and_include_predi
     assert "predicate-path" in keys
 
 
-def test_signing_step_has_no_continue_on_error():
+def test_signing_step_has_no_continue_on_error() -> None:
     """Ruled: the signing step on the merge group has no continue-on-error
     -- a signing failure fails the required context and the merge does
     not happen (reversing the 2026-09-09 refusal-tolerance ruling for
@@ -220,7 +220,7 @@ def test_signing_step_has_no_continue_on_error():
     assert "continue-on-error" not in block
 
 
-def test_no_template_runs_on_push_and_attest_template_is_gone():
+def test_no_template_runs_on_push_and_attest_template_is_gone() -> None:
     """Row 7: templates/workflows/attavo-attest.yml -- the one template
     that ran on push and wrote to the tree -- no longer exists, and
     nothing that remains runs on push."""

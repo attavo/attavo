@@ -20,12 +20,12 @@ ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
 
 
-def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
                           capture_output=True, text=True, check=False)
 
 
-def test_record_only_true_when_the_head_commit_only_touches_records(tmp_path):
+def test_record_only_true_when_the_head_commit_only_touches_records(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "valid")
     (root / "records" / "1").mkdir(parents=True)
     (root / "records" / "1" / "spec-01.json").write_text("{}\n")
@@ -35,7 +35,7 @@ def test_record_only_true_when_the_head_commit_only_touches_records(tmp_path):
     assert run.returncode == 0, run.stderr
 
 
-def test_record_only_false_when_the_head_commit_touches_specs(tmp_path):
+def test_record_only_false_when_the_head_commit_touches_specs(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "valid")
     (root / "specs" / "1" / "spec.md").write_text("# spec, amended\n")
     commit_all(root, "spec: item 1")
@@ -44,7 +44,7 @@ def test_record_only_false_when_the_head_commit_touches_specs(tmp_path):
     assert run.returncode == 1
 
 
-def test_record_only_false_when_the_head_commit_touches_both_records_and_specs(tmp_path):
+def test_record_only_false_when_the_head_commit_touches_both_records_and_specs(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "valid")
     (root / "records" / "1").mkdir(parents=True)
     (root / "records" / "1" / "spec-01.json").write_text("{}\n")
@@ -55,7 +55,7 @@ def test_record_only_false_when_the_head_commit_touches_both_records_and_specs(t
     assert run.returncode == 1
 
 
-def test_record_only_false_on_a_merge_commit_from_main(tmp_path):
+def test_record_only_false_on_a_merge_commit_from_main(tmp_path: Path) -> None:
     """Issue #17's clean-merge case, carried into the shared subcommand: a
     merge that brings in a real change from main must not read as
     record-only just because the merge commit's own diff against its
@@ -77,7 +77,7 @@ def test_record_only_false_on_a_merge_commit_from_main(tmp_path):
     assert run.returncode == 1
 
 
-def test_record_only_exits_2_with_no_manifest(tmp_path):
+def test_record_only_exits_2_with_no_manifest(tmp_path: Path) -> None:
     root = tmp_path / "no_manifest"
     root.mkdir()
     (root / "f.txt").write_text("x\n")

@@ -18,6 +18,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from helpers import commit_all, init_repo
 
@@ -28,7 +29,7 @@ OTHER_HOST = "elsewhere.example"
 STALL_BOUND_S = 60
 
 
-def attavo_module():
+def attavo_module() -> Any:
     """attavo.drive imported in-process and fresh each call, so a test can
     monkeypatch a module-level function (drive_state, poll_forge_checks,
     cmd_verify, ...) without leaking into any other test."""
@@ -40,7 +41,7 @@ def iso_ago(seconds: float) -> str:
     return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def run_doctor(root: Path) -> dict:
+def run_doctor(root: Path) -> dict[str, Any]:
     out = subprocess.run([sys.executable, str(ATTAVO), "doctor", str(root), "--json"],
                          capture_output=True, text=True, check=False)
     report = json.loads(out.stdout)
@@ -74,7 +75,7 @@ def _dead_pid() -> int:
     return proc.pid
 
 
-def test_proof_five_holds_a_young_marker_from_another_host_as_in_flight(tmp_path):
+def test_proof_five_holds_a_young_marker_from_another_host_as_in_flight(tmp_path: Path) -> None:
     """Acceptance 1 (half). A marker from a host that is not this one, and
     younger than [drive].stall_after_s, is an invocation still running
     elsewhere -- proof five holds and names it in in_flight, not among
@@ -89,7 +90,7 @@ def test_proof_five_holds_a_young_marker_from_another_host_as_in_flight(tmp_path
     assert p["running_invocations"] == []
 
 
-def test_proof_five_fails_an_old_marker_from_another_host_past_the_bound(tmp_path):
+def test_proof_five_fails_an_old_marker_from_another_host_past_the_bound(tmp_path: Path) -> None:
     """Acceptance 1 (other half). The same marker, older than the bound,
     is failed by absence exactly as a marker with no host at all would
     be -- naming it."""
@@ -102,7 +103,7 @@ def test_proof_five_fails_an_old_marker_from_another_host_past_the_bound(tmp_pat
     assert p["in_flight"] == []
 
 
-def test_proof_five_still_fails_a_dead_invocation_on_this_host(tmp_path):
+def test_proof_five_still_fails_a_dead_invocation_on_this_host(tmp_path: Path) -> None:
     """Acceptance 2 (half), a regression guard: a marker naming this
     host's own hostname and a dead pid fails exactly as before -- the
     age judgement is for another host only, and must not loosen the
@@ -117,7 +118,7 @@ def test_proof_five_still_fails_a_dead_invocation_on_this_host(tmp_path):
     assert p["in_flight"] == []
 
 
-def test_proof_five_still_holds_a_live_invocation_on_this_host_as_running(tmp_path):
+def test_proof_five_still_holds_a_live_invocation_on_this_host_as_running(tmp_path: Path) -> None:
     """Acceptance 2 (other half), a regression guard: a marker naming
     this host and a live pid holds as running_invocations, not
     in_flight -- the two lists stay distinct by what invocation_alive
@@ -134,7 +135,7 @@ def test_proof_five_still_holds_a_live_invocation_on_this_host_as_running(tmp_pa
 
 # --- acceptance 3: a returned verify ends --until-ready, not another marker ---
 
-def _drive_fixture(tmp_path: Path):
+def _drive_fixture(tmp_path: Path) -> tuple[Any, Path, dict[str, Any], Path]:
     """A real (if minimal) repository and bare remote -- everything
     _drive_run_stage itself touches (write_invocation_marker,
     commit_record, push_record_commit) -- with a fake verify stage
@@ -158,7 +159,7 @@ def _drive_fixture(tmp_path: Path):
     records_dir = root / "records" / "1"
     m = {"paths": {"records": "records"}, "forge": {"checks_command": "true"}}
 
-    def fake_cmd_verify(argv):
+    def fake_cmd_verify(argv: list[str]) -> int:
         nn = module.next_attempt_number(records_dir, "verify")
         path = records_dir / f"verify-{nn:02d}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -175,7 +176,7 @@ def _drive_fixture(tmp_path: Path):
     return module, root, m, records_dir
 
 
-def test_drive_step_stops_on_a_returned_verify(tmp_path):
+def test_drive_step_stops_on_a_returned_verify(tmp_path: Path) -> None:
     """Acceptance 3 (half). A single _drive_step call against a fake
     verify stage that writes a "returned" record reports done=True --
     before this change it read done from cmd_verify's own exit code
@@ -190,7 +191,7 @@ def test_drive_step_stops_on_a_returned_verify(tmp_path):
     assert len(list(records_dir.glob("verify-*.started"))) == 1
 
 
-def test_drive_until_ready_stops_after_one_step_on_a_returned_verify(tmp_path):
+def test_drive_until_ready_stops_after_one_step_on_a_returned_verify(tmp_path: Path) -> None:
     """Acceptance 3 (other half). The same fake stage, driven through
     --until-ready's own loop shape (repeat while not done, bounded here
     at 3 iterations so a regression fails fast instead of hanging):

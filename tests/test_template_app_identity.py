@@ -24,7 +24,7 @@ TEMPLATES = [
 ]
 
 
-def test_templates_push_with_an_app_token():
+def test_templates_push_with_an_app_token() -> None:
     for template in TEMPLATES:
         text = template.read_text()
 

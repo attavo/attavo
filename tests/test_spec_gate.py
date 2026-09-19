@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 from helpers import commit_all, git, make_tenant
 
@@ -18,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
 
 
-def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     full_env = dict(os.environ)
     if env:
         full_env.update(env)
@@ -26,13 +27,13 @@ def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.Co
                           capture_output=True, text=True, check=False, env=full_env)
 
 
-def latest_record(root: Path, item: str, stage: str) -> dict:
+def latest_record(root: Path, item: str, stage: str) -> dict[str, Any]:
     records = sorted((root / "records" / item).glob(f"{stage}-*.json"))
     assert records, f"no {stage} record for item {item}"
-    return json.loads(records[-1].read_text())
+    return cast(dict[str, Any], json.loads(records[-1].read_text()))
 
 
-def test_spec_gate_refuses_prose_criterion(tmp_path):
+def test_spec_gate_refuses_prose_criterion(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "prose_criterion")
     run = run_attavo(root, "spec-gate", "1")
     assert run.returncode == 1
@@ -46,7 +47,7 @@ def test_spec_gate_refuses_prose_criterion(tmp_path):
     assert rec["product_version"]
 
 
-def test_spec_gate_refuses_criterion_passing_on_tree(tmp_path):
+def test_spec_gate_refuses_criterion_passing_on_tree(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "passes_on_tree")
     run = run_attavo(root, "spec-gate", "1")
     assert run.returncode == 1
@@ -56,7 +57,7 @@ def test_spec_gate_refuses_criterion_passing_on_tree(tmp_path):
     assert "checks.sh" in rec["refusal"]
 
 
-def test_spec_gate_refuses_criterion_failing_on_stub(tmp_path):
+def test_spec_gate_refuses_criterion_failing_on_stub(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "fails_on_stub")
     run = run_attavo(root, "spec-gate", "1")
     assert run.returncode == 1
@@ -66,7 +67,7 @@ def test_spec_gate_refuses_criterion_failing_on_stub(tmp_path):
     assert "checks.sh" in rec["refusal"]
 
 
-def test_spec_gate_refuses_wrong_headings(tmp_path):
+def test_spec_gate_refuses_wrong_headings(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "wrong_headings")
     run = run_attavo(root, "spec-gate", "1")
     assert run.returncode == 1
@@ -76,7 +77,7 @@ def test_spec_gate_refuses_wrong_headings(tmp_path):
     assert "Design" in rec["refusal"]
 
 
-def test_spec_gate_passes_and_writes_record(tmp_path):
+def test_spec_gate_passes_and_writes_record(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "valid")
     run = run_attavo(root, "spec-gate", "1")
     assert run.returncode == 0
@@ -115,7 +116,7 @@ def complete_the_build(root: Path) -> None:
     commit_all(root, "build completed")
 
 
-def test_spec_gate_reports_approved_when_approval_is_valid(tmp_path):
+def test_spec_gate_reports_approved_when_approval_is_valid(tmp_path: Path) -> None:
     """Issue #21, acceptance 1. Once a build has made the criterion pass on
     the tree, the gate must not re-run it and refuse the very success
     approval exists to bind: it reports the approval instead. Red today:
@@ -138,7 +139,7 @@ def test_spec_gate_reports_approved_when_approval_is_valid(tmp_path):
     assert rec["approval_sha"] == approval["sha"]
 
 
-def test_spec_gate_runs_when_approval_expired(tmp_path):
+def test_spec_gate_runs_when_approval_expired(tmp_path: Path) -> None:
     """Issue #21, acceptance 2. The same fixture, after an edit above the
     line expires the approval: the gate must fall through to running the
     criteria for real, not keep reporting approved past the approval it
@@ -158,14 +159,14 @@ def test_spec_gate_runs_when_approval_expired(tmp_path):
     assert "checks_marker.sh" in rec["refusal"]
 
 
-def run_real_build(root: Path) -> subprocess.CompletedProcess:
+def run_real_build(root: Path) -> subprocess.CompletedProcess[str]:
     """A real `attavo build`, the fixture adapter writing the marker.txt
     the criterion checks for -- inside src/**, the claim -- unlike
     complete_the_build above, which only fakes the commit shape."""
     return run_attavo(root, "build", "1", env={"ATTAVO_FIXTURE_WRITE": "src/marker.txt"})
 
 
-def test_spec_gate_built_after_build(tmp_path):
+def test_spec_gate_built_after_build(tmp_path: Path) -> None:
     """Issue #28, acceptance 1. Approve, build for real, then an
     amendment above the line expires the approval: the gate reports
     status built, not a refusal. Red today: refused for passing on the
@@ -192,7 +193,7 @@ def test_spec_gate_built_after_build(tmp_path):
     assert rec["refusal"] is None
 
 
-def test_spec_gate_built_refuses_a_failing_criterion(tmp_path):
+def test_spec_gate_built_refuses_a_failing_criterion(tmp_path: Path) -> None:
     """Issue #28, acceptance 2. Same shape, but a criterion no longer
     satisfiable at all -- gone from the tree and from the stub overlay
     both -- is refused by name, not rubber-stamped built just because a
@@ -221,7 +222,7 @@ def test_spec_gate_built_refuses_a_failing_criterion(tmp_path):
     assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 1, "on_stub": 1}]
 
 
-def test_spec_gate_removed_deletes_the_path_from_the_stub(tmp_path):
+def test_spec_gate_removed_deletes_the_path_from_the_stub(tmp_path: Path) -> None:
     """Issue #132, acceptance 1. stub/.removed names a path the change
     deletes; the gate must drop it from the stubbed copy before running
     the criteria, so a criterion asserting its absence passes on the
@@ -239,7 +240,7 @@ def test_spec_gate_removed_deletes_the_path_from_the_stub(tmp_path):
     assert rec["refusal"] is None
 
 
-def test_spec_gate_removed_refuses_a_path_absent_from_the_tree(tmp_path):
+def test_spec_gate_removed_refuses_a_path_absent_from_the_tree(tmp_path: Path) -> None:
     """Issue #132, acceptance 2. A .removed entry naming a path that
     isn't in the tree at all removes nothing, so it is refused by name
     before any criterion runs -- no criteria entries in the record.
@@ -255,7 +256,7 @@ def test_spec_gate_removed_refuses_a_path_absent_from_the_tree(tmp_path):
     assert rec["criteria"] == []
 
 
-def test_spec_gate_removed_refuses_a_path_the_stub_also_supplies(tmp_path):
+def test_spec_gate_removed_refuses_a_path_the_stub_also_supplies(tmp_path: Path) -> None:
     """Issue #132, acceptance 3. A path named in .removed that the stub
     also supplies is a contradiction -- add and remove the same path --
     and is refused by name before any criterion runs.
@@ -271,7 +272,7 @@ def test_spec_gate_removed_refuses_a_path_the_stub_also_supplies(tmp_path):
     assert rec["criteria"] == []
 
 
-def test_spec_gate_removed_refuses_a_path_outside_the_tree(tmp_path):
+def test_spec_gate_removed_refuses_a_path_outside_the_tree(tmp_path: Path) -> None:
     """Issue #132, acceptance 4. A .removed entry that escapes the tree
     is refused by name before any criterion runs -- the stubbed copy is
     the only thing the gate may delete from.
@@ -287,7 +288,7 @@ def test_spec_gate_removed_refuses_a_path_outside_the_tree(tmp_path):
     assert rec["criteria"] == []
 
 
-def test_spec_gate_phase1_rule_unchanged_without_build(tmp_path):
+def test_spec_gate_phase1_rule_unchanged_without_build(tmp_path: Path) -> None:
     """Issue #28, acceptance 3. No build record at all: the third verdict
     does not apply, and Phase 1's original rule holds unchanged."""
     root = make_tenant(tmp_path, "valid")
@@ -317,7 +318,7 @@ def add_scripted_criterion(root: Path, satisfies_stub: bool) -> None:
     commit_all(root, "amend: script a ruling the executor skipped")
 
 
-def test_built_accepts_a_criterion_added_after_the_build(tmp_path):
+def test_built_accepts_a_criterion_added_after_the_build(tmp_path: Path) -> None:
     """Issue #36, acceptance 1. A criterion added after a build, failing
     on the tree (the build never satisfied it) but passing on the stub
     (a new obligation the next build must meet), does not refuse built
@@ -343,7 +344,7 @@ def test_built_accepts_a_criterion_added_after_the_build(tmp_path):
     assert by_name["extra.sh"] == {"name": "extra.sh", "on_tree": 1, "on_stub": 0}
 
 
-def test_built_refuses_a_criterion_failing_on_both(tmp_path):
+def test_built_refuses_a_criterion_failing_on_both(tmp_path: Path) -> None:
     """Issue #36, acceptance 2. Same shape, but the new criterion is not
     satisfiable at all -- fails on the tree and on the stub both:
     refused by name, not accepted as a scriptable new obligation.
@@ -376,7 +377,7 @@ def write_build_record(root: Path, item: str, *, sha: str, status: str) -> None:
     (records_dir / "build-01.json").write_text(json.dumps({"sha": sha, "status": status}) + "\n")
 
 
-def test_spec_gate_built_after_halted_build_that_committed(tmp_path):
+def test_spec_gate_built_after_halted_build_that_committed(tmp_path: Path) -> None:
     """Issue #98, acceptance 1. The executor commits its work, then halts
     with a question -- the common shape, since it commits before it asks.
     An amendment above the line must still be judged against the tree the
@@ -403,7 +404,7 @@ def test_spec_gate_built_after_halted_build_that_committed(tmp_path):
     assert rec["refusal"] is None
 
 
-def test_spec_gate_stub_verdict_after_halted_build_that_committed_nothing(tmp_path):
+def test_spec_gate_stub_verdict_after_halted_build_that_committed_nothing(tmp_path: Path) -> None:
     """Issue #98, acceptance 2. A halted build whose sha equals its
     start_sha did no work -- commit_postdates already treats that as
     postdating nothing -- so the gate must keep judging it against the

@@ -11,6 +11,7 @@ Run: python3 -m pytest tests -q
 from __future__ import annotations
 
 import re
+from typing import Any
 
 import subprocess
 import sys
@@ -36,16 +37,16 @@ BOUNDARY_FILES = [ROOT / "action.yml"]
 TENANCY_STRINGS = (".attavo/", "attavo.toml", "attest/records")
 
 
-def load_manifest() -> dict:
+def load_manifest() -> dict[str, Any]:
     return tomllib.loads(MANIFEST.read_text())
 
 
-def test_manifest_validates_against_schema():
+def test_manifest_validates_against_schema() -> None:
     schema = __import__("json").loads(MANIFEST_SCHEMA.read_text())
     jsonschema.validate(load_manifest(), schema)
 
 
-def test_manifest_declares_every_key_issue_103_lists():
+def test_manifest_declares_every_key_issue_103_lists() -> None:
     m = load_manifest()
     assert re.fullmatch(r"v\d+\.\d+\.\d+", m["attavo"]["version"]), m["attavo"]["version"]
     # No [doctor].from: proof_no_commit_lacks_record only accepts a
@@ -78,7 +79,7 @@ DESELECT_FLAGS = (
 )
 
 
-def test_checks_and_tests_run_deselect_the_four_dogfood_doctor_tests():
+def test_checks_and_tests_run_deselect_the_four_dogfood_doctor_tests() -> None:
     """[checks].command and [tests].run must never run the four doctor
     tests that fail until an item has traversed every stage: the first
     item's own build would fail its own checks on a doctor proof no
@@ -100,33 +101,33 @@ def run_select_tests(stdin_text: str) -> list[str]:
     return [line for line in run.stdout.splitlines() if line]
 
 
-def test_select_tests_maps_bin_attavo_to_the_whole_suite():
+def test_select_tests_maps_bin_attavo_to_the_whole_suite() -> None:
     assert run_select_tests("bin/attavo\n") == ["tests"]
 
 
-def test_select_tests_maps_an_adapter_path_to_the_adapter_tests():
+def test_select_tests_maps_an_adapter_path_to_the_adapter_tests() -> None:
     assert run_select_tests("adapters/example/run\n") == [
         "tests/test_adapters.py", "tests/test_executor_conformance.py",
     ]
 
 
-def test_select_tests_maps_a_schema_path_to_the_record_and_attest_tests():
+def test_select_tests_maps_a_schema_path_to_the_record_and_attest_tests() -> None:
     assert run_select_tests("schema/records/build.schema.json\n") == [
         "tests/test_record_schemas.py", "tests/test_attest.py",
     ]
 
 
-def test_select_tests_maps_an_unrelated_path_to_nothing():
+def test_select_tests_maps_an_unrelated_path_to_nothing() -> None:
     assert run_select_tests("README.md\n") == []
 
 
-def test_copied_workflows_pin_the_release_the_manifest_declares():
+def test_copied_workflows_pin_the_release_the_manifest_declares() -> None:
     pin = load_manifest()["attavo"]["version"]
     for path in COPIED_WORKFLOWS:
         assert f"uses: attavo/attavo@{pin}" in path.read_text(), (path.name, pin)
 
 
-def test_schema_version_job_reports_on_merge_group():
+def test_schema_version_job_reports_on_merge_group() -> None:
     text = CI_YML.read_text()
     lines = text.splitlines()
     on_idx = next(i for i, l in enumerate(lines) if l.strip() == "on:")
@@ -140,7 +141,7 @@ def test_schema_version_job_reports_on_merge_group():
     assert "github.event_name == 'pull_request'" in condition
 
 
-def test_doctor_job_reports_on_pull_request_and_merge_group():
+def test_doctor_job_reports_on_pull_request_and_merge_group() -> None:
     """Issue #113: the doctor job's #106 condition, main-only, hid it from
     pull requests and merge groups -- the events where a refusal is
     cheap. It must name both, and never reduce to the main-only shape a
@@ -175,7 +176,7 @@ BASELINE = {
 }
 
 
-def test_rejection_no_product_file_names_a_tenancy_path():
+def test_rejection_no_product_file_names_a_tenancy_path() -> None:
     """The product does not know it is a tenant: no file under bin/,
     adapters/, schema/, templates/, or action.yml mentions .attavo/,
     attavo.toml, or attest/records as a path, beyond the pre-existing

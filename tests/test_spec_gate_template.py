@@ -37,7 +37,7 @@ TEMPLATE = ROOT / "templates" / "workflows" / "attavo-spec-gate.yml"
 JOB_NAME = "spec-gate"
 
 
-def test_skip_step_reads_record_only_exit_code():
+def test_skip_step_reads_record_only_exit_code() -> None:
     """Issue #19: the template step becomes one run line reading `attavo
     record-only`'s exit code, installed unconditionally before it runs
     rather than only once the (no-longer-computed) skip is known."""
@@ -53,7 +53,7 @@ def test_skip_step_reads_record_only_exit_code():
     assert "tomllib" not in touch_block
 
 
-def test_template_pushes_after_the_gate_ran_whatever_it_said():
+def test_template_pushes_after_the_gate_ran_whatever_it_said() -> None:
     """Issue #116, acceptance rows 1-2. `always()` (issue #28's fix) also
     ran the commit step after a mint or checkout failure, with no bot
     identity to commit as -- on 2026-09-13 that produced a second, unrelated
@@ -82,7 +82,7 @@ def test_template_pushes_after_the_gate_ran_whatever_it_said():
     assert "steps.gate.outcome == 'failure'" in if_line
 
 
-def test_template_declares_merge_group_alongside_pull_request():
+def test_template_declares_merge_group_alongside_pull_request() -> None:
     """Issue #62, acceptance row 6. The job's own if: is unchanged, so a
     merge group -- with no attavo/N-* head_ref -- skips the job and
     satisfies the required context there the same way an ordinary pull
@@ -95,7 +95,7 @@ def test_template_declares_merge_group_alongside_pull_request():
     assert "merge_group:" in on_body
 
 
-def test_job_guards_on_the_attavo_branch_prefix():
+def test_job_guards_on_the_attavo_branch_prefix() -> None:
     """A pull_request event fires this workflow on every PR, not just ones
     from a work item's attavo/N-* branch. Without a branch guard, a PR from
     any other branch runs the gate, which cannot derive an item id and exits
@@ -106,7 +106,7 @@ def test_job_guards_on_the_attavo_branch_prefix():
     assert "startsWith(github.head_ref, 'attavo/')" in condition
 
 
-def test_counsel_step_runs_only_when_the_gate_refuses():
+def test_counsel_step_runs_only_when_the_gate_refuses() -> None:
     """Issue #133, acceptance row 4. The counsel step's own guard names
     the gate step's outcome, 'failure' -- the same outcome the
     commit-and-push step already keys on -- so a passing gate never
@@ -132,7 +132,7 @@ def test_counsel_step_runs_only_when_the_gate_refuses():
     assert 'git add "$records_rel"' in push_script
 
 
-def test_record_commit_names_the_item_not_the_pull_request_number():
+def test_record_commit_names_the_item_not_the_pull_request_number() -> None:
     """Issue #121: tenant zero's item #651 chain read `spec-gate record for
     #675` -- PR #675's own number, not the item's. The record lives under
     <paths.records>/651/, and #675 names nothing there. The commit step

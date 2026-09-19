@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 from helpers import commit_all, git, make_tenant
 
@@ -25,7 +26,7 @@ GREEN_FORGE = "printf 'ci success\\n'"
 RED_FORGE = "printf 'ci failure\\n'"
 
 
-def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     full_env = dict(os.environ)
     if env:
         full_env.update(env)
@@ -44,10 +45,10 @@ def approve_item(root: Path, item: str = "1") -> None:
     assert run_attavo(root, "approve", item, "--by", "alice").returncode == 0
 
 
-def latest_verify(root: Path, item: str = "1") -> dict:
+def latest_verify(root: Path, item: str = "1") -> dict[str, Any]:
     files = sorted((root / "records" / item).glob("verify-*.json"))
     assert files, f"no verify record for item {item}"
-    return json.loads(files[-1].read_text())
+    return cast(dict[str, Any], json.loads(files[-1].read_text()))
 
 
 def latest_verify_log(root: Path, item: str = "1") -> str:
@@ -64,7 +65,7 @@ def diff_block(log_text: str) -> str:
     return log_text[start:end]
 
 
-def test_verify_refuses_without_a_build_record(tmp_path):
+def test_verify_refuses_without_a_build_record(tmp_path: Path) -> None:
     """Acceptance 4a. No build record at all for the item: refused,
     naming the cause, no verify record written."""
     root = make_tenant(tmp_path, "build_valid")
@@ -77,7 +78,7 @@ def test_verify_refuses_without_a_build_record(tmp_path):
     assert list((root / "records" / "1").glob("verify-*.json")) == []
 
 
-def test_verify_refuses_when_latest_build_is_not_pass(tmp_path):
+def test_verify_refuses_when_latest_build_is_not_pass(tmp_path: Path) -> None:
     """Acceptance 4b. A build record exists but its status is not pass:
     refused, naming the cause, no verify record written."""
     root = make_tenant(tmp_path, "build_valid")
@@ -96,7 +97,7 @@ def test_verify_refuses_when_latest_build_is_not_pass(tmp_path):
     assert list((root / "records" / "1").glob("verify-*.json")) == []
 
 
-def test_verify_pass_record_carries_no_stop(tmp_path):
+def test_verify_pass_record_carries_no_stop(tmp_path: Path) -> None:
     """Issue #89, rejection test 2 (half). A pass record carries stop:
     null."""
     root = make_tenant(tmp_path, "build_valid")
@@ -112,7 +113,7 @@ def test_verify_pass_record_carries_no_stop(tmp_path):
     assert rec["stop"] is None
 
 
-def test_verify_returns_when_the_forge_is_red(tmp_path):
+def test_verify_returns_when_the_forge_is_red(tmp_path: Path) -> None:
     """Acceptance 5. The forge's own check conclusions on the build
     record's commit are read before any judge is called: a failing
     conclusion writes status "returned" and calls no adapter at all --
@@ -138,7 +139,7 @@ def test_verify_returns_when_the_forge_is_red(tmp_path):
     assert rec["stop"] == {"class": "forge-unconcluded", "provenance": "tenant", "detail": None}
 
 
-def test_verify_treats_an_empty_forge_read_as_not_green(tmp_path):
+def test_verify_treats_an_empty_forge_read_as_not_green(tmp_path: Path) -> None:
     """Issue #44, rejection test 1. A [forge].checks_command that prints
     nothing and exits 0 is not green -- a commit the forge has no record
     of is unread, not passing (all() over an empty conclusions list is
@@ -161,7 +162,7 @@ def test_verify_treats_an_empty_forge_read_as_not_green(tmp_path):
     assert not (root / "records" / "1" / "verify-01.log").exists()
 
 
-def test_verify_reads_the_forge_on_the_branch_head_not_the_build_sha(tmp_path):
+def test_verify_reads_the_forge_on_the_branch_head_not_the_build_sha(tmp_path: Path) -> None:
     """Issue #44, rejection test 2. The forge attaches checks to a pull
     request's head, not to the executor's own commit -- that commit
     stops being the head the moment a later commit lands on top of it.
@@ -197,7 +198,7 @@ def test_verify_reads_the_forge_on_the_branch_head_not_the_build_sha(tmp_path):
     assert rec["forge_checks"]["sha"] != rec["build_sha"]
 
 
-def test_verify_merges_stage_config(tmp_path):
+def test_verify_merges_stage_config(tmp_path: Path) -> None:
     """Acceptance 6. [executor.<adapter>.verify] shadows
     [executor.<adapter>] for verify alone; build sees the parent,
     verify sees the merged result.
@@ -227,7 +228,7 @@ def head_of(root: Path) -> str:
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
-def test_verify_fails_when_findings_key_is_absent(tmp_path):
+def test_verify_fails_when_findings_key_is_absent(tmp_path: Path) -> None:
     """Issue #46, rejection test 1. A verify report line carrying no
     findings key at all is failed, not pass -- the absence of a channel
     to report a finding is not a clean bill of health, and is not the
@@ -253,7 +254,7 @@ def test_verify_fails_when_findings_key_is_absent(tmp_path):
     assert rec["stop"]["detail"]
 
 
-def test_verify_fails_when_the_adapter_commits(tmp_path):
+def test_verify_fails_when_the_adapter_commits(tmp_path: Path) -> None:
     """Issue #46, rejection test 2. Verify is a report, not a commit: an
     adapter that moves the branch head during the invocation fails the
     attempt, and the record names the commit it should not have made.
@@ -279,7 +280,7 @@ def test_verify_fails_when_the_adapter_commits(tmp_path):
     assert rec["commits"] == [post_head]  # named, not silently kept
 
 
-def test_verify_records_a_silently_failing_adapter_without_being_refused(tmp_path):
+def test_verify_records_a_silently_failing_adapter_without_being_refused(tmp_path: Path) -> None:
     """Issue #53, rejection test 4. Same guarantee as build's: an adapter
     invoked during verify that exits non-zero with nothing on stdout or
     stderr must not leave a failed record with an empty log and no trail
@@ -312,7 +313,7 @@ def test_verify_records_a_silently_failing_adapter_without_being_refused(tmp_pat
     assert "1" in log  # the exit status, so the record explains itself
 
 
-def test_verify_ceiling_error_line_carries_ceiling_stop(tmp_path):
+def test_verify_ceiling_error_line_carries_ceiling_stop(tmp_path: Path) -> None:
     """Issue #89, rejection test 3: an adapter exit with a tool error line
     matching a declared ceiling is ceiling/product -- issue #86's own
     specimen, codex's "input_too_large" on a diff too large to judge."""
@@ -331,7 +332,7 @@ def test_verify_ceiling_error_line_carries_ceiling_stop(tmp_path):
     assert "input_too_large" in log
 
 
-def test_verify_records_the_tools_own_error_line_on_a_nonzero_exit(tmp_path):
+def test_verify_records_the_tools_own_error_line_on_a_nonzero_exit(tmp_path: Path) -> None:
     """Issue #86, rejection test 3. Specimen: tenant zero
     attest/records/659/verify-01.log -- two lines, thread.started and
     "[adapter exited 1]", though the codex adapter printed codex's own
@@ -390,7 +391,7 @@ def test_verify_records_the_tools_own_error_line_on_a_nonzero_exit(tmp_path):
 # the diff.
 
 
-def test_verify_diff_excludes_content_merged_from_the_default_branch(tmp_path):
+def test_verify_diff_excludes_content_merged_from_the_default_branch(tmp_path: Path) -> None:
     """Issue #52, rejection test 1. A commit lands on the fixture's main
     and is merged into the item branch; then one change is made on the
     item branch itself (the build). The diff at ATTAVO_DIFF names only
@@ -421,7 +422,7 @@ def test_verify_diff_excludes_content_merged_from_the_default_branch(tmp_path):
     assert "mainfile.txt" not in diff
 
 
-def test_verify_diff_matches_the_old_two_dot_diff_without_a_merge(tmp_path):
+def test_verify_diff_matches_the_old_two_dot_diff_without_a_merge(tmp_path: Path) -> None:
     """Issue #52, rejection test 2. With no merge from the default
     branch, the new diff must not regress to something narrower or
     broader than before: it comes out byte-identical to the old
@@ -456,7 +457,7 @@ def test_verify_diff_matches_the_old_two_dot_diff_without_a_merge(tmp_path):
     assert diff_block(latest_verify_log(root)) == old_diff
 
 
-def test_verify_refuses_without_an_origin_head(tmp_path):
+def test_verify_refuses_without_an_origin_head(tmp_path: Path) -> None:
     """Issue #52, rejection test 3. With no refs/remotes/origin/HEAD to
     diff against, cmd_verify refuses by name -- telling the operator to
     run `git remote set-head origin -a` -- rather than guessing, and
@@ -481,7 +482,7 @@ def test_verify_refuses_without_an_origin_head(tmp_path):
     assert list((root / "records" / "1").glob("verify-*.json")) == []
 
 
-def test_verify_diff_is_empty_without_an_approval_sha(tmp_path):
+def test_verify_diff_is_empty_without_an_approval_sha(tmp_path: Path) -> None:
     """Issue #52 rejection table row 4 (unchanged from the original
     issue): a build record with no approval_sha at all gets an empty
     diff, and no crash. refs/remotes/origin/HEAD is dropped here too, to

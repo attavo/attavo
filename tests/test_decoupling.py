@@ -27,12 +27,12 @@ def modules() -> list[Path]:
     return sorted(PACKAGE.rglob("*.py"))
 
 
-def test_the_package_has_every_module_the_issue_names():
+def test_the_package_has_every_module_the_issue_names() -> None:
     missing = [name for name in MODULES if not (PACKAGE / f"{name}.py").is_file()]
     assert not missing, f"attavo/ lacks: {', '.join(missing)}"
 
 
-def test_no_module_runs_gh_or_names_github():
+def test_no_module_runs_gh_or_names_github() -> None:
     files = modules()
     assert files, "attavo/ holds no modules; there is nothing for the grep to read"
     offences = []
@@ -43,14 +43,14 @@ def test_no_module_runs_gh_or_names_github():
     assert not offences, "forge-specific text under attavo/:\n" + "\n".join(offences)
 
 
-def test_the_entry_is_thin_and_imports_the_package():
+def test_the_entry_is_thin_and_imports_the_package() -> None:
     text = (ROOT / "bin" / "attavo").read_text()
     assert len(text.splitlines()) < 60, "bin/attavo grew past a thin entry"
     assert re.search(r"^from attavo\.cli import main\b", text, re.MULTILINE), (
         "bin/attavo does not import main from attavo.cli")
 
 
-def test_the_grep_finds_what_it_is_meant_to_find():
+def test_the_grep_finds_what_it_is_meant_to_find() -> None:
     """The pattern rejects a gh command and a github.com URL, and passes the
     ordinary words that merely end in the same letters."""
     for offending in ('subprocess.run(["gh", "pr", "view"])', "gh api repos/x/y",

@@ -9,11 +9,13 @@ status on the first read returned "returned" at once instead of waiting.
 
 Run: python3 -m pytest tests -q
 """
+import pytest
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 from helpers import commit_all, git, make_tenant
 
@@ -30,12 +32,12 @@ POLL_BOUND_S = "0.5"
 POLL_INTERVAL_S = "0.05"
 
 
-def set_poll_clock(monkeypatch) -> None:
+def set_poll_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ATTAVO_DRIVE_POLL_BOUND_S", POLL_BOUND_S)
     monkeypatch.setenv("ATTAVO_DRIVE_POLL_INTERVAL_S", POLL_INTERVAL_S)
 
 
-def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     full_env = dict(os.environ)
     if env:
         full_env.update(env)
@@ -54,10 +56,10 @@ def approve_item(root: Path, item: str = "1") -> None:
     assert run_attavo(root, "approve", item, "--by", "alice").returncode == 0
 
 
-def latest_verify(root: Path, item: str = "1") -> dict:
+def latest_verify(root: Path, item: str = "1") -> dict[str, Any]:
     files = sorted((root / "records" / item).glob("verify-*.json"))
     assert files, f"no verify record for item {item}"
-    return json.loads(files[-1].read_text())
+    return cast(dict[str, Any], json.loads(files[-1].read_text()))
 
 
 def make_sequenced_forge(tmp_path: Path, name: str, sequence: list[str]) -> str:
@@ -83,7 +85,7 @@ esac
     return str(script)
 
 
-def test_verify_calls_the_adapter_once_the_forge_concludes_green(tmp_path, monkeypatch):
+def test_verify_calls_the_adapter_once_the_forge_concludes_green(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Acceptance row 1a. A checks_command that answers unconcluded twice
     and green on the third read: verify polls rather than returning on
     the first read, calls the adapter, and writes a pass-shaped record."""
@@ -104,7 +106,7 @@ def test_verify_calls_the_adapter_once_the_forge_concludes_green(tmp_path, monke
     assert rec["forge_checks"]["conclusions"] == [{"name": "ci", "conclusion": "success"}]
 
 
-def test_verify_returns_with_the_conclusions_once_the_forge_concludes_red(tmp_path, monkeypatch):
+def test_verify_returns_with_the_conclusions_once_the_forge_concludes_red(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Acceptance row 1b. A checks_command that answers unconcluded twice
     and red (a concluded, failing conclusion) on the third read: verify
     still polls up to that read, then returns with those conclusions on
@@ -126,7 +128,7 @@ def test_verify_returns_with_the_conclusions_once_the_forge_concludes_red(tmp_pa
     assert rec["forge_checks"]["conclusions"] == [{"name": "ci", "conclusion": "failure"}]
 
 
-def test_verify_returns_forge_unconcluded_at_the_bound_when_the_forge_never_concludes(tmp_path, monkeypatch):
+def test_verify_returns_forge_unconcluded_at_the_bound_when_the_forge_never_concludes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Acceptance row 1c. A checks_command that never concludes: verify
     polls until the bound, then returns "returned"/forge-unconcluded as
     it does today on a single unconcluded read -- no adapter call."""

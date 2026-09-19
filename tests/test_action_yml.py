@@ -74,7 +74,7 @@ def _product_version_script() -> str:
     return "\n".join(block).rstrip("\n")
 
 
-def test_product_version_reaches_the_record_when_action_ref_is_empty_and_checkout_has_no_git(tmp_path):
+def test_product_version_reaches_the_record_when_action_ref_is_empty_and_checkout_has_no_git(tmp_path: Path) -> None:
     """Row 2, issue #66: the action's own step, run the way a tenant's
     pinned checkout runs it -- github.action_ref empty, the installed
     directory named by its ref and carrying no .git -- must still produce
@@ -111,7 +111,7 @@ def test_product_version_reaches_the_record_when_action_ref_is_empty_and_checkou
     assert rec["product_version"] == "v0.13.0"
 
 
-def test_product_version_step_leaves_git_checkouts_to_git_describe(tmp_path):
+def test_product_version_step_leaves_git_checkouts_to_git_describe(tmp_path: Path) -> None:
     """The fallback added for row 2 must not fire when the installed
     directory is a real git checkout (this repo's own action-self-check
     job, `uses: ./` against a full clone with tags) -- there,

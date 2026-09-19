@@ -11,6 +11,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from helpers import make_tenant
 
@@ -18,12 +19,12 @@ ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
 
 
-def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
                           capture_output=True, text=True, check=False)
 
 
-def write_record(root: Path, item: str, stage: str, n: int, content: dict) -> Path:
+def write_record(root: Path, item: str, stage: str, n: int, content: dict[str, Any]) -> Path:
     records_dir = root / "records" / item
     records_dir.mkdir(parents=True, exist_ok=True)
     path = records_dir / f"{stage}-{n:02d}.json"
@@ -79,11 +80,11 @@ def build_fixture(tmp_path: Path, item: str = "1") -> Path:
     return root
 
 
-def rows_by_record(data: dict) -> dict:
+def rows_by_record(data: dict[str, Any]) -> dict[str, Any]:
     return {row["record"]: row for row in data["rows"]}
 
 
-def test_stops_classifies_every_answerer_and_totals(tmp_path):
+def test_stops_classifies_every_answerer_and_totals(tmp_path: Path) -> None:
     """Acceptance row 1: every non-pass record in the fixture gets exactly
     one answerer from the closed list, and totals match."""
     root = build_fixture(tmp_path)
@@ -118,7 +119,7 @@ def test_stops_classifies_every_answerer_and_totals(tmp_path):
     assert totals["before_stop_was_recorded"] == 1
 
 
-def test_stops_counsel_wins_over_class_as_answerer(tmp_path):
+def test_stops_counsel_wins_over_class_as_answerer(tmp_path: Path) -> None:
     """Acceptance row 2: a counsel record wins over the class as answerer
     -- a guarded class that would otherwise answer "guard" answers
     "counsel:<verdict>" once a counsel record names it."""
@@ -138,7 +139,7 @@ def test_stops_counsel_wins_over_class_as_answerer(tmp_path):
     assert data["totals"]["by_answerer"] == {"counsel:answer": 1}
 
 
-def test_stops_prints_before_stop_was_recorded_for_a_record_without_stop(tmp_path):
+def test_stops_prints_before_stop_was_recorded_for_a_record_without_stop(tmp_path: Path) -> None:
     """Acceptance row 3: a record without stop prints the doctor's phrase
     and counts under "before stop was recorded"."""
     root = make_tenant(tmp_path, "ledger_base")
@@ -159,7 +160,7 @@ def test_stops_prints_before_stop_was_recorded_for_a_record_without_stop(tmp_pat
     assert "before stop was recorded" in run_text.stdout
 
 
-def test_stops_prints_counsel_verdict_for_a_refused_spec_gate_record(tmp_path):
+def test_stops_prints_counsel_verdict_for_a_refused_spec_gate_record(tmp_path: Path) -> None:
     """Issue #133, acceptance row 3, reclassed by issue #137. A refused
     spec-01.json carries no stop field of its own (cmd_spec_gate is
     untouched by this lane), so its class is synthesized from status and
@@ -192,7 +193,7 @@ def test_stops_prints_counsel_verdict_for_a_refused_spec_gate_record(tmp_path):
     assert data["totals"]["by_answerer"] == {"counsel:patch": 1}
 
 
-def test_stops_gate_class_answers_none_with_no_counsel_record(tmp_path):
+def test_stops_gate_class_answers_none_with_no_counsel_record(tmp_path: Path) -> None:
     """Issue #137. Unlike claims-boundary, "gate" is not a guarded class:
     a refused spec-gate record with no counsel record answers "none",
     never "guard" -- the fallback classification issue #133 reused had
@@ -213,7 +214,7 @@ def test_stops_gate_class_answers_none_with_no_counsel_record(tmp_path):
     assert data["totals"]["by_answerer"] == {"none": 1}
 
 
-def test_stops_json_is_one_object_matching_rows_and_totals(tmp_path):
+def test_stops_json_is_one_object_matching_rows_and_totals(tmp_path: Path) -> None:
     """--json prints rows and totals as one object."""
     root = build_fixture(tmp_path)
 

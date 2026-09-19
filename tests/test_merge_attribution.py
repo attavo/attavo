@@ -12,6 +12,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from helpers import commit_all, git, init_repo
 
@@ -19,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
 
 
-def attavo_module():
+def attavo_module() -> Any:
     """attavo.doctor imported in-process, for a direct unit test of
     _merges_reachable and merge_introducing_records -- reproducing the
     misattribution these tests name takes git plumbing no CLI subcommand
@@ -28,7 +29,7 @@ def attavo_module():
     return importlib.import_module("attavo.doctor")
 
 
-def run_doctor(root: Path) -> dict:
+def run_doctor(root: Path) -> dict[str, Any]:
     out = subprocess.run([sys.executable, str(ATTAVO), "doctor", str(root), "--json"],
                          capture_output=True, text=True, check=False)
     report = json.loads(out.stdout)
@@ -44,7 +45,7 @@ def write_item_records(records_dir: Path) -> None:
     (records_dir / "verify-01.json").write_text(json.dumps({"status": "pass"}))
 
 
-def test_merge_introducing_records_ignores_a_transport_merge_on_an_item_branch(tmp_path):
+def test_merge_introducing_records_ignores_a_transport_merge_on_an_item_branch(tmp_path: Path) -> None:
     """Acceptance row 1. Item 1's four stage records land on main for
     real, at a first-parent merge M1. Item 2's own branch, still open,
     later runs `git merge main` to stay current -- that transport merge
@@ -90,7 +91,7 @@ def test_merge_introducing_records_ignores_a_transport_merge_on_an_item_branch(t
     assert merge_sha2 is None
 
 
-def test_doctor_proof_two_reports_not_merged_at_a_pull_request_synthetic_merge(tmp_path):
+def test_doctor_proof_two_reports_not_merged_at_a_pull_request_synthetic_merge(tmp_path: Path) -> None:
     """Acceptance row 2. HEAD checked out at a merge of the item's own
     branch into main, on a branch of its own -- the shape actions/checkout
     leaves behind for a pull_request event, where the merge itself is
@@ -119,7 +120,7 @@ def test_doctor_proof_two_reports_not_merged_at_a_pull_request_synthetic_merge(t
     assert "no merge" in p["reason"]
 
 
-def test_merges_reachable_refuses_without_an_origin_head(tmp_path):
+def test_merges_reachable_refuses_without_an_origin_head(tmp_path: Path) -> None:
     """Acceptance row 3. With no refs/remotes/origin/HEAD to name the
     default branch, _merges_reachable refuses by name -- telling the
     operator to run `git remote set-head origin -a` -- rather than
@@ -147,7 +148,7 @@ def test_merges_reachable_refuses_without_an_origin_head(tmp_path):
     assert "git remote set-head origin -a" in p["reason"]
 
 
-def test_doctor_job_sets_origin_head_after_checkout():
+def test_doctor_job_sets_origin_head_after_checkout() -> None:
     """Acceptance row 3's other half. The doctor job runs on pull_request,
     merge_group, and push (ci.yml's own `if:`), none of which leaves
     refs/remotes/origin/HEAD set by actions/checkout alone; the job must

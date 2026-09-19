@@ -13,6 +13,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from helpers import commit_all, make_tenant
 
@@ -20,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
 
 
-def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
                           capture_output=True, text=True, check=False)
 
@@ -40,11 +41,11 @@ def configure_filing(root: Path, filed_path: Path) -> None:
     commit_all(root, "configure issue filing")
 
 
-def write_build_record(root: Path, item: str, n: int, status: str, stop: dict | None,
+def write_build_record(root: Path, item: str, n: int, status: str, stop: dict[str, Any] | None,
                        log: str = "adapter transcript\n") -> Path:
     records_dir = root / "records" / item
     records_dir.mkdir(parents=True, exist_ok=True)
-    record = {
+    record: dict[str, Any] = {
         "sha": "0" * 40, "start_sha": "0" * 40, "spec_sha": "0" * 40,
         "approval_sha": "0" * 40, "at": "2026-01-01T00:00:00Z",
         "adapter": "fixture", "adapter_config": {},
@@ -65,7 +66,7 @@ def write_build_record(root: Path, item: str, n: int, status: str, stop: dict | 
 def write_spec_record(root: Path, item: str, n: int, refusal: str) -> Path:
     records_dir = root / "records" / item
     records_dir.mkdir(parents=True, exist_ok=True)
-    record = {
+    record: dict[str, Any] = {
         "sha": "0" * 40, "spec_sha": "0" * 40, "at": "2026-01-01T00:00:00Z",
         "status": "refused", "approval_sha": None, "criteria": [], "refusal": refusal,
     }
@@ -74,7 +75,7 @@ def write_spec_record(root: Path, item: str, n: int, refusal: str) -> Path:
     return path
 
 
-def test_file_stops_files_a_refused_gate_record_as_class_gate(tmp_path):
+def test_file_stops_files_a_refused_gate_record_as_class_gate(tmp_path: Path) -> None:
     """Issue #137, acceptance row 1 (file-stops half). A refused
     spec-gate record files as class "gate", provenance "spec" -- not
     "claims-boundary", the boundary it never crossed (tenant zero's own
@@ -96,7 +97,7 @@ def test_file_stops_files_a_refused_gate_record_as_class_gate(tmp_path):
     assert filed_bodies[0]["record"] == "records/1/spec-01.json"
 
 
-def test_file_stops_refuses_an_unclassed_stop_with_empty_detail(tmp_path):
+def test_file_stops_refuses_an_unclassed_stop_with_empty_detail(tmp_path: Path) -> None:
     """Acceptance row 4 (half). A stop the product cannot even describe --
     class unclassed, detail empty -- is refused by name; nothing is filed."""
     root = make_tenant(tmp_path, "build_valid")
@@ -112,7 +113,7 @@ def test_file_stops_refuses_an_unclassed_stop_with_empty_detail(tmp_path):
     assert not filed.exists()
 
 
-def test_file_stops_files_one_issue_per_stop_record_and_is_idempotent(tmp_path):
+def test_file_stops_files_one_issue_per_stop_record_and_is_idempotent(tmp_path: Path) -> None:
     """Acceptance row 4: one issue per stop record, with class,
     provenance, record path, and log tail in the body; a second run files
     nothing new."""
@@ -145,7 +146,7 @@ def test_file_stops_files_one_issue_per_stop_record_and_is_idempotent(tmp_path):
     assert filed_bodies_after == filed_bodies
 
 
-def test_file_stops_marker_holds_the_filing_commands_stdout(tmp_path):
+def test_file_stops_marker_holds_the_filing_commands_stdout(tmp_path: Path) -> None:
     """The .filed marker beside a stop record it just filed carries the
     filing command's own stdout -- the issue it opened -- not an empty
     file that only says "filed" with no way to say which issue."""
@@ -165,7 +166,7 @@ def test_file_stops_marker_holds_the_filing_commands_stdout(tmp_path):
     assert marker.read_text().strip() == "https://github.com/tenant/repo/issues/1"
 
 
-def test_file_stops_leaves_the_marker_uncommitted(tmp_path):
+def test_file_stops_leaves_the_marker_uncommitted(tmp_path: Path) -> None:
     """A run of attavo file-stops by hand, outside drive, writes the
     marker and leaves committing to the caller -- the same as build and
     verify leave their own records uncommitted."""
@@ -186,7 +187,7 @@ def test_file_stops_leaves_the_marker_uncommitted(tmp_path):
     assert status.startswith("??")  # untracked -- file-stops never git-adds it
 
 
-def test_file_stops_leaves_a_pass_record_alone(tmp_path):
+def test_file_stops_leaves_a_pass_record_alone(tmp_path: Path) -> None:
     """A pass record carries no stop at all -- nothing to file for it."""
     root = make_tenant(tmp_path, "build_valid")
     filed = tmp_path / "filed.jsonl"
@@ -202,7 +203,7 @@ def test_file_stops_leaves_a_pass_record_alone(tmp_path):
 
 def write_counsel_record(root: Path, item: str, n: int, record_field: str,
                          verdict: str = "person",
-                         proposal: dict | None = None) -> Path:
+                         proposal: dict[str, Any] | None = None) -> Path:
     """Issue #100: a counsel-NN.json whose own "record" field names the
     stage record it read (e.g. "build-01") -- what file-stops matches
     against to find the counsel that read a given stop."""
@@ -223,7 +224,7 @@ def write_counsel_record(root: Path, item: str, n: int, record_field: str,
     return path
 
 
-def test_file_stops_puts_counsels_verdict_citations_and_proposal_in_the_body(tmp_path):
+def test_file_stops_puts_counsels_verdict_citations_and_proposal_in_the_body(tmp_path: Path) -> None:
     """Issue #100, acceptance row 3. file-stops puts counsel's verdict,
     citations, and proposal in the issue body, matched to the stage
     record counsel actually read."""
@@ -251,7 +252,7 @@ def test_file_stops_puts_counsels_verdict_citations_and_proposal_in_the_body(tmp
     assert filed_bodies[0]["counsel_proposal"]["patch"]["file"] == "bin/attavo"
 
 
-def test_file_stops_leaves_counsel_fields_null_with_no_counsel_record(tmp_path):
+def test_file_stops_leaves_counsel_fields_null_with_no_counsel_record(tmp_path: Path) -> None:
     """A stop file-stops files without counsel having run first (e.g. run
     standalone, outside drive) still files -- the counsel fields are null
     rather than blocking the filing."""
@@ -271,7 +272,7 @@ def test_file_stops_leaves_counsel_fields_null_with_no_counsel_record(tmp_path):
     assert filed_bodies[0]["counsel_proposal"] is None
 
 
-def test_file_stops_composes_a_title_naming_class_provenance_item_and_record(tmp_path):
+def test_file_stops_composes_a_title_naming_class_provenance_item_and_record(tmp_path: Path) -> None:
     """Issue #114, acceptance row 1. The filed body carries a non-empty
     title naming class, provenance, item, and record -- not the tenant
     side's <untitled> fallback."""
@@ -289,7 +290,7 @@ def test_file_stops_composes_a_title_naming_class_provenance_item_and_record(tmp
     assert filed_bodies[0]["title"] == "stop claims-boundary/spec on item 1: build-01"
 
 
-def test_file_stops_refuses_a_stop_whose_composed_title_would_be_empty(tmp_path):
+def test_file_stops_refuses_a_stop_whose_composed_title_would_be_empty(tmp_path: Path) -> None:
     """Issue #114, acceptance row 2. An empty class is a record defect,
     not a filing: file-stops refuses by name and files nothing."""
     root = make_tenant(tmp_path, "build_valid")
@@ -306,7 +307,7 @@ def test_file_stops_refuses_a_stop_whose_composed_title_would_be_empty(tmp_path)
     assert not (root / "records" / "1" / "build-01.filed").exists()
 
 
-def test_file_stops_refuses_without_a_file_issue_command(tmp_path):
+def test_file_stops_refuses_without_a_file_issue_command(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "build_valid")
     write_build_record(root, "1", 1, "failed",
                        {"class": "ceiling", "provenance": "product", "detail": None})

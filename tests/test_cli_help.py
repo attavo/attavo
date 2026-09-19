@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
 
 
-def test_help_lists_attest_and_record_only():
+def test_help_lists_attest_and_record_only() -> None:
     run = subprocess.run([sys.executable, str(ATTAVO), "--help"],
                          capture_output=True, text=True, check=False)
     assert run.returncode == 0
@@ -20,7 +20,7 @@ def test_help_lists_attest_and_record_only():
     assert "attavo attest" in run.stdout
 
 
-def test_help_names_all_four_doctor_proofs():
+def test_help_names_all_four_doctor_proofs() -> None:
     """Issue #94, acceptance row 5: the doctor's own help text names all
     four proofs, no-stop-lacks-cause included -- a proof the help text
     forgets is one a reader would never know to expect from doctor: done."""
@@ -33,7 +33,7 @@ def test_help_names_all_four_doctor_proofs():
     assert "no-stop-lacks-cause" in run.stdout
 
 
-def test_unknown_subcommand_message_names_attest_and_record_only():
+def test_unknown_subcommand_message_names_attest_and_record_only() -> None:
     run = subprocess.run([sys.executable, str(ATTAVO), "not-a-real-subcommand"],
                          capture_output=True, text=True, check=False)
     assert run.returncode == 2
@@ -41,7 +41,7 @@ def test_unknown_subcommand_message_names_attest_and_record_only():
     assert "attest" in run.stderr
 
 
-def test_no_vendor_name_in_bin_attavo():
+def test_no_vendor_name_in_bin_attavo() -> None:
     """Acceptance 11. The four pre-existing code-factory hits this check
     once had to carve out lived in test docstrings, not in bin/attavo
     itself; this check's own scope is bin/attavo alone, so it stays a
