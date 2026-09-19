@@ -1,0 +1,45 @@
+{
+  "sha": "997bae51950b6bab367e6314d197600728415bb3",
+  "start_sha": "997bae51950b6bab367e6314d197600728415bb3",
+  "spec_sha": "6712efb4b6884981d6918e38b11b5d78e6d53113",
+  "approval_sha": "5c62888455a0f64a501b93c3e52b6a31f8052dc2",
+  "at": "2026-09-17T20:13:57Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": null,
+  "model": null,
+  "model_version": null,
+  "iterations": 1,
+  "criteria": [],
+  "selected_tests": null,
+  "checks": null,
+  "tokens": {
+    "input": 0,
+    "output": 0
+  },
+  "cost_usd": null,
+  "wall_clock_s": 679.084,
+  "status": "failed",
+  "refusal": null,
+  "halted": null,
+  "stop": {
+    "class": "unclassed",
+    "provenance": "product",
+    "detail": "AttributeError: 'str' object has no attribute 'get'"
+  },
+  "record_version": 6,
+  "item": "158",
+  "product_version": "v0.25.0-22-gb3e2a23",
+  "product_pin": "v0.25.0"
+}

@@ -1,0 +1,8 @@
+#!/bin/sh
+read sha
+test -n "$sha" || exit 2
+digest=$(printf '%s' "$sha" | shasum -a 256 | cut -d ' ' -f 1)
+repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || exit 2
+payload=$(gh api "repos/$repo/attestations/sha256:$digest" --jq '.attestations[0].bundle.dsseEnvelope.payload' 2>/dev/null) || exit 1
+test -n "$payload" && test "$payload" != null || exit 1
+printf '%s' "$payload" | base64 -d

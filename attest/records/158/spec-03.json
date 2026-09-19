@@ -1,0 +1,13 @@
+{
+  "sha": "45e5e6b3357dc4cce9d3f2e39bbbffcbe2a6d867",
+  "spec_sha": "498e9c4c3bf56be761104174b4767a8baa305401",
+  "at": "2026-09-18T19:43:38Z",
+  "status": "approved",
+  "approval_sha": "2ba29e72f22c533e8606f8baf83394034e8c16fb",
+  "criteria": [],
+  "refusal": null,
+  "record_version": 2,
+  "item": "158",
+  "product_version": "v0.25.0",
+  "product_pin": "v0.25.0"
+}

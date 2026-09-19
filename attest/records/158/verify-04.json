@@ -1,0 +1,40 @@
+{
+  "sha": "43ca11c41030517d76757e4d7fea97a64478c88e",
+  "build_sha": "59cb49a3a0bcbd5429696242029d601a55241143",
+  "build_record": "build-06",
+  "approval_sha": "bdb42bae4a724d6a6a70675017e66fe69ed023b6",
+  "at": "2026-09-19T00:27:16Z",
+  "adapter": null,
+  "adapter_config": {},
+  "adapter_version": null,
+  "model": null,
+  "model_version": null,
+  "reports": [],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "43ca11c41030517d76757e4d7fea97a64478c88e",
+    "conclusions": []
+  },
+  "findings": null,
+  "tests_named": [],
+  "commits": [],
+  "mutation": null,
+  "weak_stub": false,
+  "stub_ratio": null,
+  "tokens": {
+    "input": 0,
+    "output": 0
+  },
+  "cost_usd": null,
+  "wall_clock_s": 0.57,
+  "status": "returned",
+  "stop": {
+    "class": "forge-unconcluded",
+    "provenance": "tenant",
+    "detail": null
+  },
+  "record_version": 5,
+  "item": "158",
+  "product_version": "v0.25.0-46-gd0691ec",
+  "product_pin": "v0.25.0"
+}

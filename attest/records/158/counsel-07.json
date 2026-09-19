@@ -1,0 +1,54 @@
+{
+  "sha": "2cc570ba3652b7a968443d8cbba94843694d04a7",
+  "record_stage": "verify",
+  "record": "verify-05",
+  "at": "2026-09-19T04:48:13Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 164805,
+    "output": 1887
+  },
+  "cost_usd": null,
+  "wall_clock_s": 53.396,
+  "status": "done",
+  "class": "forge-unconcluded",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "/Users/davidbean/Projects/attest/bin/attavo",
+      "symbol": "cmd_verify",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/bin/attavo",
+      "symbol": "derive_stop",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/bin/attavo",
+      "symbol": "poll_forge_checks",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "verify-05 is a guarded forge-unconcluded/tenant stop, not a finding against item 158: after the bounded 600-second poll, the forge still reported the test check as in_progress, so verify correctly returned without calling the judging adapter. Once that check has concluded, rerun the mechanical verify/drive step; readiness and the definition of done remain unchanged.",
+    "patch": null,
+    "question": null
+  },
+  "record_version": 2,
+  "item": "158",
+  "product_version": "v0.25.0-49-g96d4b69",
+  "product_pin": "v0.25.0"
+}

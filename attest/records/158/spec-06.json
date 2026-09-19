@@ -1,0 +1,44 @@
+{
+  "sha": "f2c4bc718bbd408edf7a1f4b500d7896edd8506b",
+  "spec_sha": "f2c4bc718bbd408edf7a1f4b500d7896edd8506b",
+  "at": "2026-09-18T23:21:10Z",
+  "status": "built",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "doctor-fails-on-an-unsealed-merge.sh",
+      "on_tree": 0,
+      "on_stub": 0
+    },
+    {
+      "name": "doctor-fails-without-attestation-command.sh",
+      "on_tree": 0,
+      "on_stub": 0
+    },
+    {
+      "name": "doctor-names-an-unmerged-item.sh",
+      "on_tree": 0,
+      "on_stub": 0
+    },
+    {
+      "name": "doctor-says-not-read-when-the-store-cannot-be-read.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "the-doctor-job-carries-the-token.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "the-proof-has-its-test.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "158",
+  "product_version": "v0.25.0",
+  "product_pin": "v0.25.0"
+}

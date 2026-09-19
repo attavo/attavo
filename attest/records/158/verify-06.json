@@ -1,0 +1,99 @@
+{
+  "sha": "34f1be770346765eddcfbc9a3968ce18645612df",
+  "build_sha": "59cb49a3a0bcbd5429696242029d601a55241143",
+  "build_record": "build-06",
+  "approval_sha": "bdb42bae4a724d6a6a70675017e66fe69ed023b6",
+  "at": "2026-09-19T05:10:35Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "34f1be770346765eddcfbc9a3968ce18645612df",
+    "conclusions": [
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "A failed default-branch walk is silently treated as \u201cno items merged\u201d",
+      "specimen": "bin/attavo:827",
+      "retires": "Doctor completion when the default branch\u2019s merge history could not be read",
+      "rejection_test": "test_doctor_proof_six_fails_when_default_branch_walk_fails",
+      "severity": "Blocking when `git log` exits nonzero: `_merges_reachable` returns an empty successful walk, every complete item becomes `not_merged`, and the proof can hold."
+    },
+    {
+      "title": "Forge API read failures are classified as missing attestations",
+      "specimen": ".attavo/bin/forge-attestation:23",
+      "retires": "Rendering an unreadable attestation store as `unsealed`",
+      "rejection_test": "test_forge_attestation_exits_2_when_attestation_api_cannot_be_read",
+      "severity": "Blocking when `gh api` fails for authentication, authorization, network, rate-limit, or server reasons: the command exits 1, so proof six reports `unsealed` instead of `not_read`."
+    }
+  ],
+  "tests_named": [
+    "test_doctor_proof_six_fails_when_default_branch_walk_fails",
+    "test_forge_attestation_exits_2_when_attestation_api_cannot_be_read"
+  ],
+  "commits": [],
+  "mutation": null,
+  "weak_stub": false,
+  "stub_ratio": null,
+  "tokens": {
+    "input": 154595,
+    "output": 2663
+  },
+  "cost_usd": null,
+  "wall_clock_s": 196.572,
+  "status": "pass",
+  "stop": null,
+  "record_version": 5,
+  "item": "158",
+  "product_version": "v0.25.0-51-g57b56d3",
+  "product_pin": "v0.25.0"
+}

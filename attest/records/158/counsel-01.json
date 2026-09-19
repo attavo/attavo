@@ -1,0 +1,54 @@
+{
+  "sha": "ad7a27d273ad29f631b0c85aa40888c31f1ba519",
+  "record_stage": "build",
+  "record": "build-01",
+  "at": "2026-09-17T19:44:54Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 172243,
+    "output": 1466
+  },
+  "cost_usd": null,
+  "wall_clock_s": 45.783,
+  "status": "done",
+  "class": "question",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "/Users/davidbean/Projects/attest/adapters/claude-code/run",
+      "symbol": "build_instruction",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/bin/attavo",
+      "symbol": "cmd_build",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/tests/test_build.py",
+      "symbol": "test_build_halts_on_question",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "Continue without requesting discretionary diff review. The build instruction already requires committing the work on the current branch and reserves status question for a decision that changes the criteria. Wait for the test run; if it passes, commit and report done. If it fails, fix the failure within the approved criteria, rerun the checks, then commit and report done.",
+    "patch": null,
+    "question": null
+  },
+  "record_version": 2,
+  "item": "158",
+  "product_version": "v0.25.0-22-gb3e2a23",
+  "product_pin": "v0.25.0"
+}

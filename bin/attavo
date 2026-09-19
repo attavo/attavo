@@ -16,7 +16,7 @@
     attavo ledger [N] [--json]
     attavo stops [N] [--json]
 
-The doctor is the definition of done. It asserts four proofs against a
+The doctor is the definition of done. It asserts five proofs against a
 tenant root and exits 1 until every proof holds:
 
   1. every-gate-rejects      every gate in the manifest's [gates] table,
@@ -42,6 +42,16 @@ tenant root and exits 1 until every proof holds:
                              adapter exit ended the log -- records before
                              record_version 3 are counted and reported,
                              never refused
+  5. every-attested-item-is-sealed
+                             every merged item that carries a record for
+                             every stage has a statement in the forge's
+                             attestation store for its merge commit, read
+                             through [forge].attestation_command -- a
+                             merge at or before [forge].sealed_since is
+                             named as before the window instead of failed.
+                             [forge].attestation_command exiting 2 means
+                             the store itself could not be read, reported
+                             as not_read by item and never as unsealed
 
 Nothing in doctor is a gate. The doctor reads; it never writes and it never
 blocks a merge by itself. It is what CI runs to say whether the product
@@ -1428,13 +1438,103 @@ def proof_no_stop_lacks_cause(root: Path, m: dict | None) -> Proof:
                  older_records=older)
 
 
+def attestation_command(m: dict) -> str | None:
+    """[forge].attestation_command: the tenant's own read of the store,
+    given a merge sha on stdin, printing the statement as JSON on exit 0
+    and nothing on a non-zero exit. Absent is not passing (issue #158:
+    the doctor said done while #106, #148, #153 had no statement in the
+    store at all -- there was no key to read one through)."""
+    cmd = (m.get("forge") or {}).get("attestation_command")
+    return cmd if isinstance(cmd, str) and cmd.strip() else None
+
+
+def statement_for(root: Path, cmd: str, merge_sha: str) -> tuple[dict | None, int]:
+    """The statement the forge holds for merge_sha and the command's exit
+    code. The statement is None when the command exits non-zero or prints
+    anything but a JSON object -- exit 2 means the store itself could not
+    be read (issue #158, amended after build-05: distinct from exit 1,
+    the store read fine and simply held no statement)."""
+    run = subprocess.run(cmd, shell=True, cwd=str(root), input=merge_sha + "\n",
+                         capture_output=True, text=True, check=False)
+    if run.returncode != 0:
+        return None, run.returncode
+    try:
+        parsed = json.loads(run.stdout)
+    except ValueError:
+        return None, run.returncode
+    return (parsed if isinstance(parsed, dict) else None), run.returncode
+
+
+def _is_ancestor(root: Path, earlier: str, later: str) -> bool:
+    run = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", earlier, later],
+                         capture_output=True, check=False)
+    return run.returncode == 0
+
+
+def proof_every_attested_item_is_sealed(root: Path, m: dict | None) -> Proof:
+    p = Proof("every-attested-item-is-sealed", "every attested item has its statement in the store")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
+    cmd = attestation_command(m)
+    if cmd is None:
+        return p.fail("no [forge].attestation_command in the manifest; the store cannot be read")
+    records_rel = m.get("paths", {}).get("records", "")
+    records_dir = root / records_rel
+    if not records_dir.is_dir():
+        return p.fail(f"no records directory under {records_dir}")
+    items = load_records(records_dir)
+    complete = [item for item, stages in sorted(items.items()) if all(s in stages for s in STAGES)]
+
+    # [forge].sealed_since: merges at or before this sha predate the
+    # tenant's merge queue -- the self-tenant's own #106, #148, #153 were
+    # merged direct, with no merge_group run to seal them. They are
+    # named, never failed, the same window convention proof three keeps
+    # for commits before the manifest's own install.
+    since = (m.get("forge") or {}).get("sealed_since")
+    merges, refusal = _merges_reachable(root)
+    if refusal:
+        return p.fail(refusal)
+    sealed: list[str] = []
+    before_window: list[str] = []
+    unsealed: list[str] = []
+    not_merged: list[str] = []
+    not_read: list[str] = []
+    reasons: list[str] = []
+    for item in complete:
+        merge_sha, _ = merge_introducing_records(root, records_rel, item, STAGES, merges=merges)
+        if merge_sha is None:
+            not_merged.append(item)
+            continue
+        if isinstance(since, str) and since.strip() and _is_ancestor(root, merge_sha, since):
+            before_window.append(item)
+            continue
+        statement, exit_code = statement_for(root, cmd, merge_sha)
+        if statement is not None:
+            sealed.append(item)
+        elif exit_code == 2:
+            not_read.append(item)
+            reasons.append(f"item {item} merged at {merge_sha[:12]}: not read -- "
+                           f"the store could not be read; {cmd!r} exited 2")
+        else:
+            unsealed.append(item)
+            reasons.append(f"item {item} merged at {merge_sha[:12]} has no statement in the store")
+    if reasons:
+        return p.fail("; ".join(reasons), sealed=sealed, before_window=before_window,
+                      unsealed=unsealed, not_merged=not_merged, not_read=not_read)
+    return p.hold(f"{len(sealed)} merged item(s) sealed, {len(before_window)} before the window, "
+                 f"{len(not_merged)} not merged",
+                 sealed=sealed, before_window=before_window, unsealed=unsealed,
+                 not_merged=not_merged, not_read=not_read)
+
+
 def doctor(root: Path) -> list[Proof]:
     m = read_manifest(root)
     return [proof_every_gate_rejects(root, m),
             proof_one_item_every_stage(root, m),
             proof_no_commit_lacks_record(root, m),
             proof_no_stop_lacks_cause(root, m),
-            proof_no_invocation_lacks_record(root, m)]
+            proof_no_invocation_lacks_record(root, m),
+            proof_every_attested_item_is_sealed(root, m)]
 
 
 def cmd_doctor(argv: list[str]) -> int:

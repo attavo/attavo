@@ -1,0 +1,54 @@
+{
+  "sha": "43ca11c41030517d76757e4d7fea97a64478c88e",
+  "record_stage": "verify",
+  "record": "verify-04",
+  "at": "2026-09-19T00:28:09Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 252764,
+    "output": 1962
+  },
+  "cost_usd": null,
+  "wall_clock_s": 52.531,
+  "status": "done",
+  "class": "forge-unconcluded",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "/Users/davidbean/Projects/attest/schema/manifest.schema.json",
+      "symbol": "properties.forge.properties.checks_command",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attavo-worktree-158/.attavo/bin/forge-checks",
+      "symbol": "main",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/tests/test_verify.py",
+      "symbol": "test_verify_treats_an_empty_forge_read_as_not_green",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "verify-04 is correctly stopped as forge-unconcluded/tenant. For commit 43ca11c41030517d76757e4d7fea97a64478c88e, the tenant's configured forge-check command supplied no check conclusions, so verification returned before invoking the verifier; therefore no verify-04.log is expected. Retry verification after the forge exposes at least one concluded green check for that exact commit. If the read remains empty, repair the tenant command's GitHub authentication or API visibility. This stop neither establishes a product defect nor changes the definition of done.",
+    "patch": null,
+    "question": null
+  },
+  "record_version": 2,
+  "item": "158",
+  "product_version": "v0.25.0-46-gd0691ec",
+  "product_pin": "v0.25.0"
+}

@@ -1,6 +1,6 @@
-"""The doctor's four proofs, as tests written before the capability.
+"""The doctor's five proofs, as tests written before the capability.
 
-Each test asserts that one proof holds against this repository. All four
+Each test asserts that one proof holds against this repository. All five
 fail at the first commit and must fail: that is the definition of done,
 stated before anything exists to satisfy it. A test here turns green only
 when the capability it names has landed and been used for real.
@@ -65,6 +65,15 @@ def test_no_invocation_lacks_record():
     paths.records has arrived at its own <stage>-NN.json, or is still a
     live process on this host."""
     p = run_doctor(ROOT)["no-invocation-lacks-record"]
+    assert p["holds"], p["reason"]
+
+
+def test_every_attested_item_is_sealed():
+    """Proof 5, issue #158. Every merged, fully-staged item has a
+    statement in the forge's attestation store for its merge commit --
+    #106, #148, #153 predate [forge].sealed_since and are named before the
+    window instead."""
+    p = run_doctor(ROOT)["every-attested-item-is-sealed"]
     assert p["holds"], p["reason"]
 
 
