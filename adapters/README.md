@@ -25,6 +25,22 @@ the tenant's `attavo/adapters/`, then under this product's `adapters/`.
 - `ATTAVO_PRODUCT_ROOT` — counsel only: the path to this product's own root (`bin/attavo`, `adapters/`, `schema/`, `templates/`), so a stop whose cause is the product's own mechanism can be read at it.
 - `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` — build only: the executor's identity (issue #33), set by the product and never the tenant's git config. An adapter must not override these for the commits it makes; a commit build finds not carrying this identity is refused.
 
+### The executor sees none of it (issue #198)
+
+The variables above are the adapter's contract, not the executor's. An
+adapter launches its executor with every `ATTAVO_*` name removed from the
+child's environment and keeps reading its own. The executor's tools would
+otherwise inherit `ATTAVO_EVENTS`, the item's live events file, and write
+to it: a test suite the executor runs that runs `adapters/fixture/run`
+appended 26 of 83 lines to one item's events file (attavo/attavo#194,
+build-01). The adapters here pass `executor_env()` from
+`adapters/executor_env.py` as `env=` to the process that runs the
+executor; a tenant's own adapter does the same, by that helper's rule
+(drop every name starting `ATTAVO_`, keep the rest). Situations 20 and 21
+of `tests/test_executor_conformance.py` check it through the tool binary
+each `conformance.json` names. Probes of the tool itself (`--version`)
+are not the executor.
+
 ## Output
 
 The adapter commits its work on the current branch itself. It prints one

@@ -36,6 +36,11 @@ Situation 12: vendor independence (2026-09-09 ruling) -- an adapter's
 declared "reports" fields must actually be non-null on a "done" run, so
 a silent measurement gap fails the suite instead of writing one.
 
+Situations 20 and 21: the executor sees none of the adapter's contract
+(issue #198) -- no ATTAVO_* name reaches the process an adapter launches,
+so nothing the executor runs can read the item's live events file, let
+alone append to it.
+
 Run: python3 -m pytest tests/test_executor_conformance.py -q
 """
 import json
@@ -504,6 +509,73 @@ def test_situation_19_codex_writes_events_when_attavo_events_is_set(tmp_path: Pa
     assert lines, "no events written"
     assert all(set(e) == {"at", "kind", "text"} for e in lines)
     assert any(e["kind"] == "message" and e["text"] == "ok" for e in lines)
+
+
+def run_with_fake_executor(adapter_name: str, tmp_path: Path, script: str,
+                           extra_env: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+    """The adapter's real launch path: a fake <tool_binary> on PATH running
+    `script`, then exiting 3 -- the adapter passes a non-zero exit through
+    (situation 5) with the tool's stdout in its own, so the transcript is
+    what the executor's process printed. Runs in a throwaway cwd."""
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    fake_tool = fake_bin / CONFORMANCE[adapter_name]["tool_binary"]
+    fake_tool.write_text(f"#!/bin/sh\n{script}\nexit 3\n")
+    fake_tool.chmod(0o755)
+
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    env = base_env(tmp_path)
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+    env.update(extra_env)
+    return run_adapter(adapter_name, env, cwd=cwd)
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_20_the_executor_sees_no_attavo_variable(adapter_name: str, tmp_path: Path) -> None:
+    """Issue #198, acceptance row 1. A canned executor that prints its
+    environment shows no ATTAVO_ name -- the adapter's contract is the
+    adapter's alone -- while every other variable still reaches it.
+    Specimen: attavo/attavo#194 build-01, where the executor's own
+    test run inherited ATTAVO_EVENTS and 26 of 83 lines of the item's
+    events file were not the executor's. The way back in is any new
+    launch of the executor that does not go through the shared helper.
+    """
+    run = run_with_fake_executor(
+        adapter_name, tmp_path, "env",
+        {"ATTAVO_EVENTS": str(tmp_path / "events.jsonl"),
+         "ATTAVO_STAGE": "build",
+         "EXECUTOR_SENTINEL": "passes-through"})
+    assert run.returncode == 3, run.stderr
+
+    names = [l.split("=", 1)[0] for l in run.stdout.splitlines() if "=" in l]
+    assert "EXECUTOR_SENTINEL" in names and "PATH" in names, (
+        "the executor's own environment did not print", run.stdout)
+    leaked = sorted(n for n in names if n.startswith("ATTAVO_"))
+    assert not leaked, f"{adapter_name} launched its executor with {', '.join(leaked)}"
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_21_a_fixture_run_inside_the_executor_leaves_the_events_file_alone(
+        adapter_name: str, tmp_path: Path) -> None:
+    """Issue #198, acceptance row 2 -- the specimen itself. The executor
+    runs the repository's test suite, the suite runs adapters/fixture/run,
+    and the fixture appends to ATTAVO_EVENTS when it finds it set. Here
+    the executor's tool call is that nested fixture run: the outer
+    events file's line count is the same as with no nested run."""
+    events = tmp_path / "events.jsonl"
+    events.write_text('{"at": "2026-09-19T00:00:00Z", "kind": "message", "text": "outer"}\n')
+    before = events.read_text().splitlines()
+
+    fixture_run = ADAPTERS_DIR / "fixture" / "run"
+    run = run_with_fake_executor(
+        adapter_name, tmp_path, f'"{fixture_run}" >/dev/null',
+        {"ATTAVO_EVENTS": str(events)})
+    assert run.returncode == 3, run.stderr
+
+    assert events.read_text().splitlines() == before
+    assert (tmp_path / "cwd" / "built.txt").is_file(), (
+        "the nested fixture run did not happen, so nothing was checked")
 
 
 def make_large_file(path: Path, diff_like: bool) -> Path:
