@@ -14,12 +14,28 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install pytest jsonschema
+      # issue #181: the suite's own clock is bounded. --durations=5 puts the
+      # five slowest tests on every run's log; the last step fails the job
+      # when the pytest step took more than 180 s (the suite's baseline is
+      # about 65 s), naming the elapsed seconds.
+      - name: pytest start
+        run: echo "PYTEST_START=$(date +%s)" >> "$GITHUB_ENV"
       - run: >
-          python3 -m pytest tests -q
+          python3 -m pytest tests -q --durations=5
           --deselect tests/test_doctor.py::test_every_gate_rejects
           --deselect tests/test_doctor.py::test_one_item_traversed_every_stage
           --deselect tests/test_doctor.py::test_no_commit_lacks_a_record
           --deselect tests/test_doctor.py::test_no_stop_lacks_cause
+      - name: pytest end
+        run: echo "PYTEST_END=$(date +%s)" >> "$GITHUB_ENV"
+      - name: the suite's wall clock is at most 180 s
+        run: |
+          elapsed=$((PYTEST_END - PYTEST_START))
+          echo "pytest step took ${elapsed} s"
+          if [ "$elapsed" -gt 180 ]; then
+            echo "::error::the pytest step took ${elapsed} s, over the 180 s bound"
+            exit 1
+          fi
 
   # Since #103, this repository is Attavo's own second tenant (attavo.toml
   # at the root) and the doctor's four proofs run for real, not under
