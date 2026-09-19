@@ -1,0 +1,110 @@
+{
+  "sha": "0ef9df110a325e26c701dac4d77af15f759e9b49",
+  "record_stage": "verify",
+  "record": "verify-01",
+  "at": "2026-09-19T15:13:56Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 158041,
+    "output": 1954
+  },
+  "cost_usd": null,
+  "wall_clock_s": 61.889,
+  "status": "done",
+  "class": "unclassed",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "attest/specs/194/spec.md",
+      "symbol": "Claims and Criteria",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/attavo/verify.py",
+      "symbol": "cmd_verify",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/attavo/doctor.py",
+      "symbol": "proof_no_stop_lacks_cause",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "verify-01 did not evaluate item 194: the configured Codex executor reported \u201cSelected model is at capacity\u201d and exited 1. The forge was read and all reported checks on 0ef9df110a325e26c701dac4d77af15f759e9b49 succeeded or were skipped, so no tenant check failure or change to the definition of done is presented. Retry verification when gpt-5.6-sol has capacity; the passing build remains the build to verify.",
+    "patch": null,
+    "question": null,
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": [
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "question": null,
+  "record_version": 3,
+  "item": "194",
+  "product_version": "v0.26.0-13-g1d2257b",
+  "product_pin": "v0.26.0"
+}
