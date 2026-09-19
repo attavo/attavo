@@ -157,11 +157,11 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str,
         commit_record(root, [marker], f"attavo: {stage} invocation {nn:02d} started for item {item_id}")
     except RuntimeError as exc:
         print(f"attavo drive: stopped: could not commit the {stage} invocation marker: {exc}")
-        return 1  # type: ignore[return-value]  # defect (#189): an int, not the (rc, done) its callers unpack
+        return 1, True
     ok, err = push_record_commit(root, branch)
     if not ok:
         print(f"attavo drive: stopped: could not push the {stage} invocation marker: {err}")
-        return 1  # type: ignore[return-value]  # defect (#189): an int, not the (rc, done) its callers unpack
+        return 1, True
 
     rc = cmd_build([item_id]) if stage == "build" else cmd_verify([item_id])
     after = latest_attempt_path(records_dir, stage)
@@ -192,12 +192,12 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str,
         commit_record(root, to_commit, message)
     except RuntimeError as exc:
         print(f"attavo drive: stopped: could not commit the {stage} record: {exc}")
-        return 1  # type: ignore[return-value]  # defect (#189): an int, not the (rc, done) its callers unpack
+        return 1, True
 
     ok, err = push_record_commit(root, branch)
     if not ok:
         print(f"attavo drive: stopped: could not push the {stage} record: {err}")
-        return 1  # type: ignore[return-value]  # defect (#189): an int, not the (rc, done) its callers unpack
+        return 1, True
 
     if status_out == "halted":
         question = (record.get("halted") or {}).get("question")
