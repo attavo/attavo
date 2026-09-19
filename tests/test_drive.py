@@ -854,6 +854,29 @@ def test_drive_retries_a_rejected_push_with_a_merge_never_a_rebase(tmp_path: Pat
     assert "concurrent.txt" in git(root, "ls-tree", "-r", "--name-only", "HEAD")
 
 
+def test_drive_a_refused_push_ends_the_drive_with_exit_1(tmp_path: Path) -> None:
+    """Regression, run red first on main at e603f65: _drive_run_stage
+    returned a bare 1 on its four commit and push failure paths, and
+    cmd_drive's `rc, done = _drive_step(...)` raised TypeError on it, so a
+    push the remote refuses ended the drive in a traceback. A remote whose
+    pre-receive hook refuses every push is a refusal the retry merge
+    cannot cure; the drive says why, exits 1, raises nothing, and with
+    --until-ready does not step again."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    bare = add_bare_remote(root, tmp_path)
+    approve_item(root)
+    hook = bare / "hooks" / "pre-receive"
+    hook.write_text("#!/bin/sh\necho 'refused by the fixture remote' >&2\nexit 1\n")
+    hook.chmod(0o755)
+
+    run = run_attavo(root, "drive", "1", "--until-ready")
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert "Traceback" not in run.stderr, run.stderr
+    assert "could not push the build invocation marker" in run.stdout, run.stdout
+    assert record_files(root, "build") == []
+
+
 def test_drive_commits_and_pushes_an_invocation_marker_before_the_stage_runs(tmp_path: Path) -> None:
     """Issue #151: the invocation's own marker is a fact on the branch
     before the stage runs -- its own commit, authored by the driver
