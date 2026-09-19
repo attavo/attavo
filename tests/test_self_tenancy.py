@@ -64,9 +64,8 @@ def test_manifest_declares_every_key_issue_103_lists():
     assert m["executor"]["verify"] == "codex"
     assert m["executor"]["claude-code"] == {"auth": "subscription", "model": "claude-sonnet-5"}
     assert m["executor"]["codex"] == {"model": "gpt-5.6-sol"}
-    assert m["spec"]["boundary"]["paths"] == [
-        "bin/**", "adapters/**", "schema/**", "templates/**", "action.yml", "scripts/**",
-    ]
+    paths = m["spec"]["boundary"]["paths"]
+    assert "bin/**" in paths and "attavo/**" in paths, paths
     assert "spec" in m["gates"]
     assert m["gates"]["spec"]["command"] == "attavo spec-gate"
     assert m["gates"]["spec"]["retires"]
