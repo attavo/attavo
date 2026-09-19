@@ -150,7 +150,7 @@ COUNSEL_SCHEMA = {
         "proposal": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["ruling_text", "patch", "question"],
+            "required": ["ruling_text", "patch", "question", "issue"],
             "properties": {
                 "ruling_text": {"type": ["string", "null"]},
                 "patch": {
@@ -165,6 +165,18 @@ COUNSEL_SCHEMA = {
                     },
                 },
                 "question": {"type": ["string", "null"]},
+                # issue #175: the fourth proposal shape, for a "patch" or
+                # "person" verdict whose remedy is better filed as an item
+                # than shipped as a diff or asked as a bare question.
+                "issue": {
+                    "type": ["object", "null"],
+                    "additionalProperties": False,
+                    "required": ["title", "body"],
+                    "properties": {
+                        "title": {"type": "string", "minLength": 1},
+                        "body": {"type": "string", "minLength": 1},
+                    },
+                },
             },
         },
     },
@@ -311,10 +323,11 @@ def verify_instruction() -> str:
 
 
 def counsel_instruction() -> str:
-    """Issue #100: a stop is read inside the product first, before a
-    person. Identical to claude-code's own counsel_instruction -- the
-    record, its log, the diff, the tenant manifest, and this product's
-    own root are all handed by path, named rather than inlined, the same
+    """Issue #100 (extended by issue #175): a stop is read inside the
+    product first, before a person. Identical to claude-code's own
+    counsel_instruction -- the record, its log, the diff, the forge's
+    checks, the item's graph, the tenant manifest, and this product's own
+    root are all handed by path, named rather than inlined, the same
     discipline verify_instruction already applies to the diff (issue
     #86)."""
     parts = list(spec_sections())
@@ -351,6 +364,37 @@ def counsel_instruction() -> str:
             f"The diff is at {describe_file(diff_path, diff_text, diff_like=True)}. "
             "Read it yourself with your own tools.")
 
+    # issue #175: the forge in the evidence set. ATTAVO_COUNSEL_CHECKS is
+    # always written, a JSON {read, reason, checks} envelope -- read false
+    # names the missing manifest key rather than leaving the section out,
+    # since an unread forge must never be mistaken for a green one.
+    checks_path = os.environ.get("ATTAVO_COUNSEL_CHECKS")
+    checks_text = read_text("ATTAVO_COUNSEL_CHECKS")
+    if checks_text.strip():
+        parts.append(
+            "## The forge's checks on this stop's sha\n\n"
+            f"The checks are at {describe_file(checks_path, checks_text, diff_like=False)}: "
+            "a JSON object -- read: false means the forge was not read at "
+            "all (reason names the missing manifest key; treat this as "
+            "unknown, never as green) -- read: true carries one entry per "
+            "check, each naming, for a check that did not succeed, the "
+            "path of its own failed-step log. Read the failing check's "
+            "log before answering about the forge; a remedy that depends "
+            "on the forge's state cites the check and its log line.")
+
+    # issue #175: the graph in the evidence set -- the default branch's
+    # own log since this item's branch point, this branch's own commits,
+    # the markers and records present at the stop's sha, and the check
+    # runs on the last three shas, so "the checks are on the record
+    # commit, not the code commit" is readable without a terminal.
+    graph_path = os.environ.get("ATTAVO_COUNSEL_GRAPH")
+    graph_text = read_text("ATTAVO_COUNSEL_GRAPH")
+    if graph_text.strip():
+        parts.append(
+            "## The item's graph\n\n"
+            f"The graph is at {describe_file(graph_path, graph_text, diff_like=False)}. "
+            "Read it yourself with your own tools.")
+
     manifest_path = os.environ.get("ATTAVO_MANIFEST", "")
     parts.append(f"## The tenant manifest\n\nThe manifest is at `{manifest_path}`. "
                  "Read it yourself with your own tools.")
@@ -363,21 +407,40 @@ def counsel_instruction() -> str:
         "whose cause is the product's own mechanism, not the tenant's, "
         "is read here.")
 
+    # issue #175: attavo counsel N --ask hands the operator's own text as
+    # the question to answer, over the same evidence set, rather than
+    # diagnosing a stop -- the record above is context, not necessarily a
+    # failure.
+    question = os.environ.get("ATTAVO_COUNSEL_QUESTION", "")
+    if question.strip():
+        parts.append(
+            "## The operator's question\n\n" + question.strip() +
+            "\n\nAnswer this question using the evidence above; the "
+            "record named above is context, not necessarily a failure.")
+
     parts.append(
         "you are counseling a stop, read-only: make no edits, write no "
         "files, commit nothing. Read the record, its log, the spec, the "
-        "rulings, the diff, the tenant manifest, and the product's own "
-        "root named above with your own tools, then answer with exactly "
-        "one class (the stop's class, or \"unclassed\"), one verdict -- "
-        "\"answer\" (the stop is answerable inside the rules: a ruling "
-        "text, in proposal.ruling_text, with three citations -- "
-        "instruction, mechanism, guard, each a path and symbol or a "
-        "ruling id), \"patch\" (the stop is a product defect: the "
-        "mechanism's file and symbol, a rejection test, and a unified "
-        "diff, in proposal.patch), or \"person\" (the answer would touch "
-        "the definition of done and no rule covers it: the question "
-        "restated in one line, in proposal.question) -- and citations "
-        "for whichever verdict you gave. You propose; you do not act.")
+        "rulings, the diff, the forge's checks, the item's graph, the "
+        "tenant manifest, and the product's own root named above with "
+        "your own tools, then answer with exactly one class (the stop's "
+        "class, or \"unclassed\"), one verdict -- \"answer\" (the stop is "
+        "answerable inside the rules: a ruling text, in "
+        "proposal.ruling_text, with three citations -- instruction, "
+        "mechanism, guard, each a path and symbol or a ruling id), "
+        "\"patch\" (the stop is a product defect: the mechanism's file "
+        "and symbol, a rejection test, and a unified diff, in "
+        "proposal.patch -- or, when the remedy is better filed as an "
+        "item than shipped as a diff, a title and a body in this "
+        "repository's own issue format -- a Severity/Provenance line, "
+        "then Problem, Retires, Change, and Acceptance sections -- in "
+        "proposal.issue), or \"person\" (the answer would touch the "
+        "definition of done and no rule covers it: the question restated "
+        "in one line, in proposal.question -- or, when the remedy is "
+        "better filed as an item than asked as a bare question, a title "
+        "and a body in the same issue format, in proposal.issue) -- and "
+        "citations for whichever verdict you gave. You propose; you do "
+        "not act.")
     return "\n\n".join(parts)
 
 
