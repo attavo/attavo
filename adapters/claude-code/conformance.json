@@ -74,6 +74,26 @@
         "killed": {"parent": 0, "user": 0, "system": 2},
         "started_in_background": 3
       }
+    },
+    "counsel_158_forge_evidence": {
+      "is_error": false,
+      "structured_output": {
+        "class": "forge-unconcluded",
+        "verdict": "answer",
+        "citations": [
+          {"kind": "instruction", "path": "attest/specs/158/spec.md", "symbol": "Criteria", "ruling_id": null},
+          {"kind": "mechanism", "path": "bin/attavo", "symbol": "invocation_alive", "ruling_id": null},
+          {"kind": "guard", "path": "bin/attavo", "symbol": "proof_no_invocation_lacks_record", "ruling_id": null}
+        ],
+        "proposal": {
+          "ruling_text": "verify-02 read forge-unconcluded because the checks command found no conclusions for 7a2529ee349547a259dbd8b0b78043b39bbf63c2 at that moment, but the checks handed to counsel now show doctor and test both concluded failure on that same sha, and the doctor job's own log names proof 5 no-invocation-lacks-record: item 158 verify-02 started on Davids-MacBook-Pro.local and never wrote its record -- invocation_alive found no live process for the marker commit. Re-running verification will not help: the fix belongs in invocation_alive, not the forge.",
+          "patch": null,
+          "question": null,
+          "issue": null
+        }
+      },
+      "usage": {"input_tokens": 20, "output_tokens": 60},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 20, "outputTokens": 60}}
     }
   }
 }

@@ -1,0 +1,26 @@
+2026-09-18T23:46:39.6608547Z _______________________ test_no_invocation_lacks_record ________________________
+
+2026-09-18T23:46:39.6623003Z     def test_no_invocation_lacks_record():
+2026-09-18T23:46:39.6623891Z         """Proof 5, issue #151. Every <stage>-NN.started marker under
+2026-09-18T23:46:39.6640823Z         paths.records has arrived at its own <stage>-NN.json, or is still a
+2026-09-18T23:46:39.6656445Z         live process on this host."""
+2026-09-18T23:46:39.6659918Z         p = run_doctor(ROOT)["no-invocation-lacks-record"]
+2026-09-18T23:46:39.6660930Z >       assert p["holds"], p["reason"]
+2026-09-18T23:46:39.6661992Z E       AssertionError: item 158 verify-02 started 2026-09-18T23:45:11Z on Davids-MacBook-Pro.local pid 22249 and never wrote its record
+2026-09-18T23:46:39.6663111Z E       assert False
+
+2026-09-18T23:46:39.6663819Z tests/test_doctor.py:68: AssertionError
+2026-09-18T23:46:39.6664506Z =========================== short test summary info ============================
+2026-09-18T23:46:39.6666159Z FAILED tests/test_doctor.py::test_no_invocation_lacks_record - AssertionError: item 158 verify-02 started 2026-09-18T23:45:11Z on Davids-MacBook-Pro.local pid 22249 and never wrote its record
+2026-09-18T23:46:39.6667536Z assert False
+2026-09-18T23:46:39.6668048Z 1 failed, 369 passed, 5 deselected in 70.78s (0:01:10)
+2026-09-18T23:46:39.7010827Z ##[error]Process completed with exit code 1.
+
+2026-09-18T23:45:54.8155482Z proof 1 every-gate-rejects: HOLDS: 1 gate(s) rejected their fixture
+2026-09-18T23:45:54.8157226Z proof 2 one-item-every-stage: HOLDS: item(s) 106, 148, 151, 153 carry spec, approval, build, verify with the chain held, merged at fdd1981ccb80, 243e9fe96c14, 5525019e7072, 83fcbc6863fd
+2026-09-18T23:45:54.8159393Z proof 3 no-commit-lacks-record: HOLDS: 5 recorded, 26 ordinary, 0 unrecorded; boundary evasions: 19; before the window: 0
+2026-09-18T23:45:54.8160932Z proof 4 no-stop-lacks-cause: HOLDS: 10 non-pass record(s) carry stop with a cause (0 record(s) before stop was recorded)
+2026-09-18T23:45:54.8162940Z proof 5 no-invocation-lacks-record: FAILS: item 158 verify-02 started 2026-09-18T23:45:11Z on Davids-MacBook-Pro.local pid 22249 and never wrote its record
+2026-09-18T23:45:54.8165009Z proof 6 every-attested-item-is-sealed: HOLDS: 1 merged item(s) sealed, 3 before the window, 1 not merged
+2026-09-18T23:45:54.8165992Z doctor: not done (1 of 6 proofs fail)
+2026-09-18T23:45:54.8263220Z ##[error]Process completed with exit code 1.

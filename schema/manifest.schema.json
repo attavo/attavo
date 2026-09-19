@@ -84,6 +84,11 @@
           "description": "Takes a full commit sha on argv; prints one line per check as \"<name> <conclusion>\". attavo verify runs it on the item's latest build record's sha before calling any adapter.",
           "minLength": 1
         },
+        "check_log_command": {
+          "type": "string",
+          "description": "Takes a sha and a check name on argv; prints that check's own failed-step log. attavo counsel runs it once per check checks_command reported as not \"success\" on the counseled record's sha, before handing the adapter ATTAVO_COUNSEL_CHECKS -- absent, counsel's own record says so (forge.read: false) rather than reading the forge as if it were green.",
+          "minLength": 1
+        },
         "file_issue_command": {
           "type": "string",
           "description": "Reads one finding as JSON on stdin and files it as a tenant issue. attavo file-findings runs it once per finding in the item's latest verify record.",
