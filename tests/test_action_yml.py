@@ -84,6 +84,7 @@ def test_product_version_reaches_the_record_when_action_ref_is_empty_and_checkou
     action_dir = tmp_path / "_actions" / "attavo" / "attavo" / "v0.13.0"
     (action_dir / "bin").mkdir(parents=True)
     shutil.copy(ATTAVO, action_dir / "bin" / "attavo")
+    shutil.copytree(ROOT / "attavo", action_dir / "attavo")
     shutil.copytree(ROOT / "schema", action_dir / "schema")
 
     script = (_product_version_script()

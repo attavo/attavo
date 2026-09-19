@@ -676,18 +676,13 @@ def test_build_halted_question_detail_is_only_the_first_line(tmp_path):
 
 
 def attavo_module():
-    """bin/attavo imported in-process, for a direct unit test of
+    """attavo.stops imported in-process, for a direct unit test of
     derive_stop -- getting a tool's own event JSON or error text onto the
     literal last line of a real build's transcript is not something any
     adapter hook here controls; the cap is a fact about derive_stop
     itself."""
-    import importlib.machinery
-    import importlib.util
-    loader = importlib.machinery.SourceFileLoader("attavo_build_under_test", str(ATTAVO))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    return module
+    import importlib
+    return importlib.import_module("attavo.stops")
 
 
 def test_unclassed_detail_is_capped_at_200_characters():

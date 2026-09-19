@@ -10,8 +10,7 @@ subcommand".
 
 Run: python3 -m pytest tests -q
 """
-import importlib.machinery
-import importlib.util
+import importlib
 import json
 import os
 import socket
@@ -57,14 +56,10 @@ def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.Co
 
 
 def attavo_module():
-    """bin/attavo imported in-process, for the default-constant assertion
+    """attavo.verify imported in-process, for the default-constant assertion
     below that a CLI invocation cannot provoke without actually waiting
     out the real clock."""
-    loader = importlib.machinery.SourceFileLoader("attavo_drive_under_test", str(ATTAVO))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    return module
+    return importlib.import_module("attavo.verify")
 
 
 def add_forge(root: Path, checks_command: str) -> None:

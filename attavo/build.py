@@ -1,0 +1,498 @@
+from __future__ import annotations
+
+import fnmatch
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+from attavo.approval import approval_status
+from attavo.common import (
+    MANIFEST,
+    PRODUCT_ROOT,
+    ShallowCheckoutError,
+    derive_item_id,
+    git,
+    last_commit_touching,
+    now_iso,
+    read_manifest,
+)
+from attavo.events import append_event, stage_events_dir
+from attavo.records import latest_record, next_attempt_number, write_record
+from attavo.spec import parse_spec, run_criterion
+from attavo.stops import _log_last_line, derive_stop
+
+# --- build: adapter, claims boundary, criteria, and the tenant's tests ---
+
+STAGE_NAMES = ("build", "verify", "counsel")
+
+
+def merge_adapter_config(m: dict, adapter_name: str, stage: str) -> dict:
+    """[executor.<adapter>] merged with [executor.<adapter>.<stage>], the
+    stage table shadowing the parent for that stage only. Both build and
+    verify call this before setting ATTAVO_ADAPTER_CONFIG, and the
+    record's adapter_config is the merged result."""
+    parent = (m.get("executor") or {}).get(adapter_name) or {}
+    if not isinstance(parent, dict):
+        return {}
+    merged = {k: v for k, v in parent.items() if k not in STAGE_NAMES}
+    stage_table = parent.get(stage)
+    if isinstance(stage_table, dict):
+        merged.update(stage_table)
+    return merged
+
+
+def resolve_adapter(root: Path, name: str) -> Path | None:
+    """adapters/<name>/run, resolved first under the tenant's own
+    attavo/adapters/, then under this product's adapters/."""
+    for base in (root / "attavo" / "adapters", PRODUCT_ROOT / "adapters"):
+        candidate = base / name / "run"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def adapter_reports(adapter_path: Path) -> list[str]:
+    """Field names adapters/<name>/conformance.json declares this adapter
+    can supply with a real value -- vendor independence (2026-09-09
+    ruling): the record carries the declaration, so an adapter claiming
+    a field and returning null for it fails the conformance suite
+    instead of writing a silent, uncomparable null. [] when the
+    resolved adapter (a tenant override included) declares no
+    conformance.json at all -- an absent declaration, not a refusal."""
+    manifest_path = adapter_path.parent / "conformance.json"
+    if not manifest_path.is_file():
+        return []
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError:
+        return []
+    return manifest.get("reports", [])
+
+
+def changed_paths(root: Path, start_sha: str, records_rel: str) -> list[str]:
+    """Paths changed between start_sha and HEAD, other than paths.records --
+    the records directory is where build itself writes, not a claim."""
+    out = git(root, "diff", "--name-only", start_sha, "HEAD").splitlines()
+    prefix = records_rel.rstrip("/") + "/"
+    return [p for p in out if p and p != records_rel and not p.startswith(prefix)]
+
+
+def matches_a_claim(path: str, claims: list[str]) -> bool:
+    return any(fnmatch.fnmatch(path, pattern) for pattern in claims)
+
+
+def protected_path_touched(root: Path, start_sha: str, records_rel: str,
+                           specs_rel: str) -> str | None:
+    """The first path an executor's own commits touched under
+    paths.records or paths.specs since start_sha, or None (issue #140).
+    Neither directory is a claim a spec can make -- paths.records is
+    where the product itself writes, paths.specs is the definition of
+    done -- yet changed_paths above excludes paths.records from the
+    ordinary claims check entirely, so a path there never even reached
+    matches_a_claim to be refused: tenant zero's own item #688 committed
+    its own events file this way, under its records directory, on a
+    build that then passed. Checked directly against the raw diff, not
+    changed_paths's already-filtered list."""
+    touched = git(root, "diff", "--name-only", start_sha, "HEAD").splitlines()
+    protected = []
+    for rel in (records_rel, specs_rel):
+        stripped = rel.rstrip("/")
+        protected.append((stripped, stripped + "/"))
+    for p in touched:
+        if not p:
+            continue
+        for exact, prefix in protected:
+            if p == exact or p.startswith(prefix):
+                return p
+    return None
+
+
+def executor_identity(adapter_name: str) -> dict:
+    """The executor's identity (issue #33): set by the product, never the
+    tenant's git config, so an executor commit is never indistinguishable
+    from an operator's own -- the specimen is attavo/code-factory@e22fa85.
+    A reserved, undeliverable domain (.invalid) so no mailbox is implied.
+    Distinct from the records app identity: the app says the product
+    pushed this, this says an invocation authored this -- different
+    facts, neither borrows the other's name."""
+    return {"name": f"attavo executor ({adapter_name})",
+            "email": f"executor+{adapter_name}@attavo.invalid"}
+
+
+def driver_identity() -> dict:
+    """The driver's identity: set by the product, never the tenant's git
+    config, so a driver's own transport commit -- a record commit
+    `commit_record` makes on the driver's behalf -- is never
+    indistinguishable from an operator's own; `git log --author='attavo
+    driver'` on a driven item lists exactly those commits. Distinct from
+    executor_identity: that names an adapter invocation's own commits,
+    this names the transport that carries a stage's record."""
+    return {"name": "attavo driver", "email": "driver@attavo.invalid"}
+
+
+def commits_since(root: Path, start_sha: str, end: str = "HEAD") -> list[dict]:
+    """(sha, name, email) for every commit after start_sha up to and
+    including end, first-parent only, oldest first. cmd_build's own call
+    (start_sha at the invocation, end left at the default HEAD) never sees
+    a merge in that window, so --first-parent changes nothing there;
+    issue #128's ledger is the caller that needs it, to walk one branch's
+    own line without a concurrent merge to main expanding into every
+    commit main gained meanwhile."""
+    out = git(root, "log", "--first-parent", "--reverse",
+             "--format=%H\x1f%an\x1f%ae", f"{start_sha}..{end}")
+    commits = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        sha, name, email = line.split("\x1f")
+        commits.append({"sha": sha, "name": name, "email": email})
+    return commits
+
+
+def commits_with_diffs(root: Path, start_sha: str, end: str = "HEAD") -> list[dict]:
+    """commits_since's own (sha, name, email), each with its own
+    first-parent diff already attached as "touched" -- one process for the
+    whole range rather than commits_since's list plus a git diff per
+    commit (issue #153, the cost item_ledger's own walk paid per commit)."""
+    out = git(root, "log", "--first-parent", "--reverse", "--diff-merges=first-parent",
+             "--name-only", "--format=\x01%H\x1f%an\x1f%ae", f"{start_sha}..{end}")
+    commits = []
+    for block in out.split("\x01")[1:]:
+        header, _, rest = block.partition("\n")
+        sha, name, email = header.split("\x1f")
+        commits.append({"sha": sha, "name": name, "email": email,
+                        "touched": [line for line in rest.splitlines() if line.strip()]})
+    return commits
+
+
+def split_adapter_stdout(stdout: str) -> tuple[str, dict | None]:
+    """(transcript, payload): the adapter's last non-empty stdout line is
+    its JSON report, and everything before it is transcript, only when
+    that last line actually parses as JSON. When it does not -- a tool's
+    own error line printed last on a non-zero exit (issue #86: tenant
+    zero attest/records/659/verify-01.log, codex's own "Input exceeds..."
+    line, dropped because it was mistaken for an attempted payload) --
+    nothing here is a report, and the whole stdout is the transcript, so
+    that last line is not silently lost.
+    """
+    lines = stdout.splitlines()
+    non_empty = [i for i, l in enumerate(lines) if l.strip()]
+    if not non_empty:
+        return stdout, None
+    last = non_empty[-1]
+    try:
+        payload = json.loads(lines[last])
+    except ValueError:
+        return stdout, None
+    transcript = "\n".join(lines[:last])
+    return transcript, payload
+
+
+BUILD_ITERATION_BUDGET = 3
+
+BUILD_HALT_EXIT = 3
+
+CHECKS_FEEDBACK_TAIL_LINES = 200
+
+
+def cmd_build(argv: list[str]) -> int:
+    root = Path(".").resolve()
+    item_id = argv[0] if argv else derive_item_id(root)
+    if not item_id:
+        print("attavo build: cannot derive item id; pass N or run on an attavo/N-* branch",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo build: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+
+    adapter_name = (m.get("executor") or {}).get("build")
+    if not adapter_name:
+        print("attavo build: refused: no [executor].build in the manifest")
+        return 1
+
+    tests_cfg = m.get("tests") or {}
+    if not tests_cfg.get("select") or not tests_cfg.get("run"):
+        print("attavo build: refused: no [tests] table in the manifest "
+              "([tests].select and [tests].run are both required)")
+        return 1
+
+    try:
+        status = approval_status(root, m, item_id)
+    except ShallowCheckoutError as exc:
+        print(f"attavo build: refused: {exc}", file=sys.stderr)
+        return 2
+    if status != "valid":
+        print(f"attavo build: refused: approval is {status}")
+        return 1
+
+    adapter_path = resolve_adapter(root, adapter_name)
+    if adapter_path is None:
+        print(f"attavo build: refused: no adapter named {adapter_name!r}")
+        return 1
+
+    specs_rel = m["paths"]["specs"]
+    records_rel = m["paths"]["records"]
+    spec_dir = root / specs_rel / item_id
+    item_records_dir = root / records_rel / item_id
+    spec_sha = last_commit_touching(root, str(Path(specs_rel) / item_id))
+    latest_approval = latest_record(item_records_dir, "approval")
+    parsed, _ = parse_spec(spec_dir / "spec.md")
+    claims = parsed["claims"] if parsed else []
+    criteria_names = parsed["criteria"] if parsed else []
+    adapter_config = merge_adapter_config(m, adapter_name, "build")
+    checks_command = (m.get("checks") or {}).get("command")
+    identity = executor_identity(adapter_name)
+    reports = adapter_reports(adapter_path)
+
+    start_sha = git(root, "rev-parse", "HEAD").strip()
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    started = time.monotonic()
+
+    # Issue #115: the tenant's whole-tree checks run once here, on the
+    # approved tree, before the adapter is ever invoked -- exit 2 means
+    # the command itself cannot run (e.g. a missing import at test
+    # collection, item #106's build-01), not a failing check, and no
+    # build could have passed against it. Exit 0 or 1 -- the checks run
+    # and pass or fail, the expected states before a build -- proceeds;
+    # the per-iteration checks below run (and are recorded) exactly as
+    # before.
+    if checks_command:
+        preflight = subprocess.run(checks_command, shell=True, cwd=str(root),
+                                   capture_output=True, text=True, check=False)
+        if preflight.returncode == 2:
+            detail = _log_last_line(preflight.stdout + "\n" + preflight.stderr)
+            record = {
+                "sha": start_sha,
+                "start_sha": start_sha,
+                "spec_sha": spec_sha,
+                "approval_sha": latest_approval.get("sha") if latest_approval else None,
+                "at": now_iso(),
+                "adapter": adapter_name,
+                "adapter_config": adapter_config,
+                "executor_identity": identity,
+                "reports": reports,
+                "adapter_version": None,
+                "model": None,
+                "model_version": None,
+                "iterations": 1,
+                "criteria": [],
+                "selected_tests": None,
+                "checks": {"command": checks_command, "exit": preflight.returncode},
+                "tokens": {"input": 0, "output": 0},
+                "cost_usd": None,
+                "wall_clock_s": round(time.monotonic() - started, 3),
+                "status": "refused",
+                "refusal": "[checks].command exited 2 on the approved tree",
+                "halted": None,
+                "stop": {"class": "environment", "provenance": "tenant", "detail": detail},
+            }
+            record_path = write_record(item_records_dir, "build", record, m, item_id,
+                                       log=preflight.stdout + preflight.stderr)
+            print(f"attavo build: refused ({record_path.name})")
+            return 1
+
+    adapter_version = model = model_version = None
+    tokens = {"input": 0, "output": 0}
+    cost_usd = None
+    transcripts: list[str] = []
+    criteria_results: list[dict] = []
+    selected_tests: dict | None = None
+    checks_result: dict | None = None
+    status_out = "failed"
+    refusal = None
+    refusal_provenance = None
+    halted = None
+    iterations_used = 0
+
+    events_path = stage_events_dir(root) / f"build-{next_attempt_number(item_records_dir, 'build'):02d}.events.jsonl"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        feedback_path = Path(tmp) / "feedback.txt"
+        feedback_path.write_text("")
+
+        for iteration in range(1, BUILD_ITERATION_BUDGET + 1):
+            iterations_used = iteration
+            append_event(events_path, "iteration", f"iteration {iteration} of {BUILD_ITERATION_BUDGET}")
+            env = dict(os.environ)
+            env["ATTAVO_SPEC_DIR"] = str(spec_dir)
+            env["ATTAVO_RECORDS_DIR"] = str(item_records_dir)
+            env["ATTAVO_RULINGS"] = str(root / m["paths"]["rulings"])
+            env["ATTAVO_BRANCH"] = branch
+            env["ATTAVO_ITERATION"] = str(iteration)
+            env["ATTAVO_FEEDBACK"] = str(feedback_path)
+            env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(adapter_config)
+            env["ATTAVO_STAGE"] = "build"
+            env["ATTAVO_EVENTS"] = str(events_path)
+            if checks_command:
+                env["ATTAVO_CHECKS_COMMAND"] = checks_command
+            env["GIT_AUTHOR_NAME"] = identity["name"]
+            env["GIT_AUTHOR_EMAIL"] = identity["email"]
+            env["GIT_COMMITTER_NAME"] = identity["name"]
+            env["GIT_COMMITTER_EMAIL"] = identity["email"]
+
+            run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
+                                 capture_output=True, text=True, check=False)
+            transcript, payload = split_adapter_stdout(run.stdout)
+            if run.returncode != 0:
+                # The guarantee behind issue #53's refusal: an adapter that
+                # exits non-zero always leaves a non-empty log, even one
+                # that printed nothing at all on stderr.
+                detail = f"[adapter exited {run.returncode}]"
+                if run.stderr.strip():
+                    detail += "\n" + run.stderr.rstrip("\n")
+                transcript = (transcript + "\n" if transcript else "") + detail
+            transcripts.append(transcript)
+
+            if run.returncode != 0 or payload is None or not payload.get("model"):
+                status_out = "failed"
+                break
+
+            adapter_version = payload.get("adapter_version")
+            model = payload.get("model")
+            model_version = payload.get("model_version")
+            tok = payload.get("tokens") or {}
+            tokens["input"] += tok.get("input", 0) or 0
+            tokens["output"] += tok.get("output", 0) or 0
+            iter_cost = payload.get("cost_usd")
+            if iter_cost is not None:
+                cost_usd = (cost_usd or 0) + iter_cost
+
+            if payload.get("status") == "question":
+                status_out = "halted"
+                halted = {"question": payload.get("question")}
+                break
+
+            foreign = next((c for c in commits_since(root, start_sha)
+                           if c["name"] != identity["name"] or c["email"] != identity["email"]),
+                          None)
+            if foreign:
+                status_out = "refused"
+                refusal = f"commit {foreign['sha']} not authored by the executor"
+                break
+
+            protected = protected_path_touched(root, start_sha, records_rel, specs_rel)
+            if protected:
+                status_out = "refused"
+                refusal = protected
+                refusal_provenance = "executor"
+                break
+
+            touched = sorted(changed_paths(root, start_sha, records_rel))
+            bad_path = next((p for p in touched if not matches_a_claim(p, claims)), None)
+            if bad_path:
+                status_out = "refused"
+                refusal = bad_path
+                break
+
+            criteria_results = [
+                {"name": name, "exit": run_criterion(spec_dir / "criteria" / name, root)}
+                for name in criteria_names]
+            for c in criteria_results:
+                append_event(events_path, "gate", f"{c['name']}: exit {c['exit']}")
+
+            select_in = "".join(p + "\n" for p in touched)
+            select_run = subprocess.run(tests_cfg["select"], shell=True, cwd=str(root),
+                                        input=select_in, capture_output=True,
+                                        text=True, check=False)
+            identifiers = [l for l in select_run.stdout.splitlines() if l.strip()]
+            run_in = "".join(i + "\n" for i in identifiers)
+            test_run = subprocess.run(tests_cfg["run"], shell=True, cwd=str(root),
+                                      input=run_in, capture_output=True,
+                                      text=True, check=False)
+            selected_tests = {"select": tests_cfg["select"], "run": tests_cfg["run"],
+                              "count": len(identifiers), "exit": test_run.returncode}
+
+            checks_run = None
+            if checks_command:
+                checks_run = subprocess.run(checks_command, shell=True, cwd=str(root),
+                                            capture_output=True, text=True, check=False)
+                checks_result = {"command": checks_command, "exit": checks_run.returncode}
+
+            # Issue #89, rejection test 1: the gate output that decides pass
+            # or fail is appended to the build log itself, under a heading
+            # per iteration, before this temporary directory goes away --
+            # tenant zero's #576 build-11 and #659 build-01 are a failed
+            # record with nothing beside it to say what was red, because
+            # this output previously lived only in feedback.txt, in a
+            # tempfile.TemporaryDirectory() cmd_build deletes on return.
+            gate_lines = [f"criterion {c['name']}: exit {c['exit']}" for c in criteria_results]
+            gate_lines.append(f"selected tests ({selected_tests['count']}): exit "
+                              f"{selected_tests['exit']}")
+            if test_run.stdout.strip():
+                gate_lines += ["--- selected tests stdout ---", test_run.stdout.rstrip("\n")]
+            if test_run.stderr.strip():
+                gate_lines += ["--- selected tests stderr ---", test_run.stderr.rstrip("\n")]
+            if checks_run is not None:
+                tail = (checks_run.stdout.splitlines() + checks_run.stderr.splitlines())
+                tail = tail[-CHECKS_FEEDBACK_TAIL_LINES:]
+                gate_lines.append(f"tenant checks: exit {checks_run.returncode}")
+                gate_lines += ["--- checks output (tail) ---", *tail]
+            transcripts[-1] += (f"\n--- attavo gates, iteration {iteration} ---\n"
+                               + "\n".join(gate_lines))
+
+            failing = [c for c in criteria_results if c["exit"] != 0]
+            checks_ok = checks_run is None or checks_run.returncode == 0
+            if not failing and test_run.returncode == 0 and checks_ok:
+                status_out = "pass"
+                break
+
+            if iteration == BUILD_ITERATION_BUDGET:
+                status_out = "failed"
+                break
+
+            feedback_lines = []
+            if failing:
+                feedback_lines.append("criteria failing:")
+                feedback_lines += [f"- {c['name']}: exit {c['exit']}" for c in failing]
+            if test_run.returncode != 0:
+                feedback_lines += [f"test run exit {test_run.returncode}",
+                                   "--- stdout ---", test_run.stdout,
+                                   "--- stderr ---", test_run.stderr]
+            if checks_run is not None and checks_run.returncode != 0:
+                tail = (checks_run.stdout.splitlines() + checks_run.stderr.splitlines())
+                tail = tail[-CHECKS_FEEDBACK_TAIL_LINES:]
+                feedback_lines += [f"checks exit {checks_run.returncode}",
+                                   "--- checks output (tail) ---", *tail]
+            feedback_path.write_text("\n".join(feedback_lines) + "\n")
+
+    record = {
+        "sha": git(root, "rev-parse", "HEAD").strip(),
+        "start_sha": start_sha,
+        "spec_sha": spec_sha,
+        "approval_sha": latest_approval.get("sha") if latest_approval else None,
+        "at": now_iso(),
+        "adapter": adapter_name,
+        "adapter_config": adapter_config,
+        "executor_identity": identity,
+        "reports": reports,
+        "adapter_version": adapter_version,
+        "model": model,
+        "model_version": model_version,
+        "iterations": iterations_used,
+        "criteria": criteria_results,
+        "selected_tests": selected_tests,
+        "checks": checks_result,
+        "tokens": tokens,
+        "cost_usd": cost_usd,
+        "wall_clock_s": round(time.monotonic() - started, 3),
+        "status": status_out,
+        "refusal": refusal,
+        "halted": halted,
+        "stop": derive_stop(status_out, refusal=refusal, halted=halted,
+                            log="\n".join(transcripts),
+                            report_class=(payload or {}).get("class"),
+                            refusal_provenance=refusal_provenance),
+    }
+    record_path = write_record(item_records_dir, "build", record, m, item_id,
+                               log="\n".join(transcripts))
+
+    print(f"attavo build: {status_out} ({record_path.name})")
+    if status_out == "halted":
+        return BUILD_HALT_EXIT
+    return 0 if status_out == "pass" else 1

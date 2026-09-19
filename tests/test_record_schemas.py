@@ -5,7 +5,7 @@ records; extend it, don't duplicate it, as new record shapes land (issue
 
 Run: python3 -m pytest tests -q
 """
-import importlib.machinery
+import importlib
 import importlib.util
 import json
 import os
@@ -34,14 +34,10 @@ def load_schema(stage: str) -> dict:
 
 
 def attavo_module():
-    """bin/attavo imported in-process, for the write_record/load_records
+    """attavo.records imported in-process, for the write_record/load_records
     unit tests below that a CLI invocation cannot provoke (there is no
     command-line path to a record carrying a key its schema forbids)."""
-    loader = importlib.machinery.SourceFileLoader("attavo_under_test", str(ATTAVO))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    return module
+    return importlib.import_module("attavo.records")
 
 
 def test_records_match_their_shapes(tmp_path):
@@ -174,6 +170,7 @@ def test_product_version_unknown_when_product_root_is_not_a_git_repo(tmp_path):
     product_bin = tmp_path / "product" / "bin"
     product_bin.mkdir(parents=True)
     shutil.copy(ATTAVO, product_bin / "attavo")
+    shutil.copytree(ROOT / "attavo", tmp_path / "product" / "attavo")
     shutil.copytree(ROOT / "schema", tmp_path / "product" / "schema")
 
     root = make_tenant(tmp_path, "build_valid", name="tenant")
@@ -425,7 +422,7 @@ def test_only_load_record_parses_record_file_content():
     a time to tell an adapter's JSON event stream from a tool's plain-text
     error (issue #94), and proof five's own read of the forge's
     attestation statement (issue #158) -- none of them a record."""
-    text = ATTAVO.read_text()
+    text = "\n".join(p.read_text() for p in sorted((ROOT / "attavo").rglob("*.py")))
     assert text.count("json.loads(") == 6, (
         "a new json.loads( site was added; review it against issue #60 acceptance 6 "
         "and update this count")

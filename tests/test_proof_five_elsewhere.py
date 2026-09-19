@@ -10,8 +10,7 @@ record every poll bound instead of stopping.
 
 Run: python3 -m pytest tests -q
 """
-import importlib.machinery
-import importlib.util
+import importlib
 import json
 import os
 import socket
@@ -30,14 +29,10 @@ STALL_BOUND_S = 60
 
 
 def attavo_module():
-    """bin/attavo imported in-process and fresh each call, so a test can
+    """attavo.drive imported in-process and fresh each call, so a test can
     monkeypatch a module-level function (drive_state, poll_forge_checks,
     cmd_verify, ...) without leaking into any other test."""
-    loader = importlib.machinery.SourceFileLoader("attavo_proof_five_under_test", str(ATTAVO))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    return module
+    return importlib.reload(importlib.import_module("attavo.drive"))
 
 
 def iso_ago(seconds: float) -> str:
