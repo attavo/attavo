@@ -345,21 +345,25 @@ def touches_boundary(root: Path, sha: str, boundary_paths: list[str]) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for path in diff for pattern in boundary_paths)
 
 
-def proof_no_commit_lacks_record(root: Path, m: dict[str, Any] | None) -> Proof:
-    p = Proof("no-commit-lacks-record", "no commit lacks a record")
-    if m is None:
-        return p.fail(f"no {MANIFEST} at {root}; the tenant has no record boundary")
+class WindowRefused(Exception):
+    """The window start cannot be computed; str(exc) is the refusal."""
+
+
+def proof_window_start(root: Path, m: dict[str, Any]) -> tuple[str, str, list[str]]:
+    """(install commit, window start, first-parent chain after the install
+    commit): where proofs three and six start reading. The start is
+    [doctor].from if the tenant set it, otherwise the commit that
+    introduced the manifest (issue #192: proof six reads this too, so the
+    two proofs cannot disagree)."""
     try:
         install = git(root, "log", "--diff-filter=A", "--format=%H",
                       "--reverse", "--", MANIFEST).split()
     except RuntimeError as exc:
-        return p.fail(f"git: {exc}")
+        raise WindowRefused(f"git: {exc}") from exc
     if not install:
-        return p.fail(f"{MANIFEST} is not committed; the tenant has no record boundary")
+        raise WindowRefused(f"{MANIFEST} is not committed; the tenant has no record boundary")
     install_sha = install[0]
     full_chain = git(root, "rev-list", f"{install_sha}..HEAD", "--first-parent").split()
-    if not full_chain:
-        return p.fail(f"no commit after the install commit {install_sha[:12]}; nothing has been recorded")
 
     # issue #74: [doctor] from lets a tenant declare the doctor's read to
     # start at a later commit on main's first-parent line -- the point
@@ -377,11 +381,24 @@ def proof_no_commit_lacks_record(root: Path, m: dict[str, Any] | None) -> Proof:
         try:
             resolved_from = git(root, "rev-parse", "--verify", f"{declared_from}^{{commit}}").strip()
         except RuntimeError:
-            return p.fail(f"[doctor] from {declared_from} does not resolve to a commit")
+            raise WindowRefused(f"[doctor] from {declared_from} does not resolve to a commit") from None
         if resolved_from != install_sha and resolved_from not in full_chain:
-            return p.fail(f"[doctor] from {declared_from} is not on main's first-parent "
-                          f"line after the install commit {install_sha[:12]}")
+            raise WindowRefused(f"[doctor] from {declared_from} is not on main's first-parent "
+                                f"line after the install commit {install_sha[:12]}")
         window_start = resolved_from
+    return install_sha, window_start, full_chain
+
+
+def proof_no_commit_lacks_record(root: Path, m: dict[str, Any] | None) -> Proof:
+    p = Proof("no-commit-lacks-record", "no commit lacks a record")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; the tenant has no record boundary")
+    try:
+        install_sha, window_start, full_chain = proof_window_start(root, m)
+    except WindowRefused as exc:
+        return p.fail(str(exc))
+    if not full_chain:
+        return p.fail(f"no commit after the install commit {install_sha[:12]}; nothing has been recorded")
 
     if window_start == install_sha:
         window_spec = f"{install_sha}..HEAD"
@@ -620,12 +637,17 @@ def proof_every_attested_item_is_sealed(root: Path, m: dict[str, Any] | None) ->
     items = load_records(records_dir)
     complete = [item for item, stages in sorted(items.items()) if all(s in stages for s in STAGES)]
 
-    # [forge].sealed_since: merges at or before this sha predate the
-    # tenant's merge queue -- the self-tenant's own #106, #148, #153 were
-    # merged direct, with no merge_group run to seal them. They are
-    # named, never failed, the same window convention proof three keeps
-    # for commits before the manifest's own install.
+    # [forge].sealed_since: merges at or before this commit are before the
+    # window -- the tenant could not seal them (no queue, no signing
+    # workflow, or a store that held nothing yet). They are named, never
+    # failed. Absent, the window starts where proof three's does: the
+    # install commit, or [doctor].from (issue #192).
     since = (m.get("forge") or {}).get("sealed_since")
+    if not (isinstance(since, str) and since.strip()):
+        try:
+            since = proof_window_start(root, m)[1]
+        except WindowRefused as exc:
+            return p.fail(str(exc))
     merges, refusal = _merges_reachable(root)
     if refusal:
         return p.fail(refusal)
@@ -640,7 +662,7 @@ def proof_every_attested_item_is_sealed(root: Path, m: dict[str, Any] | None) ->
         if merge_sha is None:
             not_merged.append(item)
             continue
-        if isinstance(since, str) and since.strip() and _is_ancestor(root, merge_sha, since):
+        if _is_ancestor(root, merge_sha, since):
             before_window.append(item)
             continue
         statement, exit_code = statement_for(root, cmd, merge_sha)
@@ -656,7 +678,8 @@ def proof_every_attested_item_is_sealed(root: Path, m: dict[str, Any] | None) ->
     if reasons:
         return p.fail("; ".join(reasons), sealed=sealed, before_window=before_window,
                       unsealed=unsealed, not_merged=not_merged, not_read=not_read)
-    return p.hold(f"{len(sealed)} merged item(s) sealed, {len(before_window)} before the window, "
+    window = f" at {since[:12]}" if before_window else ""
+    return p.hold(f"{len(sealed)} sealed, {len(before_window)} before the window{window}, "
                  f"{len(not_merged)} not merged",
                  sealed=sealed, before_window=before_window, unsealed=unsealed,
                  not_merged=not_merged, not_read=not_read)

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/manifest/1",
+  "$id": "https://attavo.dev/schema/manifest/2",
   "title": "Attavo tenant manifest (attavo.toml)",
   "description": "What a tenant declares to install Attavo: the release it pins, the executor it chose, where the governed path begins and ends, the gates it runs, and where its specs, records, and rulings live. Every key is read by a script; a key no script reads does not belong here.",
   "type": "object",
@@ -101,7 +101,7 @@
         },
         "sealed_since": {
           "type": "string",
-          "description": "A commit sha. A merge at or before it predates the tenant's merge queue and is named by the doctor's fifth proof as before the window rather than failed.",
+          "description": "A commit. A merge at or before it is before the window: the tenant could not seal it (no queue, no signing workflow, or a store that held nothing yet). Defaults to the install commit; set it only for a repository that ran the product before it could seal, to the first parent of its first sealed merge, and say why in the commit that sets it.",
           "minLength": 7
         }
       }
