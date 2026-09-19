@@ -1,7 +1,7 @@
 """The decoupling proof (issue #186): the product is the attavo/ package, and
-nothing under it outside attavo/forge/ runs `gh` or names github.com. The
-forge-specific code has one home; a grep over that home's complement is the
-proof. templates/ and action.yml are the forge's own files and are not read.
+nothing under it runs `gh` or names github.com. The forge-specific text lives
+outside the package, in templates/ and action.yml, which are the forge's own
+files and are not read; a grep over the package is the proof.
 
 `gh` is matched as a word, not as the two characters "gh " -- "through " and
 "though " both end that way.
@@ -13,7 +13,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = ROOT / "attavo"
-FORGE = PACKAGE / "forge"
 
 # The modules issue #186 names, one per section heading of the old single
 # script; the package is not the package until every one exists.
@@ -24,8 +23,8 @@ GH_COMMAND = re.compile(r"\bgh\b")
 GITHUB_HOST = re.compile(r"github\.com", re.IGNORECASE)
 
 
-def modules_outside_forge() -> list[Path]:
-    return sorted(p for p in PACKAGE.rglob("*.py") if FORGE not in p.parents)
+def modules() -> list[Path]:
+    return sorted(PACKAGE.rglob("*.py"))
 
 
 def test_the_package_has_every_module_the_issue_names():
@@ -33,15 +32,15 @@ def test_the_package_has_every_module_the_issue_names():
     assert not missing, f"attavo/ lacks: {', '.join(missing)}"
 
 
-def test_no_module_outside_forge_runs_gh_or_names_github():
-    files = modules_outside_forge()
+def test_no_module_runs_gh_or_names_github():
+    files = modules()
     assert files, "attavo/ holds no modules; there is nothing for the grep to read"
     offences = []
     for path in files:
         for number, line in enumerate(path.read_text().splitlines(), start=1):
             if GH_COMMAND.search(line) or GITHUB_HOST.search(line):
                 offences.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
-    assert not offences, "forge-specific text outside attavo/forge/:\n" + "\n".join(offences)
+    assert not offences, "forge-specific text under attavo/:\n" + "\n".join(offences)
 
 
 def test_the_entry_is_thin_and_imports_the_package():

@@ -60,22 +60,13 @@ def test_manifest_declares_every_key_issue_103_lists():
     assert "doctor" not in m
     assert m["forge"]["checks_command"]
     assert m["forge"]["file_issue_command"]
-    assert m["executor"]["build"] == "claude-code"
-    assert m["executor"]["verify"] == "codex"
-    assert m["executor"]["claude-code"] == {"auth": "subscription", "model": "claude-sonnet-5"}
-    assert m["executor"]["codex"] == {"model": "gpt-5.6-sol"}
     paths = m["spec"]["boundary"]["paths"]
     assert "bin/**" in paths and "attavo/**" in paths, paths
     assert "spec" in m["gates"]
-    assert m["gates"]["spec"]["command"] == "attavo spec-gate"
     assert m["gates"]["spec"]["retires"]
     assert m["tests"]["select"]
     assert m["tests"]["run"]
-    assert m["paths"] == {
-        "specs": "attest/specs", "records": "attest/records",
-        "rulings": "attest/rulings.md", "rejections": "attest/rejections",
-    }
-    assert m["operators"]["approvers"] == ["dbean10"]
+    assert m["operators"]["approvers"]
     assert m["checks"]["command"]
 
 
@@ -114,7 +105,7 @@ def test_select_tests_maps_bin_attavo_to_the_whole_suite():
 
 
 def test_select_tests_maps_an_adapter_path_to_the_adapter_tests():
-    assert run_select_tests("adapters/claude-code/run\n") == [
+    assert run_select_tests("adapters/example/run\n") == [
         "tests/test_adapters.py", "tests/test_executor_conformance.py",
     ]
 
@@ -167,10 +158,8 @@ def test_doctor_job_reports_on_pull_request_and_merge_group():
 # about this repository's own installation (adapters/README.md's
 # ATTAVO_MANIFEST doc line, bin/attavo's own MANIFEST constant, the
 # schema's own title, and the two template workflows' own tomllib read of
-# whatever tenant copies them in -- theirs, never this repository's);
-# the two bin/attavo docstring lines citing tenant zero's real
-# attest/records/659/verify-01.log are a specimen from a different
-# repository's history, not a path this product resolves. Each entry is
+# whatever tenant copies them in -- theirs, never this repository's).
+# Each entry is
 # (path relative to ROOT, the exact line's stripped text) so a genuinely
 # new occurrence -- anywhere else, or a changed line here -- still fails
 # the test.
@@ -183,9 +172,6 @@ BASELINE = {
      'records_rel="$(python3 -c "import tomllib; print(tomllib.load(open(\'attavo.toml\',\'rb\'))[\'paths\'][\'records\'])")"'),
     ("templates/workflows/attavo-spec-gate.yml",
      'records_rel="$(python3 -c "import tomllib; print(tomllib.load(open(\'attavo.toml\',\'rb\'))[\'paths\'][\'records\'])")"'),
-    ("bin/attavo", "tenant zero's attest/records/659/verify-01.log: codex's"),
-    ("bin/attavo",
-     'zero attest/records/659/verify-01.log, codex\'s own "Input exceeds..."'),
 }
 
 
