@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from attavo.common import MANIFEST, git, now_iso, product_version, read_manifest
 from attavo.records import latest_attempt_path, latest_record, parse_attempts
-from attavo.types import ApprovalRecord, AttestRecord, BuildRecord, SpecRecord, VerifyRecord
+from attavo.types import (ApprovalRecord, AttestRecord, BuildRecord, ItemCost, ItemTime,
+                          SpecRecord, StageTime, VerifyRecord)
 
 # --- attest: the signed envelope over one item's whole traversal ---
 
@@ -32,6 +34,81 @@ def derive_attest_items(root: Path, records_rel: str) -> tuple[set[str], str | N
             if item:
                 items.add(item)
     return items, None
+
+
+INVOCATION_STAGES = ("build", "verify", "counsel")
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def item_time_and_cost(records_dir: Path, sealed_at_epoch: int | None) -> tuple[ItemTime, ItemCost]:
+    """The item's accounting, summed from the records attest already reads
+    (issue: a view showed #158 as 20 minutes, its final build plus its final
+    verify, where its nineteen invocations ran 115): every build, verify,
+    and counsel attempt's wall_clock_s and cost_usd, per stage and for the
+    item, never the final attempt alone. A record that carries no number
+    is named in not_read and makes each sum it belongs to partial --
+    absent is never zero. lead_s runs from the first approval record's
+    `at` to sealed_at_epoch (the committer time of the commit the statement
+    is computed at); both it and waiting_s are None when either end cannot
+    be read. doctor's sixth proof calls this same function over the same
+    records and fails a sealed statement whose invocation_s disagrees."""
+    stages: dict[str, StageTime] = {}
+    time_not_read: list[str] = []
+    cost_not_read: list[str] = []
+    by_stage: dict[str, float] = {}
+    by_adapter: dict[str, float] = {}
+    for stage in INVOCATION_STAGES:
+        attempts = parse_attempts(records_dir, stage)
+        seconds = 0.0
+        partial = False
+        for n, rec in sorted(attempts.items()):
+            name = f"{stage}-{n:02d}"
+            wall = rec.get("wall_clock_s")
+            if _is_number(wall):
+                seconds += float(wall)
+            else:
+                partial = True
+                time_not_read.append(name)
+            cost = rec.get("cost_usd")
+            if _is_number(cost):
+                by_stage[stage] = by_stage.get(stage, 0.0) + float(cost)
+                adapter = rec.get("adapter")
+                key = adapter if isinstance(adapter, str) and adapter else "not read"
+                by_adapter[key] = by_adapter.get(key, 0.0) + float(cost)
+            else:
+                cost_not_read.append(name)
+        stages[stage] = {"attempts": len(attempts), "invocation_s": round(seconds, 3),
+                         "partial": partial}
+
+    invocation_s = round(sum(st["invocation_s"] for st in stages.values()), 3)
+    lead_s: float | None = None
+    first_approval = parse_attempts(records_dir, "approval")
+    if first_approval and sealed_at_epoch is not None:
+        at = first_approval[min(first_approval)].get("at")
+        try:
+            approved = datetime.fromisoformat(str(at).replace("Z", "+00:00"))
+            lead_s = round(sealed_at_epoch - approved.timestamp(), 3)
+        except ValueError:
+            time_not_read.append(f"approval-{min(first_approval):02d}")
+    item_time: ItemTime = {
+        "build": stages["build"], "verify": stages["verify"], "counsel": stages["counsel"],
+        "invocation_s": invocation_s,
+        "lead_s": lead_s,
+        "waiting_s": None if lead_s is None else round(lead_s - invocation_s, 3),
+        "partial": any(st["partial"] for st in stages.values()),
+        "not_read": time_not_read,
+    }
+    item_cost: ItemCost = {
+        "usd": round(sum(by_stage.values()), 6),
+        "by_stage_usd": {k: round(v, 6) for k, v in by_stage.items()},
+        "by_adapter_usd": {k: round(v, 6) for k, v in by_adapter.items()},
+        "partial": bool(cost_not_read),
+        "not_read": cost_not_read,
+    }
+    return item_time, item_cost
 
 
 NOT_YET = object()
@@ -175,6 +252,11 @@ def cmd_attest(argv: list[str]) -> int:
     # is what makes that unambiguous to a reader who has never seen attest
     # run anywhere but the merge group.
     head_sha = git(root, "rev-parse", "HEAD").strip()
+    try:
+        sealed_at: int | None = int(git(root, "show", "-s", "--format=%ct", "HEAD").strip())
+    except (RuntimeError, ValueError):
+        sealed_at = None
+    item_time, item_cost = item_time_and_cost(records_dir, sealed_at)
 
     statement: AttestRecord = {
         "sha": head_sha,
@@ -195,11 +277,13 @@ def cmd_attest(argv: list[str]) -> int:
         "interventions": [],
         "acts": [],
         "tokens_by_stage": {"build": latest_build.get("tokens"), "verify": latest_verify.get("tokens")},
-        # Never summed across stages -- the 2026-09-09 ruling on reporting
-        # across vendors: a stage's executor may report no cost at all.
+        # The final attempt per stage; every attempt, summed, is in `time`
+        # and `cost` (the sum across executors was ruled 2026-09-19).
         "cost_by_stage_usd": {"build": latest_build.get("cost_usd"), "verify": latest_verify.get("cost_usd")},
         "wall_clock_by_stage_s": {"build": latest_build.get("wall_clock_s"),
                                   "verify": latest_verify.get("wall_clock_s")},
+        "time": item_time,
+        "cost": item_cost,
         "product_version": product_version(),
         "product_pin": (m.get("attavo") or {}).get("version"),
     }

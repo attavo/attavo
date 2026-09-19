@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/attestation/v2",
+  "$id": "https://attavo.dev/attestation/v3",
   "title": "The attestation statement `attavo attest` prints on a coherent chain",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "sha", "merge_sha", "item", "spec", "spec_sha", "approval", "approval_sha",
     "build", "build_sha", "verify", "verify_sha", "at", "interventions", "acts",
-    "tokens_by_stage", "cost_by_stage_usd", "wall_clock_by_stage_s",
+    "tokens_by_stage", "cost_by_stage_usd", "wall_clock_by_stage_s", "time", "cost",
     "product_version", "product_pin"
   ],
   "properties": {
@@ -62,7 +62,7 @@
     },
     "cost_by_stage_usd": {
       "type": "object",
-      "description": "Never summed across stages -- a stage's own executor may report no cost at all.",
+      "description": "The final attempt's cost per stage, as its record carries it; the item's sums are in `cost`.",
       "additionalProperties": false,
       "required": ["build", "verify"],
       "properties": {
@@ -79,7 +79,48 @@
         "verify": {"type": ["number", "null"]}
       }
     },
+    "time": {
+      "type": "object",
+      "description": "Every invocation of the item, summed by attest from its stage records' wall_clock_s: per stage and for the item, every attempt and not the final one alone (wall_clock_by_stage_s is the final attempt). lead_s runs from the first approval record's `at` to the committer time of the commit the statement is computed at; waiting_s is lead_s minus invocation_s. A record with no wall_clock_s is named in not_read and its sums are partial, never smaller in silence.",
+      "additionalProperties": false,
+      "required": ["build", "verify", "counsel", "invocation_s", "lead_s", "waiting_s", "partial", "not_read"],
+      "properties": {
+        "build": {"$ref": "#/$defs/stage_time"},
+        "verify": {"$ref": "#/$defs/stage_time"},
+        "counsel": {"$ref": "#/$defs/stage_time"},
+        "invocation_s": {"type": "number", "minimum": 0},
+        "lead_s": {"type": ["number", "null"]},
+        "waiting_s": {"type": ["number", "null"]},
+        "partial": {"type": "boolean"},
+        "not_read": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "cost": {
+      "type": "object",
+      "description": "Every record's cost_usd summed by attest: the item's total across stages and executors (ruled 2026-09-19, superseding the 2026-09-09 ruling against a cross-executor sum), with a subtotal per stage and per adapter. Each figure is what the record carries. A record with no cost_usd is named in not_read and makes usd and the subtotals it belongs to partial: absent is never zero, and a partial total says so.",
+      "additionalProperties": false,
+      "required": ["usd", "by_stage_usd", "by_adapter_usd", "partial", "not_read"],
+      "properties": {
+        "usd": {"type": "number", "minimum": 0},
+        "by_stage_usd": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0}},
+        "by_adapter_usd": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0}},
+        "partial": {"type": "boolean"},
+        "not_read": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
     "product_version": {"type": "string", "minLength": 1},
     "product_pin": {"type": ["string", "null"]}
+  },
+  "$defs": {
+    "stage_time": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempts", "invocation_s", "partial"],
+      "properties": {
+        "attempts": {"type": "integer", "minimum": 0},
+        "invocation_s": {"type": "number", "minimum": 0},
+        "partial": {"type": "boolean"}
+      }
+    }
   }
 }

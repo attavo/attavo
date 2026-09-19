@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from attavo.attest import check_attest_chain
+from attavo.attest import check_attest_chain, item_time_and_cost
 from attavo.common import (
     MANIFEST,
     Proof,
@@ -606,6 +606,26 @@ def _is_ancestor(root: Path, earlier: str, later: str) -> bool:
     return run.returncode == 0
 
 
+def _time_disagrees(item_records_dir: Path, item: str, merge_sha: str,
+                    statement: dict[str, Any]) -> str | None:
+    """A sealed statement that carries `time` says the invocation_s its
+    records sum to -- the same function attest summed them with, over the
+    same records (no record is written after a merge). A statement sealed
+    before `time` existed carries none and is not checked. No new read of
+    the store: the statement is the one proof six already holds."""
+    inner = statement.get("predicate")
+    predicate = inner if isinstance(inner, dict) else statement
+    stated_time = predicate.get("time")
+    if not isinstance(stated_time, dict):
+        return None
+    summed = item_time_and_cost(item_records_dir, None)[0]["invocation_s"]
+    stated = stated_time.get("invocation_s")
+    if isinstance(stated, bool) or not isinstance(stated, (int, float)) or abs(stated - summed) > 1.0:
+        return (f"item {item} merged at {merge_sha[:12]}: the statement's time.invocation_s "
+                f"{stated} is not its records' {summed}")
+    return None
+
+
 def proof_every_attested_item_is_sealed(root: Path, m: dict[str, Any] | None) -> Proof:
     p = Proof("every-attested-item-is-sealed", "every attested item has its statement in the store")
     if m is None:
@@ -646,6 +666,9 @@ def proof_every_attested_item_is_sealed(root: Path, m: dict[str, Any] | None) ->
         statement, exit_code = statement_for(root, cmd, merge_sha)
         if statement is not None:
             sealed.append(item)
+            disagreement = _time_disagrees(records_dir / item, item, merge_sha, statement)
+            if disagreement:
+                reasons.append(disagreement)
         elif exit_code == 2:
             not_read.append(item)
             reasons.append(f"item {item} merged at {merge_sha[:12]}: not read -- "
