@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""forge-check-log: [forge].check_log_command for attavo counsel (issue #175).
+
+Takes a sha and a check name on argv; finds the check run of that name on
+that sha (gh api repos/{owner}/{repo}/commits/<sha>/check-runs) and prints
+the failed steps' log for the run it points at (gh run view <id>
+--log-failed). Exits non-zero, printing nothing to stdout, when the sha
+carries no check run of that name, the check names no run the forge's own
+URL scheme exposes, or either gh call fails: attavo counsel appends the
+sha and the check name to this command string and runs it under a shell,
+reading a nonzero exit as "no log available" for that check.
+
+When a sha carries more than one check run of the same name (a retrigger),
+the one that actually concluded (not "skipped") is preferred, since that
+is the run whose log explains a real stop.
+
+Written from schema/manifest.schema.json's own description of
+[forge].check_log_command and from `gh`, independently of tenant zero's
+equivalent script.
+
+Usage: forge-check-log <sha> <check-name>
+Requires: `gh`, authenticated, run inside this repository's checkout.
+"""
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+import sys
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2:
+        print("usage: forge-check-log <sha> <check-name>", file=sys.stderr)
+        return 2
+    sha, name = argv
+    run = subprocess.run(
+        ["gh", "api", f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs?per_page=100"],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    if run.returncode != 0:
+        print(run.stderr.strip() or f"forge-check-log: sha {sha} not found", file=sys.stderr)
+        return 1
+    try:
+        payload = json.loads(run.stdout)
+    except json.JSONDecodeError:
+        print(f"forge-check-log: unexpected response for sha {sha}", file=sys.stderr)
+        return 1
+
+    matches = [c for c in payload.get("check_runs", []) if c.get("name") == name]
+    if not matches:
+        print(f"forge-check-log: no check named {name!r} on sha {sha}", file=sys.stderr)
+        return 1
+    check = next((c for c in matches if c.get("conclusion") not in (None, "skipped")), matches[0])
+
+    url = check.get("html_url") or check.get("details_url") or ""
+    found = re.search(r"/actions/runs/(\d+)", url)
+    if not found:
+        print(f"forge-check-log: check {name!r} on sha {sha} names no run", file=sys.stderr)
+        return 1
+    run_id = found.group(1)
+
+    log = subprocess.run(
+        ["gh", "run", "view", run_id, "--log-failed"],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    if log.returncode != 0:
+        print(log.stderr.strip() or f"forge-check-log: no log for run {run_id}", file=sys.stderr)
+        return 1
+    print(log.stdout, end="")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
