@@ -42,6 +42,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -61,7 +62,7 @@ def find_adapters_without_conformance(adapters_dir: Path) -> list[str]:
     """Every directory under adapters_dir, other than NOT_AN_EXECUTOR,
     that carries no conformance.json -- named, so a second adapter cannot
     join by declaring nothing."""
-    missing = []
+    missing: list[str] = []
     if not adapters_dir.is_dir():
         return missing
     for d in sorted(p for p in adapters_dir.iterdir() if p.is_dir()):
@@ -72,7 +73,7 @@ def find_adapters_without_conformance(adapters_dir: Path) -> list[str]:
     return missing
 
 
-def load_conformance() -> dict[str, dict]:
+def load_conformance() -> dict[str, dict[str, Any]]:
     manifests = {}
     for name in sorted(p.name for p in ADAPTERS_DIR.iterdir() if p.is_dir()):
         if name in NOT_AN_EXECUTOR:
@@ -87,7 +88,7 @@ CONFORMANCE = load_conformance()
 ADAPTER_NAMES = sorted(CONFORMANCE)
 
 
-def base_env(tmp_path: Path) -> dict:
+def base_env(tmp_path: Path) -> dict[str, Any]:
     spec_dir = FIXTURES / "build_valid" / "specs" / "1"
     env = dict(os.environ)
     env.pop("ATTAVO_CHECKS_COMMAND", None)
@@ -110,13 +111,13 @@ def base_env(tmp_path: Path) -> dict:
     return env
 
 
-def run_adapter(adapter_name: str, env: dict, cwd: Path | None = None) -> subprocess.CompletedProcess:
+def run_adapter(adapter_name: str, env: dict[str, Any], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     run_path = ADAPTERS_DIR / adapter_name / "run"
     return subprocess.run([str(run_path)], capture_output=True, text=True,
                           check=False, env=env, cwd=str(cwd) if cwd else None)
 
 
-def dry_run(adapter_name: str, tmp_path: Path, extra_env: dict | None = None) -> dict:
+def dry_run(adapter_name: str, tmp_path: Path, extra_env: dict[str, Any] | None = None) -> dict[str, Any]:
     """{"argv", "instruction", "schema"}: the instruction and the schema
     named separately from argv, because a second adapter (issue #41)
     delivers the instruction on stdin, where argv itself carries none."""
@@ -127,11 +128,11 @@ def dry_run(adapter_name: str, tmp_path: Path, extra_env: dict | None = None) ->
         env.update(extra_env)
     run = run_adapter(adapter_name, env)
     assert run.returncode == 0, run.stderr
-    return json.loads(run.stdout)
+    return cast(dict[str, Any], json.loads(run.stdout))
 
 
 def run_situation(adapter_name: str, situation: str, tmp_path: Path,
-                  extra_env: dict | None = None) -> subprocess.CompletedProcess:
+                  extra_env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     manifest = CONFORMANCE[adapter_name]
     response = manifest["situations"][situation]
     response_file = tmp_path / "response.json"
@@ -143,13 +144,13 @@ def run_situation(adapter_name: str, situation: str, tmp_path: Path,
     return run_adapter(adapter_name, env)
 
 
-def test_every_executor_adapter_declares_conformance():
+def test_every_executor_adapter_declares_conformance() -> None:
     """Acceptance 3 (real check, against this repository's own adapters/)."""
     missing = find_adapters_without_conformance(ADAPTERS_DIR)
     assert not missing, f"adapter(s) with no conformance.json: {', '.join(missing)}"
 
 
-def test_find_adapters_without_conformance_names_the_directory(tmp_path):
+def test_find_adapters_without_conformance_names_the_directory(tmp_path: Path) -> None:
     """Acceptance 3 (fixture): a directory with no conformance.json is
     named, without touching the real adapters/ tree."""
     adapters_dir = tmp_path / "adapters"
@@ -166,7 +167,7 @@ def test_find_adapters_without_conformance_names_the_directory(tmp_path):
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_1_report_line_is_last_and_has_a_model(adapter_name, tmp_path):
+def test_situation_1_report_line_is_last_and_has_a_model(adapter_name: str, tmp_path: Path) -> None:
     run = run_situation(adapter_name, "done", tmp_path)
     assert run.returncode == 0, run.stderr
     lines = [l for l in run.stdout.splitlines() if l.strip()]
@@ -175,20 +176,20 @@ def test_situation_1_report_line_is_last_and_has_a_model(adapter_name, tmp_path)
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_2_tool_error_fails_and_prints_the_result(adapter_name, tmp_path):
+def test_situation_2_tool_error_fails_and_prints_the_result(adapter_name: str, tmp_path: Path) -> None:
     run = run_situation(adapter_name, "is_error", tmp_path)
     assert run.returncode != 0
     assert run.stdout.strip(), "the raw result must still reach stdout"
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_3_no_structured_output_fails(adapter_name, tmp_path):
+def test_situation_3_no_structured_output_fails(adapter_name: str, tmp_path: Path) -> None:
     run = run_situation(adapter_name, "no_structured_output", tmp_path)
     assert run.returncode != 0
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_4_question_quality_gates_the_halt(adapter_name, tmp_path):
+def test_situation_4_question_quality_gates_the_halt(adapter_name: str, tmp_path: Path) -> None:
     # An absent, empty, or short question is a report in the question
     # channel (issue #150): the adapter re-invokes once and, when the
     # retry yields nothing better, reports class non-question with the
@@ -207,7 +208,7 @@ def test_situation_4_question_quality_gates_the_halt(adapter_name, tmp_path):
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_5_underlying_tool_nonzero_exit_passes_through(adapter_name, tmp_path):
+def test_situation_5_underlying_tool_nonzero_exit_passes_through(adapter_name: str, tmp_path: Path) -> None:
     """A fake <tool_binary> on PATH that writes to both of its streams and
     exits 3: the adapter exits 3, and its own stdout -- the only stream
     build-NN.log is built from -- carries both of the tool's streams.
@@ -235,14 +236,14 @@ def test_situation_5_underlying_tool_nonzero_exit_passes_through(adapter_name, t
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_6_transcript_non_empty_on_every_path(adapter_name, tmp_path):
+def test_situation_6_transcript_non_empty_on_every_path(adapter_name: str, tmp_path: Path) -> None:
     for situation in ("done", "is_error", "no_structured_output", "question_short"):
         run = run_situation(adapter_name, situation, tmp_path)
         assert run.stdout.strip(), f"{situation} produced no transcript at all"
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_7_checks_command_in_the_invocation(adapter_name, tmp_path):
+def test_situation_7_checks_command_in_the_invocation(adapter_name: str, tmp_path: Path) -> None:
     command = "python3 bin/factory-lane check --base origin/main"
     with_checks = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_CHECKS_COMMAND": command})
     assert command in with_checks["instruction"]
@@ -252,7 +253,7 @@ def test_situation_7_checks_command_in_the_invocation(adapter_name, tmp_path):
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_8_commits_carry_the_attavo_build_identity(adapter_name, tmp_path):
+def test_situation_8_commits_carry_the_attavo_build_identity(adapter_name: str, tmp_path: Path) -> None:
     """Issue #33. attavo build exports the executor identity -- set by the
     product, never the tenant's git config -- as GIT_AUTHOR_NAME/EMAIL and
     GIT_COMMITTER_NAME/EMAIL before invoking the adapter; the adapter must
@@ -304,7 +305,7 @@ def test_situation_8_commits_carry_the_attavo_build_identity(adapter_name, tmp_p
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_9_verify_stage_uses_a_findings_schema(adapter_name, tmp_path):
+def test_situation_9_verify_stage_uses_a_findings_schema(adapter_name: str, tmp_path: Path) -> None:
     """Issue #46, rejection test 3. With ATTAVO_STAGE=verify, the
     invocation names a response shape carrying findings and tests_named
     -- not build's status/question. Red at 699f56d for claude-code,
@@ -317,7 +318,7 @@ def test_situation_9_verify_stage_uses_a_findings_schema(adapter_name, tmp_path)
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_10_verify_names_approval_commit_divergence_as_reportable(adapter_name, tmp_path):
+def test_situation_10_verify_names_approval_commit_divergence_as_reportable(adapter_name: str, tmp_path: Path) -> None:
     """Issue #48, rejection test 1. With ATTAVO_STAGE=verify, the
     invocation's instruction names a spec whose approval commit does
     not describe the working tree as itself a reportable finding --
@@ -331,7 +332,7 @@ def test_situation_10_verify_names_approval_commit_divergence_as_reportable(adap
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_11_verify_defines_severity_as_derived(adapter_name, tmp_path):
+def test_situation_11_verify_defines_severity_as_derived(adapter_name: str, tmp_path: Path) -> None:
     """Issue #48, rejection test 2. With ATTAVO_STAGE=verify, the
     invocation's instruction defines severity as derived rather than
     judged. Red at d04b484, where severity was named once in the
@@ -343,7 +344,7 @@ def test_situation_11_verify_defines_severity_as_derived(adapter_name, tmp_path)
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_12_adapter_supplies_every_field_it_declares(adapter_name, tmp_path):
+def test_situation_12_adapter_supplies_every_field_it_declares(adapter_name: str, tmp_path: Path) -> None:
     """Vendor independence (2026-09-09 ruling). conformance.json's
     "reports" names the fields this adapter can supply with a real
     value -- an adapter claiming a field and returning null for it is a
@@ -365,7 +366,7 @@ def test_situation_12_adapter_supplies_every_field_it_declares(adapter_name, tmp
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_13_subagent_guard_is_declared(adapter_name, tmp_path):
+def test_situation_13_subagent_guard_is_declared(adapter_name: str, tmp_path: Path) -> None:
     """Issue #88, rejection test (class B, general across any adapter).
     Every adapter's conformance.json names subagent_guard.supported: an
     adapter naming neither a working check nor an admitted inability is
@@ -395,7 +396,7 @@ def test_situation_13_subagent_guard_is_declared(adapter_name, tmp_path):
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_14_input_limit_is_declared(adapter_name, tmp_path):
+def test_situation_14_input_limit_is_declared(adapter_name: str, tmp_path: Path) -> None:
     """Issue #93, rejection test 1. Every adapter's conformance.json
     names input_limit: a unit and a number (as the tool documents it),
     or a null value and a reason (mirrors situation 13's vendor-
@@ -413,7 +414,7 @@ def test_situation_14_input_limit_is_declared(adapter_name, tmp_path):
             f"{adapter_name}'s input_limit has no value and no reason")
 
 
-def counsel_extra_env(tmp_path: Path) -> dict:
+def counsel_extra_env(tmp_path: Path) -> dict[str, Any]:
     """Issue #100: the record, its log, the diff, the tenant manifest,
     and this product's own root, all handed by path -- the general
     contract every adapter's counsel stage shares."""
@@ -436,7 +437,7 @@ def counsel_extra_env(tmp_path: Path) -> dict:
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_16_counsel_stage_is_declared(adapter_name):
+def test_situation_16_counsel_stage_is_declared(adapter_name: str) -> None:
     """Issue #100, acceptance row 4. Every adapter's conformance.json
     names "counsel" among its declared stages -- an adapter naming none
     is not one this lane has pointed at the counsel stage."""
@@ -447,7 +448,7 @@ def test_situation_16_counsel_stage_is_declared(adapter_name):
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_17_counsel_names_the_product_root_and_the_record(adapter_name, tmp_path):
+def test_situation_17_counsel_names_the_product_root_and_the_record(adapter_name: str, tmp_path: Path) -> None:
     """Issue #100, acceptance row 4. The counsel instruction names this
     product's own root and the record path handed to it, and its schema
     requires the structured answer (class, verdict, citations, proposal)."""
@@ -463,7 +464,7 @@ def test_situation_17_counsel_names_the_product_root_and_the_record(adapter_name
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
 def test_situation_18_counsel_instruction_stays_under_the_bound_with_large_files(
-        adapter_name, tmp_path):
+        adapter_name: str, tmp_path: Path) -> None:
     """Issue #100, acceptance row 4. A 2 MB record log and diff both leave
     the counsel instruction under the fixed bound -- the same guarantee
     build and verify already carry (issue #86), so counsel does not
@@ -480,7 +481,7 @@ def test_situation_18_counsel_instruction_stays_under_the_bound_with_large_files
     assert len(result["instruction"].encode()) < FIXED_BOUND_CHARS
 
 
-def test_situation_19_codex_writes_events_when_attavo_events_is_set(tmp_path):
+def test_situation_19_codex_writes_events_when_attavo_events_is_set(tmp_path: Path) -> None:
     """Issue #138, acceptance row 2. With ATTAVO_EVENTS set, the codex
     adapter maps its own JSONL stream to the same {at, kind, text}
     shape claude-code already writes -- checked through the
@@ -521,7 +522,7 @@ def make_large_file(path: Path, diff_like: bool) -> Path:
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_15_instruction_stays_under_the_bound_with_large_files(adapter_name, tmp_path):
+def test_situation_15_instruction_stays_under_the_bound_with_large_files(adapter_name: str, tmp_path: Path) -> None:
     """Issue #93, rejection test 3. A 2 MB diff and a 2 MB feedback file
     both leave the dry-run instruction under the 64 KB fixed bound --
     the guarantee issue #86 built (naming a file's path instead of

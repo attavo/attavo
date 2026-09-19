@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from helpers import git, make_tenant
 
@@ -29,12 +30,12 @@ DRIVER = {"name": "attavo driver", "email": "driver@attavo.invalid"}
 EXECUTOR = {"name": "attavo executor (fixture)", "email": "executor+fixture@attavo.invalid"}
 
 
-def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
                           capture_output=True, text=True, check=False)
 
 
-def commit_as(root: Path, identity: dict, message: str, paths: list[str]) -> str:
+def commit_as(root: Path, identity: dict[str, Any], message: str, paths: list[str]) -> str:
     """Stage exactly paths and commit as identity, both author and
     committer -- the same shape commit_record and the tenant's own CI
     templates set (never the tenant's ambient git config)."""
@@ -47,7 +48,7 @@ def commit_as(root: Path, identity: dict, message: str, paths: list[str]) -> str
     return git(root, "rev-parse", "HEAD").strip()
 
 
-def write_record(root: Path, item: str, stage: str, n: int, content: dict) -> str:
+def write_record(root: Path, item: str, stage: str, n: int, content: dict[str, Any]) -> str:
     records_dir = root / "records" / item
     records_dir.mkdir(parents=True, exist_ok=True)
     path = records_dir / f"{stage}-{n:02d}.json"
@@ -96,7 +97,7 @@ def build_merged_item(tmp_path: Path, item: str = "1") -> Path:
     return root
 
 
-def test_ledger_classifies_every_commit_and_counts_operator_acts(tmp_path):
+def test_ledger_classifies_every_commit_and_counts_operator_acts(tmp_path: Path) -> None:
     """Acceptance row 1: on a fixture with the four identities, every
     commit gets exactly one class and the summary counts operator acts 2
     -- the same shape tenant zero's own #651 reads (1 approve, 1 merge)."""
@@ -118,7 +119,7 @@ def test_ledger_classifies_every_commit_and_counts_operator_acts(tmp_path):
     assert summary["since"] == "v0.19.1"
 
 
-def test_ledger_stops_count_matches_stops_including_a_gate_refusal(tmp_path):
+def test_ledger_stops_count_matches_stops_including_a_gate_refusal(tmp_path: Path) -> None:
     """Issue #137, acceptance row 2. A refused spec-gate record and a
     non-pass build record: ledger's own stops count is the same set
     `attavo stops` counts, gate refusals included -- both computed by
@@ -147,7 +148,7 @@ def test_ledger_stops_count_matches_stops_including_a_gate_refusal(tmp_path):
     assert ledger_data["summary"]["stops"] == len(stops_data["rows"])
 
 
-def test_ledger_marks_a_pre_v018_record_commit_as_record_or_launch(tmp_path):
+def test_ledger_marks_a_pre_v018_record_commit_as_record_or_launch(tmp_path: Path) -> None:
     """Acceptance row 2: a person's record commit before v0.18.0 prints
     record-or-launch with the note, never launch or record -- before that
     version the driver and the executor had no identity of their own to
@@ -169,7 +170,7 @@ def test_ledger_marks_a_pre_v018_record_commit_as_record_or_launch(tmp_path):
     assert data["summary"]["product_acts"] == 0
 
 
-def test_ledger_classifies_an_invocation_marker_commit_as_a_product_record(tmp_path):
+def test_ledger_classifies_an_invocation_marker_commit_as_a_product_record(tmp_path: Path) -> None:
     """Issue #151: the invocation marker's own commit, authored by the
     driver identity, touches paths.records without matching a stage
     record's own NN.json name -- classified "record", the product's own
@@ -224,7 +225,7 @@ def test_ledger_classifies_an_invocation_marker_commit_as_a_product_record(tmp_p
     assert data["summary"]["operator_acts"] == 2
 
 
-def test_ledger_json_is_one_object_matching_the_text_forms_numbers(tmp_path):
+def test_ledger_json_is_one_object_matching_the_text_forms_numbers(tmp_path: Path) -> None:
     """Acceptance row 3: --json is one object with rows and summary, and
     the text form prints the same numbers."""
     root = build_merged_item(tmp_path)

@@ -17,7 +17,7 @@ TEMPLATES = Path(__file__).resolve().parent.parent / "templates" / "workflows"
 REPOSITORY_URL = re.compile(r"github\.com/[\w-]+/[\w.-]+")
 
 
-def test_no_template_carries_a_repository_url():
+def test_no_template_carries_a_repository_url() -> None:
     offenders = []
     for path in sorted(TEMPLATES.glob("*.yml")):
         for lineno, line in enumerate(path.read_text().splitlines(), 1):

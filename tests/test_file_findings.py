@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from helpers import commit_all, make_tenant
 
@@ -20,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
 
 
-def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
                           capture_output=True, text=True, check=False)
 
@@ -34,7 +35,7 @@ def configure_filing(root: Path, filed_path: Path) -> None:
     commit_all(root, "configure issue filing")
 
 
-def write_verify_record(root: Path, item: str, findings: list) -> None:
+def write_verify_record(root: Path, item: str, findings: list[Any]) -> None:
     records_dir = root / "records" / item
     records_dir.mkdir(parents=True, exist_ok=True)
     record = {
@@ -51,7 +52,7 @@ def write_verify_record(root: Path, item: str, findings: list) -> None:
     (records_dir / "verify-01.json").write_text(json.dumps(record))
 
 
-def test_file_findings_refuses_a_finding_with_no_retires(tmp_path):
+def test_file_findings_refuses_a_finding_with_no_retires(tmp_path: Path) -> None:
     """Acceptance 7. A finding with no retires refuses the whole record --
     nothing is filed, not even the other findings alongside it.
     """
@@ -70,7 +71,7 @@ def test_file_findings_refuses_a_finding_with_no_retires(tmp_path):
     assert not filed.exists()
 
 
-def test_file_findings_files_one_issue_per_finding(tmp_path):
+def test_file_findings_files_one_issue_per_finding(tmp_path: Path) -> None:
     """The mechanism this refusal protects: every well-formed finding is
     filed, one command invocation each."""
     root = make_tenant(tmp_path, "build_valid")

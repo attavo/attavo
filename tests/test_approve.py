@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from helpers import clone_shallow, commit_all, make_tenant
 
@@ -18,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
 
 
-def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     full_env = dict(os.environ)
     if env:
         full_env.update(env)
@@ -37,7 +38,7 @@ def amend_problem(root: Path) -> None:
     commit_all(root, "amend problem prose")
 
 
-def test_approve_refuses_without_current_pass(tmp_path):
+def test_approve_refuses_without_current_pass(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "valid")
 
     # no spec-gate has run at all yet
@@ -55,7 +56,7 @@ def test_approve_refuses_without_current_pass(tmp_path):
     assert approvals(root) == []
 
 
-def test_approve_refuses_unlisted_login(tmp_path):
+def test_approve_refuses_unlisted_login(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "valid")
     assert run_attavo(root, "spec-gate", "1").returncode == 0
 
@@ -65,7 +66,7 @@ def test_approve_refuses_unlisted_login(tmp_path):
     assert approvals(root) == []
 
 
-def test_amendment_above_line_costs_one_act(tmp_path):
+def test_amendment_above_line_costs_one_act(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "valid")
 
     assert run_attavo(root, "spec-gate", "1").returncode == 0
@@ -88,7 +89,7 @@ def test_amendment_above_line_costs_one_act(tmp_path):
     assert [p.name for p in approvals(root)] == ["approval-01.json", "approval-02.json"]
 
 
-def test_approve_accepts_built(tmp_path):
+def test_approve_accepts_built(tmp_path: Path) -> None:
     """Issue #28, acceptance 4. approve succeeds on a latest spec-gate
     record of status built -- the re-approval path after an amendment
     that landed above the line after a real build.
@@ -111,7 +112,7 @@ def test_approve_accepts_built(tmp_path):
     assert [p.name for p in approvals(root)] == ["approval-01.json", "approval-02.json"]
 
 
-def test_approve_refuses_shallow_checkout(tmp_path):
+def test_approve_refuses_shallow_checkout(tmp_path: Path) -> None:
     """On a --depth 1 clone, `git log -1 -- <path>` returns HEAD for every
     path (there is no history to prove otherwise), so a shallow checkout
     would compute a spec_sha that always matches HEAD and pass approval
@@ -131,7 +132,7 @@ def test_approve_refuses_shallow_checkout(tmp_path):
     assert approvals(shallow) == []
 
 
-def test_approval_status_refuses_shallow_checkout(tmp_path):
+def test_approval_status_refuses_shallow_checkout(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "valid")
     assert run_attavo(root, "spec-gate", "1").returncode == 0
     assert run_attavo(root, "approve", "1", "--by", "alice").returncode == 0

@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from attavo.common import MANIFEST, read_manifest
 from attavo.records import parse_attempts, stage_schema
+from attavo.types import CounselRecord, Stop
 
 # --- stop: every non-pass build or verify record's class and cause (issue
 # #89) -- derived here, at write time, from the refusal, halted, and log
@@ -107,9 +109,9 @@ def _carries_a_known_class(text: str | None) -> str | None:
     return None
 
 
-def derive_stop(status: str, *, refusal: str | None = None, halted: dict | None = None,
+def derive_stop(status: str, *, refusal: str | None = None, halted: dict[str, Any] | None = None,
                 log: str | None = None, report_class: str | None = None,
-                refusal_provenance: str | None = None) -> dict | None:
+                refusal_provenance: str | None = None) -> Stop | None:
     """The stop field for a build or verify record: None for status "pass",
     else {class, provenance, detail} from what the caller already knows.
 
@@ -183,7 +185,7 @@ def derive_stop(status: str, *, refusal: str | None = None, halted: dict | None 
     return {"class": "unclassed", "provenance": "product", "detail": _log_last_line(log)}
 
 
-def gate_stop(refusal: str | None) -> dict:
+def gate_stop(refusal: str | None) -> Stop:
     """The stop for a refused spec-gate record: class "gate", provenance
     "spec", the refusal string itself as cause (issue #137) -- not
     derive_stop's generic claims-boundary/spec fallback issue #133
@@ -199,7 +201,7 @@ def gate_stop(refusal: str | None) -> dict:
 # --- stops: every non-pass record by class, provenance, and answerer
 # (issue #129) ---
 
-def item_stops(root: Path, m: dict, item_id: str) -> dict:
+def item_stops(root: Path, m: dict[str, Any], item_id: str) -> dict[str, Any]:
     """{"item", "rows", "totals"}: one row per non-pass build or verify
     record (STOP_STAGES), plus every refused spec-gate record (issue
     #133), class "gate" (issue #137) -- read from status and refusal
@@ -222,9 +224,9 @@ def item_stops(root: Path, m: dict, item_id: str) -> dict:
     by_class = {c: 0 for c in stop_class_enum()}
     by_answerer: dict[str, int] = {}
     before_stop_was_recorded = 0
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
 
-    def add_row(stage: str, n: int, stop: dict | None) -> None:
+    def add_row(stage: str, n: int, stop: Stop | None) -> None:
         nonlocal before_stop_was_recorded
         name = f"{stage}-{n:02d}"
         marker = item_records_dir / f"{name}.filed"
@@ -340,7 +342,7 @@ def stop_class_enum() -> tuple[str, ...]:
 STOP_STAGES = ("build", "verify")
 
 
-def counsel_record_for(item_records_dir: Path, stage: str, n: int) -> dict | None:
+def counsel_record_for(item_records_dir: Path, stage: str, n: int) -> CounselRecord | None:
     """The latest counsel-NN.json (issue #100) whose own "record" field
     names f"{stage}-{n:02d}" -- the counsel invocation, if any, that read
     this exact stage record -- or None when counsel never ran against it

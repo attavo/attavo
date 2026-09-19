@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 from attavo.approval import approval_status
 from attavo.common import (
@@ -30,7 +31,7 @@ from attavo.stops import _log_last_line, derive_stop
 STAGE_NAMES = ("build", "verify", "counsel")
 
 
-def merge_adapter_config(m: dict, adapter_name: str, stage: str) -> dict:
+def merge_adapter_config(m: dict[str, Any], adapter_name: str, stage: str) -> dict[str, Any]:
     """[executor.<adapter>] merged with [executor.<adapter>.<stage>], the
     stage table shadowing the parent for that stage only. Both build and
     verify call this before setting ATTAVO_ADAPTER_CONFIG, and the
@@ -70,7 +71,8 @@ def adapter_reports(adapter_path: Path) -> list[str]:
         manifest = json.loads(manifest_path.read_text())
     except json.JSONDecodeError:
         return []
-    return manifest.get("reports", [])
+    reports: list[str] = manifest.get("reports", [])
+    return reports
 
 
 def changed_paths(root: Path, start_sha: str, records_rel: str) -> list[str]:
@@ -111,7 +113,7 @@ def protected_path_touched(root: Path, start_sha: str, records_rel: str,
     return None
 
 
-def executor_identity(adapter_name: str) -> dict:
+def executor_identity(adapter_name: str) -> dict[str, Any]:
     """The executor's identity (issue #33): set by the product, never the
     tenant's git config, so an executor commit is never indistinguishable
     from an operator's own -- the specimen is attavo/code-factory@e22fa85.
@@ -123,7 +125,7 @@ def executor_identity(adapter_name: str) -> dict:
             "email": f"executor+{adapter_name}@attavo.invalid"}
 
 
-def driver_identity() -> dict:
+def driver_identity() -> dict[str, Any]:
     """The driver's identity: set by the product, never the tenant's git
     config, so a driver's own transport commit -- a record commit
     `commit_record` makes on the driver's behalf -- is never
@@ -134,7 +136,7 @@ def driver_identity() -> dict:
     return {"name": "attavo driver", "email": "driver@attavo.invalid"}
 
 
-def commits_since(root: Path, start_sha: str, end: str = "HEAD") -> list[dict]:
+def commits_since(root: Path, start_sha: str, end: str = "HEAD") -> list[dict[str, Any]]:
     """(sha, name, email) for every commit after start_sha up to and
     including end, first-parent only, oldest first. cmd_build's own call
     (start_sha at the invocation, end left at the default HEAD) never sees
@@ -153,7 +155,7 @@ def commits_since(root: Path, start_sha: str, end: str = "HEAD") -> list[dict]:
     return commits
 
 
-def commits_with_diffs(root: Path, start_sha: str, end: str = "HEAD") -> list[dict]:
+def commits_with_diffs(root: Path, start_sha: str, end: str = "HEAD") -> list[dict[str, Any]]:
     """commits_since's own (sha, name, email), each with its own
     first-parent diff already attached as "touched" -- one process for the
     whole range rather than commits_since's list plus a git diff per
@@ -169,7 +171,7 @@ def commits_with_diffs(root: Path, start_sha: str, end: str = "HEAD") -> list[di
     return commits
 
 
-def split_adapter_stdout(stdout: str) -> tuple[str, dict | None]:
+def split_adapter_stdout(stdout: str) -> tuple[str, dict[str, Any] | None]:
     """(transcript, payload): the adapter's last non-empty stdout line is
     its JSON report, and everything before it is transcript, only when
     that last line actually parses as JSON. When it does not -- a tool's
@@ -301,9 +303,9 @@ def cmd_build(argv: list[str]) -> int:
     tokens = {"input": 0, "output": 0}
     cost_usd = None
     transcripts: list[str] = []
-    criteria_results: list[dict] = []
-    selected_tests: dict | None = None
-    checks_result: dict | None = None
+    criteria_results: list[dict[str, Any]] = []
+    selected_tests: dict[str, Any] | None = None
+    checks_result: dict[str, Any] | None = None
     status_out = "failed"
     refusal = None
     refusal_provenance = None

@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from helpers import FIXTURES, commit_all, init_repo, make_tenant
 
@@ -21,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
 
 
-def run_doctor(root: Path) -> dict:
+def run_doctor(root: Path) -> dict[str, Any]:
     out = subprocess.run([sys.executable, str(ATTAVO), "doctor", str(root), "--json"],
                          capture_output=True, text=True, check=False)
     report = json.loads(out.stdout)
@@ -29,7 +30,7 @@ def run_doctor(root: Path) -> dict:
     return {p["proof"]: p for p in report["proofs"]}
 
 
-def test_every_gate_rejects():
+def test_every_gate_rejects() -> None:
     """Proof 1. Every gate in the manifest rejects its rejection fixture.
 
     Holds when: a manifest exists, [gates] names at least one gate, each gate
@@ -39,28 +40,28 @@ def test_every_gate_rejects():
     assert p["holds"], p["reason"]
 
 
-def test_one_item_traversed_every_stage():
+def test_one_item_traversed_every_stage() -> None:
     """Proof 2. One work item carries a record for spec, approval, build,
     verify, and attestation, every one written by a script."""
     p = run_doctor(ROOT)["one-item-every-stage"]
     assert p["holds"], p["reason"]
 
 
-def test_no_commit_lacks_a_record():
+def test_no_commit_lacks_a_record() -> None:
     """Proof 3. Every commit on the default branch after the manifest was
     introduced is named by a record's sha or commits list."""
     p = run_doctor(ROOT)["no-commit-lacks-record"]
     assert p["holds"], p["reason"]
 
 
-def test_no_stop_lacks_cause():
+def test_no_stop_lacks_cause() -> None:
     """Proof 4, issue #94. Every non-pass build or verify record at
     record_version 3 or later carries a stop naming its class and cause."""
     p = run_doctor(ROOT)["no-stop-lacks-cause"]
     assert p["holds"], p["reason"]
 
 
-def test_no_invocation_lacks_record():
+def test_no_invocation_lacks_record() -> None:
     """Proof 5, issue #151. Every <stage>-NN.started marker under
     paths.records has arrived at its own <stage>-NN.json, or is still a
     live process on this host."""
@@ -68,7 +69,7 @@ def test_no_invocation_lacks_record():
     assert p["holds"], p["reason"]
 
 
-def test_every_attested_item_is_sealed():
+def test_every_attested_item_is_sealed() -> None:
     """Proof 5, issue #158. Every merged, fully-staged item has a
     statement in the forge's attestation store for its merge commit --
     #106, #148, #153 predate [forge].sealed_since and are named before the
@@ -77,7 +78,7 @@ def test_every_attested_item_is_sealed():
     assert p["holds"], p["reason"]
 
 
-def test_record_loader_uses_highest_attempt_number(tmp_path):
+def test_record_loader_uses_highest_attempt_number(tmp_path: Path) -> None:
     """Acceptance 2a. <stage>-NN.json files are one stage's attempts; the
     doctor treats the highest NN as latest, and STAGES is unchanged.
 
@@ -105,7 +106,7 @@ def test_record_loader_uses_highest_attempt_number(tmp_path):
     assert p["holds"], p["reason"]
 
 
-def test_doctor_proof_two_counts_three_of_four_stages_still_red(tmp_path):
+def test_doctor_proof_two_counts_three_of_four_stages_still_red(tmp_path: Path) -> None:
     """Acceptance 8. A work item carrying spec, approval, and build records
     is three of the four STAGES proof two names; verify doesn't exist
     yet, so the proof stays red and names exactly that one as lacking.
@@ -128,7 +129,7 @@ def test_doctor_proof_two_counts_three_of_four_stages_still_red(tmp_path):
     assert "build" not in p["reason"]
 
 
-def test_doctor_proof_two_holds_on_a_fixture_carrying_all_four_stages_merged(tmp_path):
+def test_doctor_proof_two_holds_on_a_fixture_carrying_all_four_stages_merged(tmp_path: Path) -> None:
     """Acceptance row 4, issue #69: attestation is retired as a record
     type -- STAGES is four stages, not five -- and proof two now also
     requires the four records to have reached HEAD by an actual merge
@@ -157,7 +158,7 @@ def test_doctor_proof_two_holds_on_a_fixture_carrying_all_four_stages_merged(tmp
     assert p["holds"], p["reason"]
 
 
-def test_doctor_proof_two_fails_when_four_stage_records_are_never_merged(tmp_path):
+def test_doctor_proof_two_fails_when_four_stage_records_are_never_merged(tmp_path: Path) -> None:
     """Acceptance row 4's other half, issue #69: the same four records,
     committed straight to main with no merge at all -- proof two fails,
     naming the missing merge rather than a lacking stage."""
@@ -179,7 +180,7 @@ def test_doctor_proof_two_fails_when_four_stage_records_are_never_merged(tmp_pat
     assert "merge" in p["reason"]
 
 
-def test_proof_two_fails_naming_the_item_and_refusal_text_on_approval_sha_mismatch(tmp_path):
+def test_proof_two_fails_naming_the_item_and_refusal_text_on_approval_sha_mismatch(tmp_path: Path) -> None:
     """Acceptance row 1, issue #74. build-01's approval_sha does not name
     the latest approval's sha -- attavo attest would refuse exactly this
     chain, and from v0.11.0 the coherence gate refuses the merge group on
@@ -210,7 +211,7 @@ def test_proof_two_fails_naming_the_item_and_refusal_text_on_approval_sha_mismat
     assert "approval_sha does not name the latest approval" in p["reason"]
 
 
-def test_proof_two_fails_naming_the_item_and_the_superseded_verify(tmp_path):
+def test_proof_two_fails_naming_the_item_and_the_superseded_verify(tmp_path: Path) -> None:
     """Acceptance row 5, issue #109. verify-01's build_sha does not name
     the latest build's sha, so verify-01 is superseded by that later
     build, not a mismatch -- proof two fails, naming it, with the new
@@ -241,7 +242,7 @@ def test_proof_two_fails_naming_the_item_and_the_superseded_verify(tmp_path):
     assert "verify's build_sha does not name the latest build" not in p["reason"]
 
 
-def test_proof_two_holds_naming_only_the_held_item_when_another_is_refused(tmp_path):
+def test_proof_two_holds_naming_only_the_held_item_when_another_is_refused(tmp_path: Path) -> None:
     """Acceptance row 3, issue #74. Item 1 carries every stage but a
     stale approval_sha; item 2's chain holds cleanly. Proof two holds,
     naming only item 2 -- item 1's refusal never leaks into a passing
@@ -286,7 +287,7 @@ def test_proof_two_holds_naming_only_the_held_item_when_another_is_refused(tmp_p
         f"merged at {merge2_sha[:12]}")
 
 
-def test_proof_three_holds_on_an_item_merge_with_no_attestation_record(tmp_path):
+def test_proof_three_holds_on_an_item_merge_with_no_attestation_record(tmp_path: Path) -> None:
     """Acceptance row 5, issue #69: an item's merge commit carries its
     record paths in its own first-parent diff, so it is a record commit
     by the rule that already exists -- no merge_sha field is needed, and
@@ -358,7 +359,7 @@ def _three_way_fixture(tmp_path: Path, name: str, *, boundary_paths: list[str] |
     return root
 
 
-def test_proof_three_fails_naming_the_direct_commit_with_the_three_counts(tmp_path):
+def test_proof_three_fails_naming_the_direct_commit_with_the_three_counts(tmp_path: Path) -> None:
     """Acceptance row 1, issue #72. The three-way fixture with its direct
     commit included: proof three fails, naming the direct commit and
     reporting all three counts in the reason."""
@@ -373,7 +374,7 @@ def test_proof_three_fails_naming_the_direct_commit_with_the_three_counts(tmp_pa
     assert direct_sha[:12] in p["reason"]
 
 
-def test_proof_three_holds_with_zero_unrecorded_once_the_direct_commit_is_gone(tmp_path):
+def test_proof_three_holds_with_zero_unrecorded_once_the_direct_commit_is_gone(tmp_path: Path) -> None:
     """Acceptance row 2, issue #72. The same fixture with the direct commit
     removed: proof three holds, reporting `0 unrecorded`."""
     root = _three_way_fixture(tmp_path, "no_direct_commit", boundary_paths=["boundary/**"],
@@ -384,7 +385,7 @@ def test_proof_three_holds_with_zero_unrecorded_once_the_direct_commit_is_gone(t
     assert "1 recorded, 1 ordinary, 0 unrecorded" in p["reason"]
 
 
-def test_proof_three_reports_boundary_evasions_and_still_holds(tmp_path):
+def test_proof_three_reports_boundary_evasions_and_still_holds(tmp_path: Path) -> None:
     """Acceptance row 3, issue #72. The ordinary merge touches a path
     inside [spec.boundary].paths: the reason carries `boundary evasions:
     1`, and the proof still holds -- evasions are reported, never
@@ -397,7 +398,7 @@ def test_proof_three_reports_boundary_evasions_and_still_holds(tmp_path):
     assert "boundary evasions: 1" in p["reason"]
 
 
-def test_proof_three_reports_boundary_evasions_as_not_available_with_no_boundary_paths(tmp_path):
+def test_proof_three_reports_boundary_evasions_as_not_available_with_no_boundary_paths(tmp_path: Path) -> None:
     """Acceptance row 4, issue #72. A tenant declaring no [spec.boundary]
     paths at all: evasions are reported as `n/a`, not `0` -- an absent
     read is not the same measurement as zero evasions found."""
@@ -410,7 +411,7 @@ def test_proof_three_reports_boundary_evasions_as_not_available_with_no_boundary
     assert p["boundary_evasions"] == "n/a"
 
 
-def test_proof_three_json_carries_the_path_ratio_fields(tmp_path):
+def test_proof_three_json_carries_the_path_ratio_fields(tmp_path: Path) -> None:
     """Acceptance row 5, issue #72. `attavo doctor --json` carries
     `recorded`, `ordinary`, `unrecorded`, and `boundary_evasions` on
     proof three's own entry -- the path-ratio primitive Phase 4 names,
@@ -425,7 +426,7 @@ def test_proof_three_json_carries_the_path_ratio_fields(tmp_path):
     assert p["boundary_evasions"] == 0
 
 
-def test_proof_three_json_lists_the_ordinary_and_unrecorded_commits(tmp_path):
+def test_proof_three_json_lists_the_ordinary_and_unrecorded_commits(tmp_path: Path) -> None:
     """Issue #148. Proof three's JSON entry carries `ordinary_commits` and
     `unrecorded_commits`, each commit with sha and subject, so a reader
     can name the commits behind the counts without re-running the
@@ -491,7 +492,7 @@ def _declare_doctor_from(root: Path, from_sha: str) -> None:
                     "Merge branch 'declare-window'", "declare-window"], check=True)
 
 
-def test_proof_three_holds_reporting_before_the_window_with_doctor_from(tmp_path):
+def test_proof_three_holds_reporting_before_the_window_with_doctor_from(tmp_path: Path) -> None:
     """Acceptance row 4, issue #74. [doctor] from names the item merge:
     the two commits made straight to main before it fall before the
     window, not into unrecorded -- proof three holds, `before the
@@ -507,7 +508,7 @@ def test_proof_three_holds_reporting_before_the_window_with_doctor_from(tmp_path
     assert p["before_window"] == 2
 
 
-def test_proof_three_holds_when_doctor_from_names_a_seven_character_prefix(tmp_path):
+def test_proof_three_holds_when_doctor_from_names_a_seven_character_prefix(tmp_path: Path) -> None:
     """Acceptance row 5 (amendment), issue #74. [doctor] from need not be
     a full sha -- any spelling git rev-parse --verify resolves is
     accepted, resolved before the first-parent check runs. A
@@ -523,7 +524,7 @@ def test_proof_three_holds_when_doctor_from_names_a_seven_character_prefix(tmp_p
     assert p["before_window"] == 2
 
 
-def test_proof_three_fails_naming_the_key_when_doctor_from_is_off_the_first_parent_line(tmp_path):
+def test_proof_three_fails_naming_the_key_when_doctor_from_is_off_the_first_parent_line(tmp_path: Path) -> None:
     """Acceptance row 5, issue #74. [doctor] from names the item branch's
     own commit -- reachable only as a merge's second parent, never on
     main's first-parent line -- proof three fails naming the key rather
@@ -537,7 +538,7 @@ def test_proof_three_fails_naming_the_key_when_doctor_from_is_off_the_first_pare
     assert branch_sha[:12] in p["reason"]
 
 
-def test_proof_three_defaults_to_the_install_commit_when_doctor_key_is_absent(tmp_path):
+def test_proof_three_defaults_to_the_install_commit_when_doctor_key_is_absent(tmp_path: Path) -> None:
     """Acceptance row 6, issue #74. No [doctor] table at all: the window
     defaults to the install commit exactly as before this issue -- both
     commits made straight to main are still read as unrecorded, and
@@ -552,7 +553,7 @@ def test_proof_three_defaults_to_the_install_commit_when_doctor_key_is_absent(tm
     assert p["before_window"] == 0
 
 
-def test_doctor_proof_one_refuses_a_gate_with_empty_retires(tmp_path):
+def test_doctor_proof_one_refuses_a_gate_with_empty_retires(tmp_path: Path) -> None:
     """Residual, issue #54 -- proposed, not yet ruled on: a gate that
     retires nothing only adds. The manifest schema has required
     [gates.<name>].retires to be non-empty since Phase 1, but read_manifest
@@ -571,7 +572,7 @@ def test_doctor_proof_one_refuses_a_gate_with_empty_retires(tmp_path):
     assert "retires" in p["reason"] and "spec" in p["reason"]
 
 
-def test_doctor_proof_one_runs_the_gate_without_an_item_argument(tmp_path):
+def test_doctor_proof_one_runs_the_gate_without_an_item_argument(tmp_path: Path) -> None:
     """Issue #7, and its regression test. [gates.spec].command is a bare
     `attavo spec-gate`, no item argument, and its rejections/spec/ fixture
     carries no attavo/N-* branch at all (init_repo leaves it on `main`) --
@@ -600,7 +601,7 @@ def test_doctor_proof_one_runs_the_gate_without_an_item_argument(tmp_path):
     assert record["refusal"] == "criterion is prose: missing.sh"
 
 
-def test_doctor_proof_four_fails_on_a_failed_record_with_no_stop(tmp_path):
+def test_doctor_proof_four_fails_on_a_failed_record_with_no_stop(tmp_path: Path) -> None:
     """Acceptance row 1, issue #94: a failed build record at
     record_version 3 with a two-line log and no stop at all -- a stop
     the product forgot to write, the way tenant zero's #576 build-11
@@ -614,7 +615,7 @@ def test_doctor_proof_four_fails_on_a_failed_record_with_no_stop(tmp_path):
     assert "no stop" in p["reason"]
 
 
-def test_doctor_proof_four_holds_on_a_fixture_with_stop_and_gates_heading(tmp_path):
+def test_doctor_proof_four_holds_on_a_fixture_with_stop_and_gates_heading(tmp_path: Path) -> None:
     """Acceptance row 2, issue #94: a failed build record whose stop is
     present and valid, and whose log carries the gates heading since
     gates actually ran (selected_tests is set) -- proof four holds."""
@@ -639,7 +640,7 @@ def test_doctor_proof_four_holds_on_a_fixture_with_stop_and_gates_heading(tmp_pa
     assert p["holds"], p["reason"]
 
 
-def test_doctor_proof_four_reports_older_records_mixing_versions_2_and_3(tmp_path):
+def test_doctor_proof_four_reports_older_records_mixing_versions_2_and_3(tmp_path: Path) -> None:
     """Acceptance row 3, issue #94: a record_version 2 record predates
     stop by construction (proof three's own window lesson) and is
     counted, never refused; a record_version 3 record alongside it is
@@ -663,7 +664,7 @@ def test_doctor_proof_four_reports_older_records_mixing_versions_2_and_3(tmp_pat
     assert p["older_records"] == 1
 
 
-def test_doctor_proof_four_holds_with_no_non_pass_records_to_check(tmp_path):
+def test_doctor_proof_four_holds_with_no_non_pass_records_to_check(tmp_path: Path) -> None:
     """A tenant found on a real v0.16.3 pin: no non-pass build or verify
     record at record_version 3 or later exists to check -- every item
     passed. The clause is "every failed or refused record carries its
@@ -689,7 +690,7 @@ def test_doctor_proof_four_holds_with_no_non_pass_records_to_check(tmp_path):
     assert p["older_records"] == 1
 
 
-def test_doctor_proof_four_fails_when_gates_ran_but_the_log_lacks_their_heading(tmp_path):
+def test_doctor_proof_four_fails_when_gates_ran_but_the_log_lacks_their_heading(tmp_path: Path) -> None:
     """Issue #94's own proposed fix: a failed build whose selected_tests
     is set -- gates definitely ran that iteration -- but whose log
     carries no gates heading at all. Tenant zero's #659 build-01 was
@@ -717,7 +718,7 @@ def test_doctor_proof_four_fails_when_gates_ran_but_the_log_lacks_their_heading(
 
 
 def test_doctor_proof_four_fails_when_a_log_ends_in_an_adapter_exit_after_only_event_lines(
-        tmp_path):
+        tmp_path: Path) -> None:
     """Issue #94's own proposed fix, tenant zero's #659 verify-01
     specimen: a log whose last line is a bare adapter-exit marker with
     nothing before it but the adapter's own JSON event stream -- the
@@ -744,7 +745,7 @@ def test_doctor_proof_four_fails_when_a_log_ends_in_an_adapter_exit_after_only_e
     assert "tool's own error line is owed" in p["reason"]
 
 
-def test_doctor_proof_four_fails_on_an_unclassed_stop_with_no_detail(tmp_path):
+def test_doctor_proof_four_fails_on_an_unclassed_stop_with_no_detail(tmp_path: Path) -> None:
     """An unclassed stop's whole contract is its detail (issue #89):
     with none, the record is exactly as unexplained as no stop at all."""
     root = tmp_path / "unclassed_no_detail"
@@ -772,7 +773,7 @@ def _dead_pid() -> int:
     return proc.pid
 
 
-def test_doctor_proof_five_fails_on_a_dead_invocation_with_no_record(tmp_path):
+def test_doctor_proof_five_fails_on_a_dead_invocation_with_no_record(tmp_path: Path) -> None:
     """Issue #151: a build-01.started marker naming a dead pid on this
     host, with no build-01.json to retire it, is exactly the silence two
     build attempts of item #148 left behind -- proof five names it."""
@@ -794,7 +795,7 @@ def test_doctor_proof_five_fails_on_a_dead_invocation_with_no_record(tmp_path):
     assert "build-01" in p["reason"] and "never wrote its record" in p["reason"]
 
 
-def test_doctor_proof_five_holds_once_the_record_arrives(tmp_path):
+def test_doctor_proof_five_holds_once_the_record_arrives(tmp_path: Path) -> None:
     """The same marker, retired by its own build-01.json: proof five
     holds -- the record's arrival is what retires a marker, not its
     removal."""
@@ -816,7 +817,7 @@ def test_doctor_proof_five_holds_once_the_record_arrives(tmp_path):
     assert p["holds"], p["reason"]
 
 
-def test_doctor_proof_five_reports_a_live_invocation_as_running_not_failed(tmp_path):
+def test_doctor_proof_five_reports_a_live_invocation_as_running_not_failed(tmp_path: Path) -> None:
     """A marker naming this test's own pid, on this host, with no
     record: alive, so proof five holds and names it running rather than
     failing the tenant for a drive that has not had the chance to finish
@@ -840,7 +841,7 @@ def test_doctor_proof_five_reports_a_live_invocation_as_running_not_failed(tmp_p
     assert "build-01" in p["running_invocations"][0]
 
 
-def test_doctor_proof_five_fails_without_stall_after_s_in_the_manifest(tmp_path):
+def test_doctor_proof_five_fails_without_stall_after_s_in_the_manifest(tmp_path: Path) -> None:
     """A tenant with no [drive].stall_after_s carries no bound past which
     a live invocation is hung -- proof five cannot tell a hung drive from
     a running one, and refuses to guess a default."""

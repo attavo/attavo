@@ -6,6 +6,7 @@ import subprocess
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 MANIFEST = "attavo.toml"
 
@@ -21,24 +22,24 @@ class Proof:
         self.title = title
         self.holds = False
         self.reason = ""
-        self.extra: dict = {}
+        self.extra: dict[str, Any] = {}
 
-    def fail(self, reason: str, **extra) -> "Proof":
+    def fail(self, reason: str, **extra: Any) -> "Proof":
         self.holds, self.reason = False, reason
         self.extra.update(extra)
         return self
 
-    def hold(self, reason: str, **extra) -> "Proof":
+    def hold(self, reason: str, **extra: Any) -> "Proof":
         self.holds, self.reason = True, reason
         self.extra.update(extra)
         return self
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, Any]:
         return {"proof": self.key, "title": self.title,
                 "holds": self.holds, "reason": self.reason, **self.extra}
 
 
-def read_manifest(root: Path) -> dict | None:
+def read_manifest(root: Path) -> dict[str, Any] | None:
     path = root / MANIFEST
     if not path.is_file():
         return None
@@ -46,7 +47,7 @@ def read_manifest(root: Path) -> dict | None:
         return tomllib.load(fh)
 
 
-def git(root: Path, *args: str, env: dict | None = None) -> str:
+def git(root: Path, *args: str, env: dict[str, str] | None = None) -> str:
     out = subprocess.run(["git", "-C", str(root), *args],
                          capture_output=True, text=True, check=False, env=env)
     if out.returncode != 0:

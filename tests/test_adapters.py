@@ -82,6 +82,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -91,7 +92,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CLAUDE_CODE_RUN = ROOT / "adapters" / "claude-code" / "run"
 
 
-def base_env(tmp_path: Path) -> dict:
+def base_env(tmp_path: Path) -> dict[str, Any]:
     spec_dir = FIXTURES / "build_valid" / "specs" / "1"
     env = dict(os.environ)
     env.pop("ATTAVO_CHECKS_COMMAND", None)
@@ -106,8 +107,8 @@ def base_env(tmp_path: Path) -> dict:
     return env
 
 
-def dry_run(tmp_path: Path, config: dict | None = None,
-           extra_env: dict | None = None) -> list[str]:
+def dry_run(tmp_path: Path, config: dict[str, Any] | None = None,
+           extra_env: dict[str, Any] | None = None) -> list[str]:
     env = base_env(tmp_path)
     env["ATTAVO_ADAPTER_DRY_RUN"] = "1"
     env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(config or {})
@@ -117,11 +118,11 @@ def dry_run(tmp_path: Path, config: dict | None = None,
     run = subprocess.run([str(CLAUDE_CODE_RUN)], capture_output=True, text=True,
                          check=False, env=env)
     assert run.returncode == 0, run.stderr
-    return json.loads(run.stdout)["argv"]
+    return cast(list[str], json.loads(run.stdout)["argv"])
 
 
-def run_with_response(tmp_path: Path, response: dict | list[dict],
-                      extra_env: dict | None = None) -> subprocess.CompletedProcess:
+def run_with_response(tmp_path: Path, response: dict[str, Any] | list[dict[str, Any]],
+                      extra_env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     """response is a single canned result (repeats for every invocation
     this adapter makes) or a list, one result per invocation in order,
     its last element repeating once exhausted (issue #88: the
@@ -136,7 +137,7 @@ def run_with_response(tmp_path: Path, response: dict | list[dict],
                           check=False, env=env)
 
 
-def test_claude_code_api_mode_is_default(tmp_path):
+def test_claude_code_api_mode_is_default(tmp_path: Path) -> None:
     """Acceptance 3. With no [executor.claude-code] table at all, the
     command line is unchanged from v0.3.0, apart from issue #78's
     --settings and its narrowed --allowedTools."""
@@ -153,7 +154,7 @@ def test_claude_code_api_mode_is_default(tmp_path):
     assert "--strict-mcp-config" not in cmd
 
 
-def test_claude_code_subscription_mode(tmp_path):
+def test_claude_code_subscription_mode(tmp_path: Path) -> None:
     """Acceptance 2. auth = "subscription": no --bare, and both
     --setting-sources user and --strict-mcp-config so the tenant's own
     project hooks and MCP servers do not load -- CLAUDE.md still does.
@@ -167,7 +168,7 @@ def test_claude_code_subscription_mode(tmp_path):
     assert "--strict-mcp-config" in cmd
 
 
-def test_claude_code_build_sandbox_settings(tmp_path):
+def test_claude_code_build_sandbox_settings(tmp_path: Path) -> None:
     """Issue #78, rejection test 2. --settings carries a sandbox object
     with the sandbox enabled and the unsandboxed fallback forbidden;
     --allowedTools names only the tool families the sandbox does not
@@ -187,7 +188,7 @@ def test_claude_code_build_sandbox_settings(tmp_path):
     assert not any(t.startswith("Bash(") for t in allowed_tools.split(","))
 
 
-def test_claude_code_verify_sandbox_settings(tmp_path):
+def test_claude_code_verify_sandbox_settings(tmp_path: Path) -> None:
     """Issue #78, rejection test 3. verify's --settings additionally
     denies writes to the working directory itself -- mechanically
     read-only, not just instructed to be -- and --allowedTools omits
@@ -204,7 +205,7 @@ def test_claude_code_verify_sandbox_settings(tmp_path):
     assert cmd[cmd.index("--allowedTools") + 1] == "Read,Bash"
 
 
-def test_claude_code_refuses_the_retired_allowed_tools_key(tmp_path):
+def test_claude_code_refuses_the_retired_allowed_tools_key(tmp_path: Path) -> None:
     """Issue #78, rejection test 4. allowed_tools is retired, not
     ignored: a manifest that still declares
     [executor.claude-code].allowed_tools is refused by name rather than
@@ -218,7 +219,7 @@ def test_claude_code_refuses_the_retired_allowed_tools_key(tmp_path):
     assert "allowed_tools" in run.stderr
 
 
-def test_claude_code_model_from_config(tmp_path):
+def test_claude_code_model_from_config(tmp_path: Path) -> None:
     """Acceptance 4. model in the table appears as --model; the retired
     ATTAVO_MODEL, even if still set in the environment, is ignored."""
     cmd = dry_run(tmp_path, config={"model": "claude-sonnet-5"},
@@ -229,7 +230,7 @@ def test_claude_code_model_from_config(tmp_path):
     assert "should-be-ignored" not in cmd
 
 
-def test_claude_code_names_the_tenants_checks(tmp_path):
+def test_claude_code_names_the_tenants_checks(tmp_path: Path) -> None:
     """Issue #30, acceptance 5, reworded by issue #36. The instruction
     must not tell the executor to run the check itself. Regression:
     build-10 on tenant zero, where "must exit 0 before you commit" made
@@ -253,7 +254,7 @@ def test_claude_code_names_the_tenants_checks(tmp_path):
     assert "are run for you" not in instruction_without
 
 
-def test_claude_code_adapter_derives_model_from_usage_breakdown(tmp_path):
+def test_claude_code_adapter_derives_model_from_usage_breakdown(tmp_path: Path) -> None:
     """The real response shape: no top-level "model", one modelUsage key."""
     response = {
         "is_error": False,
@@ -270,7 +271,7 @@ def test_claude_code_adapter_derives_model_from_usage_breakdown(tmp_path):
     assert line["model"] == "claude-sonnet-5"
 
 
-def test_claude_code_adapter_derives_model_from_dominant_usage_key(tmp_path):
+def test_claude_code_adapter_derives_model_from_dominant_usage_key(tmp_path: Path) -> None:
     """Several modelUsage keys (a lightweight helper model alongside the
     primary one): the key with the most total tokens wins."""
     response = {
@@ -289,7 +290,7 @@ def test_claude_code_adapter_derives_model_from_dominant_usage_key(tmp_path):
     assert line["model"] == "claude-haiku-4-5-20251001"
 
 
-def test_claude_code_adapter_fails_without_a_model_id(tmp_path):
+def test_claude_code_adapter_fails_without_a_model_id(tmp_path: Path) -> None:
     """No top-level "model" and empty modelUsage: the adapter must fail
     loudly rather than emit an empty model that would let a "pass" record
     through with no identity behind it. The raw result still reaches
@@ -302,7 +303,7 @@ def test_claude_code_adapter_fails_without_a_model_id(tmp_path):
     assert run.stdout == json.dumps(response) + "\n"
 
 
-def test_claude_code_requested_model_wins_over_a_dominant_helper_key(tmp_path):
+def test_claude_code_requested_model_wins_over_a_dominant_helper_key(tmp_path: Path) -> None:
     """Issue #77, rejection test (model requested). Specimen:
     attest/records/649/build-01.json -- a helper model's few thousand
     uncached tokens used to outrank the primary model's hundreds of
@@ -335,7 +336,7 @@ def test_claude_code_requested_model_wins_over_a_dominant_helper_key(tmp_path):
     assert line["model_version"] == "claude-sonnet-5"
 
 
-def test_claude_code_unrequested_model_counts_cached_tokens_too(tmp_path):
+def test_claude_code_unrequested_model_counts_cached_tokens_too(tmp_path: Path) -> None:
     """Issue #77, rejection test (model not requested). The modelUsage
     key wins on inputTokens + cacheReadInputTokens +
     cacheCreationInputTokens + outputTokens, not on inputTokens +
@@ -365,7 +366,7 @@ def test_claude_code_unrequested_model_counts_cached_tokens_too(tmp_path):
     assert line["model_version"] == "claude-sonnet-5"
 
 
-def test_claude_code_requested_model_with_no_matching_usage_key(tmp_path):
+def test_claude_code_requested_model_with_no_matching_usage_key(tmp_path: Path) -> None:
     """Issue #77. A requested model that matches no modelUsage
     canonicalModel still records verbatim as model, with model_version
     left null rather than guessed -- the mismatch is reported on stderr,
@@ -400,7 +401,7 @@ def make_diff(tmp_path: Path, n_files: int, lines_per_file: int) -> Path:
     return diff_path
 
 
-def test_verify_instruction_names_the_diffs_path_not_its_text(tmp_path):
+def test_verify_instruction_names_the_diffs_path_not_its_text(tmp_path: Path) -> None:
     """Issue #86, rejection test 1. Specimen: tenant zero #659, verify-01,
     the codex adapter's own reproduction -- ATTAVO_DIFF inlined in full
     made the invocation's own size track the diff's, and the first item
@@ -421,7 +422,7 @@ def test_verify_instruction_names_the_diffs_path_not_its_text(tmp_path):
     assert "line of a large deletion diff" not in instruction
 
 
-def test_build_instruction_names_the_feedback_files_path_not_its_text(tmp_path):
+def test_build_instruction_names_the_feedback_files_path_not_its_text(tmp_path: Path) -> None:
     """Issue #86, rejection test (build side): the same size-dependence
     applied to a large ATTAVO_FEEDBACK file -- the previous iteration's
     failing criteria, test output, and checks output -- inlined whole.
@@ -439,8 +440,9 @@ def test_build_instruction_names_the_feedback_files_path_not_its_text(tmp_path):
     assert "a failing test line" not in instruction
 
 
-def _response(question=None, status="done", subagent_stats=None,
-             input_tokens=5, output_tokens=9, cost_usd=0.01) -> dict:
+def _response(question: str | None = None, status: str = "done",
+              subagent_stats: Any = None, input_tokens: int = 5,
+              output_tokens: int = 9, cost_usd: float = 0.01) -> dict[str, Any]:
     response = {
         "is_error": False,
         "structured_output": {"status": status, "question": question},
@@ -462,7 +464,7 @@ PROPER_QUESTION = ("Which of the two conflicting rulings on issue #12 "
                   "applies to criterion 3?")
 
 
-def test_claude_code_disallowedtools_names_the_subagent_tools(tmp_path):
+def test_claude_code_disallowedtools_names_the_subagent_tools(tmp_path: Path) -> None:
     """Issue #88, rejection test 3 (part 1). Both build and verify carry
     the subagent tool names in --disallowedTools -- confirmed live
     (claude 2.1.269) that --allowedTools alone does not stop a spawn a
@@ -475,7 +477,7 @@ def test_claude_code_disallowedtools_names_the_subagent_tools(tmp_path):
     assert verify[verify.index("--disallowedTools") + 1] == "Agent,Workflow"
 
 
-def test_claude_code_refuses_a_result_with_spawned_subagents(tmp_path):
+def test_claude_code_refuses_a_result_with_spawned_subagents(tmp_path: Path) -> None:
     """Issue #88, rejection test 3 (part 2). Specimen: tenant zero #659
     build-01 -- subagent_stats.spawned: 3 with two killed at the tool's
     own 600s ceiling, reported as done. A response carrying spawned work
@@ -492,7 +494,7 @@ def test_claude_code_refuses_a_result_with_spawned_subagents(tmp_path):
     assert "killed=2" in run.stderr
 
 
-def test_claude_code_report_without_question_mark_is_reinstructed_once(tmp_path):
+def test_claude_code_report_without_question_mark_is_reinstructed_once(tmp_path: Path) -> None:
     """Issue #88, rejection test 1. A "question" with no "?" is a report,
     not a question (five of tenant zero's twelve non-pass build
     records): the adapter re-invokes once, appending REINSTRUCTION, and
@@ -511,7 +513,7 @@ def test_claude_code_report_without_question_mark_is_reinstructed_once(tmp_path)
     assert "class" not in line
 
 
-def test_claude_code_report_without_question_mark_can_finish_done_on_retry(tmp_path):
+def test_claude_code_report_without_question_mark_can_finish_done_on_retry(tmp_path: Path) -> None:
     """Issue #88, rejection test 1 (done on the retry). REINSTRUCTION
     offers "continue to done" as the other way out of a report; this is
     not itself in the acceptance table but is the plain reading of it.
@@ -525,7 +527,7 @@ def test_claude_code_report_without_question_mark_can_finish_done_on_retry(tmp_p
     assert line["question"] is None
 
 
-def test_claude_code_two_reports_in_a_row_halts_with_class_non_question(tmp_path):
+def test_claude_code_two_reports_in_a_row_halts_with_class_non_question(tmp_path: Path) -> None:
     """Issue #88, rejection test 2. Two non-questions in a row still
     halt -- someone must look -- but the report line names the class so
     a reader can tell it apart from a genuine question, and both raw
@@ -549,7 +551,7 @@ def test_claude_code_two_reports_in_a_row_halts_with_class_non_question(tmp_path
     ("question", REPORT_2),
 ])
 def test_claude_code_retry_sums_tokens_and_cost_across_both_invocations(
-        tmp_path, second_status, second_question):
+        tmp_path: Path, second_status: str, second_question: str) -> None:
     """A non-question costs two executor turns, not one -- the report
     line must sum both, whatever the retry's own outcome (done, a
     proper question, or a second report), or the cost row a person reads
@@ -572,7 +574,7 @@ def test_claude_code_retry_sums_tokens_and_cost_across_both_invocations(
     assert line["cost_usd"] == pytest.approx(0.01 + 0.02)
 
 
-def test_claude_code_tokens_input_includes_cached_tokens(tmp_path):
+def test_claude_code_tokens_input_includes_cached_tokens(tmp_path: Path) -> None:
     """Issue #77, rejection test. usage.input_tokens alone undercounts a
     cache-heavy iteration by orders of magnitude (specimen:
     attest/records/649/build-01.json, tokens.input: 88 against 3.1
@@ -595,7 +597,7 @@ def test_claude_code_tokens_input_includes_cached_tokens(tmp_path):
     assert line["tokens"]["input"] == 16 + 100 + 5
 
 
-def test_claude_code_ceiling_refuses_an_oversized_instruction(tmp_path):
+def test_claude_code_ceiling_refuses_an_oversized_instruction(tmp_path: Path) -> None:
     """Issue #93, rejection test 2. claude code publishes no input-size
     ceiling of its own (conformance.json's input_limit is null with a
     reason), so this adapter asserts its own instruction stays under a
@@ -618,7 +620,7 @@ def test_claude_code_ceiling_refuses_an_oversized_instruction(tmp_path):
     assert any(n > 10 for n in numbers), "both numbers (limit and size) must appear"
 
 
-def test_claude_code_ceiling_refuses_before_invoking_claude(tmp_path):
+def test_claude_code_ceiling_refuses_before_invoking_claude(tmp_path: Path) -> None:
     """Issue #93, rejection test 2 (invokes nothing). A fake claude on
     PATH would leave a sentinel file if it ran; the ceiling refusal
     happens before the adapter ever shells out."""
@@ -639,7 +641,7 @@ def test_claude_code_ceiling_refuses_before_invoking_claude(tmp_path):
     assert not sentinel.exists(), "claude must never be invoked over the ceiling"
 
 
-def test_claude_code_ceiling_at_the_real_fixed_bound_with_no_override(tmp_path):
+def test_claude_code_ceiling_at_the_real_fixed_bound_with_no_override(tmp_path: Path) -> None:
     """The real 64 KB bound, with no test override: a rulings.md over it
     (rulings are inlined in full, unlike the diff and feedback files
     issue #86 already bounded) makes the instruction exceed it."""
@@ -655,7 +657,7 @@ def test_claude_code_ceiling_at_the_real_fixed_bound_with_no_override(tmp_path):
     assert "65536" in run.stderr
 
 
-def test_claude_code_verify_instruction_states_what_a_stub_is(tmp_path):
+def test_claude_code_verify_instruction_states_what_a_stub_is(tmp_path: Path) -> None:
     """Issue #90 (closed by #93). ATTAVO_SPEC_DIR's own spec, fixtures'
     build_valid/specs/1, carries a stub/ -- the instruction now names its
     path beside a sentence saying it is the fixture the criteria were
@@ -670,7 +672,7 @@ def test_claude_code_verify_instruction_states_what_a_stub_is(tmp_path):
     assert "not a finding" in instruction
 
 
-def test_claude_code_build_instruction_says_nothing_about_the_stub(tmp_path):
+def test_claude_code_build_instruction_says_nothing_about_the_stub(tmp_path: Path) -> None:
     """The stub sentence is verify's objective, not build's -- a spec
     carrying a stub/ must not change the build instruction at all."""
     cmd = dry_run(tmp_path)
@@ -678,7 +680,7 @@ def test_claude_code_build_instruction_says_nothing_about_the_stub(tmp_path):
     assert "is not the intended change" not in instruction
 
 
-def counsel_extra_env(tmp_path: Path) -> dict:
+def counsel_extra_env(tmp_path: Path) -> dict[str, Any]:
     """Issue #100: the record, its log, the diff, the tenant manifest,
     and this product's own root, all handed by path."""
     record_path = tmp_path / "build-01.json"
@@ -699,7 +701,7 @@ def counsel_extra_env(tmp_path: Path) -> dict:
     }
 
 
-def test_claude_code_counsel_sandbox_is_read_only(tmp_path):
+def test_claude_code_counsel_sandbox_is_read_only(tmp_path: Path) -> None:
     """Issue #100, acceptance row 4. counsel's command line runs under
     the same read-only sandbox as verify: writes to the working directory
     are denied, the network stays closed, and --allowedTools omits Edit
@@ -714,7 +716,7 @@ def test_claude_code_counsel_sandbox_is_read_only(tmp_path):
     assert cmd[cmd.index("--disallowedTools") + 1] == "Agent,Workflow"
 
 
-def test_claude_code_counsel_names_the_product_root_and_the_record(tmp_path):
+def test_claude_code_counsel_names_the_product_root_and_the_record(tmp_path: Path) -> None:
     """Issue #100, acceptance row 4. The instruction names this product's
     own root and the record path -- both handed by path, not inlined."""
     extra = counsel_extra_env(tmp_path)
@@ -726,14 +728,14 @@ def test_claude_code_counsel_names_the_product_root_and_the_record(tmp_path):
     assert "bin/attavo" in instruction
 
 
-def test_claude_code_counsel_schema_requires_the_structured_answer(tmp_path):
+def test_claude_code_counsel_schema_requires_the_structured_answer(tmp_path: Path) -> None:
     cmd = dry_run(tmp_path, extra_env=counsel_extra_env(tmp_path))
     schema_json = cmd[cmd.index("--json-schema") + 1]
     schema = json.loads(schema_json)
     assert set(schema["required"]) == {"class", "verdict", "citations", "proposal"}
 
 
-def test_claude_code_counsel_instruction_stays_under_the_bound_with_large_files(tmp_path):
+def test_claude_code_counsel_instruction_stays_under_the_bound_with_large_files(tmp_path: Path) -> None:
     """Issue #100, acceptance row 4 -- counsel handles a large record log
     and diff the same way build and verify already do (issue #86): named
     by path, never inlined, so the instruction's own size stays fixed."""
@@ -748,7 +750,7 @@ def test_claude_code_counsel_instruction_stays_under_the_bound_with_large_files(
     assert str(large_log) in instruction
 
 
-def test_claude_code_verify_instruction_says_nothing_about_a_stub_when_absent(tmp_path):
+def test_claude_code_verify_instruction_says_nothing_about_a_stub_when_absent(tmp_path: Path) -> None:
     """A spec with no stub/ (fixtures' prose_criterion/specs/1) gets no
     stub section at all -- the sentence is conditioned on the stub
     existing, not always appended."""

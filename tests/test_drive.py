@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import IO, Any, cast
 
 from helpers import commit_all, git, make_tenant
 
@@ -46,7 +47,7 @@ UNCONCLUDED_FORGE = "printf 'ci in_progress\\n'"
 FAST_POLL_ENV = {"ATTAVO_DRIVE_POLL_BOUND_S": "0.9", "ATTAVO_DRIVE_POLL_INTERVAL_S": "0.5"}
 
 
-def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     full_env = dict(os.environ)
     full_env.update(FAST_POLL_ENV)
     if env:
@@ -55,7 +56,7 @@ def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.Co
                           capture_output=True, text=True, check=False, env=full_env)
 
 
-def attavo_module():
+def attavo_module() -> Any:
     """attavo.verify imported in-process, for the default-constant assertion
     below that a CLI invocation cannot provoke without actually waiting
     out the real clock."""
@@ -94,10 +95,10 @@ def record_files(root: Path, stage: str, item: str = "1") -> list[Path]:
     return sorted(records_dir(root, item).glob(f"{stage}-*.json"))
 
 
-def latest_record(root: Path, stage: str, item: str = "1") -> dict:
+def latest_record(root: Path, stage: str, item: str = "1") -> dict[str, Any]:
     files = record_files(root, stage, item)
     assert files, f"no {stage} record for item {item}"
-    return json.loads(files[-1].read_text())
+    return cast(dict[str, Any], json.loads(files[-1].read_text()))
 
 
 def head_of(root: Path) -> str:
@@ -142,7 +143,7 @@ def write_dead_marker(root: Path, stage: str, nn: int, item: str = "1") -> Path:
     return marker
 
 
-def test_drive_refuses_without_a_valid_approval(tmp_path):
+def test_drive_refuses_without_a_valid_approval(tmp_path: Path) -> None:
     """Acceptance row 6. No approval at all: refused by name, nothing run
     -- no spec-gate, no build, no records of any kind written."""
     root = make_tenant(tmp_path, "build_valid")
@@ -157,7 +158,7 @@ def test_drive_refuses_without_a_valid_approval(tmp_path):
     assert not records_dir(root).exists() or list(records_dir(root).glob("*.json")) == []
 
 
-def test_drive_refuses_with_an_expired_approval(tmp_path):
+def test_drive_refuses_with_an_expired_approval(tmp_path: Path) -> None:
     """Acceptance row 6, the other half: an approval bound to a spec sha
     that has since moved is expired, not absent -- still refused by name,
     nothing run."""
@@ -176,7 +177,7 @@ def test_drive_refuses_with_an_expired_approval(tmp_path):
     assert record_files(root, "build") == []
 
 
-def test_drive_builds_from_an_approved_spec_with_no_build(tmp_path):
+def test_drive_builds_from_an_approved_spec_with_no_build(tmp_path: Path) -> None:
     """Acceptance row 1. One drive run produces a passing build record,
     commits only the record and its log (`git commit --only`), and pushes
     the branch; the fixture remote carries the record commit."""
@@ -205,7 +206,7 @@ def test_drive_builds_from_an_approved_spec_with_no_build(tmp_path):
     assert remote_head(bare, branch) == head_of(root)
 
 
-def test_drive_leaves_the_events_file_out_of_the_record_commit(tmp_path):
+def test_drive_leaves_the_events_file_out_of_the_record_commit(tmp_path: Path) -> None:
     """Issue #26, acceptance row 2, strengthened by issue #140: attavo
     build always writes a stage's events file now (test_build.py's own
     row-1 tests), under the checkout's own git directory rather than
@@ -233,7 +234,7 @@ def test_drive_leaves_the_events_file_out_of_the_record_commit(tmp_path):
     }
 
 
-def test_drive_commits_the_record_as_the_driver_not_the_tenants_own_identity(tmp_path):
+def test_drive_commits_the_record_as_the_driver_not_the_tenants_own_identity(tmp_path: Path) -> None:
     """The driver's identity (driver_identity, beside executor_identity):
     set by the product, never the tenant's git config, so a driven item's
     record commits are never indistinguishable from an operator's own.
@@ -261,7 +262,7 @@ def test_drive_commits_the_record_as_the_driver_not_the_tenants_own_identity(tmp
     assert committer_email == "driver@attavo.invalid"
 
 
-def test_drive_verifies_from_a_passed_build_with_the_forge_green(tmp_path):
+def test_drive_verifies_from_a_passed_build_with_the_forge_green(tmp_path: Path) -> None:
     """Acceptance row 2. From a passed build with the fake forge green,
     one run produces a verify record, commits only the record and its log,
     and pushes."""
@@ -293,7 +294,7 @@ def test_drive_verifies_from_a_passed_build_with_the_forge_green(tmp_path):
     assert remote_head(bare, branch) == head_of(root)
 
 
-def test_drive_verifies_again_when_the_latest_verify_is_superseded_by_a_later_build(tmp_path):
+def test_drive_verifies_again_when_the_latest_verify_is_superseded_by_a_later_build(tmp_path: Path) -> None:
     """Acceptance row 4, issue #109. A verify record can only name a build
     that existed when it was written, so a later build makes the latest
     verify superseded, never a mismatch -- drive derives the next stage
@@ -329,7 +330,7 @@ def test_drive_verifies_again_when_the_latest_verify_is_superseded_by_a_later_bu
     assert rec["build_sha"] == build_01["sha"]
 
 
-def test_drive_prints_ready_to_merge_from_a_passed_verify(tmp_path):
+def test_drive_prints_ready_to_merge_from_a_passed_verify(tmp_path: Path) -> None:
     """Acceptance row 3. From a passed verify with the forge green, one
     run prints ready-to-merge, exits 0, writes nothing, enqueues nothing
     -- and, per row 8, a further run repeats exactly the same thing."""
@@ -358,7 +359,7 @@ def test_drive_prints_ready_to_merge_from_a_passed_verify(tmp_path):
     assert len(record_files(root, "build")) == 1
 
 
-def test_drive_until_ready_runs_build_then_verify_to_ready_in_one_call(tmp_path):
+def test_drive_until_ready_runs_build_then_verify_to_ready_in_one_call(tmp_path: Path) -> None:
     """Issue #100's own followups. --until-ready repeats step-and-wait in
     the same process: one call, from an approved item with the forge
     green, builds, verifies, and prints ready to merge -- both records
@@ -389,7 +390,7 @@ def test_drive_until_ready_runs_build_then_verify_to_ready_in_one_call(tmp_path)
     assert len(record_files(root, "verify")) == 1
 
 
-def test_drive_without_the_flag_still_takes_one_step_at_a_time(tmp_path):
+def test_drive_without_the_flag_still_takes_one_step_at_a_time(tmp_path: Path) -> None:
     """Regression: --until-ready is additive. With no flag, an approved
     item with the forge green still needs two separate calls -- build,
     then verify -- exactly as before this issue."""
@@ -407,7 +408,7 @@ def test_drive_without_the_flag_still_takes_one_step_at_a_time(tmp_path):
     assert record_files(root, "verify")
 
 
-def test_drive_until_ready_stops_on_a_halt(tmp_path):
+def test_drive_until_ready_stops_on_a_halt(tmp_path: Path) -> None:
     """A step that stops on its own account -- here, a halted build --
     stops the --until-ready loop exactly where the single-step form
     would, printing the same thing; it does not retry the halted step."""
@@ -428,7 +429,7 @@ def test_drive_until_ready_stops_on_a_halt(tmp_path):
     assert remote_head(bare, branch) == head_of(root)
 
 
-def test_drive_until_ready_stops_when_the_forge_goes_red_after_a_build(tmp_path):
+def test_drive_until_ready_stops_when_the_forge_goes_red_after_a_build(tmp_path: Path) -> None:
     """A build that passes, then a forge that concludes red for verify's
     own gate, stops the loop there -- one record written (the pass), no
     verify record, no retry of the forge read."""
@@ -446,7 +447,7 @@ def test_drive_until_ready_stops_when_the_forge_goes_red_after_a_build(tmp_path)
     assert record_files(root, "verify") == []
 
 
-def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_build_line_before_verify_ends(tmp_path):
+def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_build_line_before_verify_ends(tmp_path: Path) -> None:
     """Issue #145. On tenant zero #652 (2026-09-16), a pipe reader of
     `attavo drive` (attavo/screen's own row) saw all six stage lines
     arrive as one burst when the drive ended, each minutes old --
@@ -496,7 +497,7 @@ def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_build_line_before_v
     lines: "queue.Queue[str | None]" = queue.Queue()
 
     def reader() -> None:
-        for raw in proc.stdout:
+        for raw in cast(IO[str], proc.stdout):
             lines.put(raw)
         lines.put(None)
 
@@ -524,7 +525,7 @@ def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_build_line_before_v
     assert "ready to merge" in output
 
 
-def test_drive_stops_when_the_forge_is_red(tmp_path):
+def test_drive_stops_when_the_forge_is_red(tmp_path: Path) -> None:
     """Acceptance row 4. A forge read where the one check has already
     concluded and failed is not polled at all -- there is nothing left to
     wait on, so drive stops on the first read, naming the check, with no
@@ -558,7 +559,7 @@ def test_drive_stops_when_the_forge_is_red(tmp_path):
     assert head_of(root) == pre_head
 
 
-def test_drive_polls_the_bound_while_the_forge_is_still_running(tmp_path):
+def test_drive_polls_the_bound_while_the_forge_is_still_running(tmp_path: Path) -> None:
     """Acceptance row 4, the unconcluded case: a check still carrying a
     status (in_progress) rather than a conclusion is not yet red -- drive
     keeps polling it for the full bound before giving up, unlike a
@@ -582,7 +583,7 @@ def test_drive_polls_the_bound_while_the_forge_is_still_running(tmp_path):
     assert record_files(root, "verify") == []
 
 
-def test_drive_halts_on_a_question_and_resumes_at_build_after_a_ruling(tmp_path):
+def test_drive_halts_on_a_question_and_resumes_at_build_after_a_ruling(tmp_path: Path) -> None:
     """Acceptance row 5. The fixture adapter halts with a question: drive
     stops naming the question and the record (and still pushes that
     halted record, same as any other record build writes). After a
@@ -633,7 +634,7 @@ def configure_counsel(root: Path) -> None:
     commit_all(root, "configure the counsel adapter")
 
 
-def test_drive_counsels_a_stop_before_filing_it_and_commits_both_records_together(tmp_path):
+def test_drive_counsels_a_stop_before_filing_it_and_commits_both_records_together(tmp_path: Path) -> None:
     """Issue #100, acceptance row 3. On a stop, drive calls counsel
     before file-stops, and commits the counsel record with the stage
     record in one commit."""
@@ -670,7 +671,7 @@ def test_drive_counsels_a_stop_before_filing_it_and_commits_both_records_togethe
     assert filed_bodies[0]["counsel_proposal"]["question"]
 
 
-def test_drive_still_files_a_stop_with_no_counsel_adapter_configured(tmp_path):
+def test_drive_still_files_a_stop_with_no_counsel_adapter_configured(tmp_path: Path) -> None:
     """counsel refuses gracefully (no [executor].counsel or
     [executor].verify) -- drive still files and transports the stage
     record; nothing new for counsel to commit."""
@@ -708,7 +709,7 @@ def configure_filing(root: Path, filed_path: Path) -> None:
     commit_all(root, "configure issue filing")
 
 
-def test_drive_files_a_stop_it_reports_exactly_once(tmp_path):
+def test_drive_files_a_stop_it_reports_exactly_once(tmp_path: Path) -> None:
     """Issue #89, acceptance row 5. A stop drive reports -- here, the
     fixture adapter's halt -- calls file-stops once: one drive run files
     exactly one issue for the attempt it just wrote, not zero and not
@@ -742,7 +743,7 @@ def test_drive_files_a_stop_it_reports_exactly_once(tmp_path):
     assert filed_bodies_after[1]["record"] == "records/1/build-02.json"
 
 
-def test_drive_marker_holds_the_filing_commands_stdout_and_is_committed_with_the_record(tmp_path):
+def test_drive_marker_holds_the_filing_commands_stdout_and_is_committed_with_the_record(tmp_path: Path) -> None:
     """A stop's own .filed marker is written before the record is
     transported, so it carries the filing command's stdout (the issue it
     opened) and rides in the very same commit as the record and its log
@@ -771,7 +772,7 @@ def test_drive_marker_holds_the_filing_commands_stdout_and_is_committed_with_the
     assert remote_head(bare) == head_of(root)
 
 
-def test_drive_a_second_run_in_the_same_state_files_nothing(tmp_path):
+def test_drive_a_second_run_in_the_same_state_files_nothing(tmp_path: Path) -> None:
     """Issue #89. The marker committed and pushed above is the fact a
     second worktree or a fresh clone reads too -- a second drive run
     against the same records, from a fresh clone of the remote drive
@@ -803,7 +804,7 @@ def test_drive_a_second_run_in_the_same_state_files_nothing(tmp_path):
     assert filed.read_text() == filed_after_first  # nothing new was filed
 
 
-def test_drive_retries_a_rejected_push_with_a_merge_never_a_rebase(tmp_path):
+def test_drive_retries_a_rejected_push_with_a_merge_never_a_rebase(tmp_path: Path) -> None:
     """Acceptance row 7. A rejected push with a divergent remote is
     retried after `git pull --no-rebase --no-edit`, never a rebase; the
     build record's own sha is unchanged (still reachable, still what the
@@ -853,7 +854,7 @@ def test_drive_retries_a_rejected_push_with_a_merge_never_a_rebase(tmp_path):
     assert "concurrent.txt" in git(root, "ls-tree", "-r", "--name-only", "HEAD")
 
 
-def test_drive_commits_and_pushes_an_invocation_marker_before_the_stage_runs(tmp_path):
+def test_drive_commits_and_pushes_an_invocation_marker_before_the_stage_runs(tmp_path: Path) -> None:
     """Issue #151: the invocation's own marker is a fact on the branch
     before the stage runs -- its own commit, authored by the driver
     identity, landing and pushed ahead of the stage record's commit."""
@@ -882,7 +883,7 @@ def test_drive_commits_and_pushes_an_invocation_marker_before_the_stage_runs(tmp
     assert remote_head(bare, branch) == head_of(root)
 
 
-def test_drive_recover_writes_a_died_record_for_a_dead_invocation(tmp_path):
+def test_drive_recover_writes_a_died_record_for_a_dead_invocation(tmp_path: Path) -> None:
     """Issue #151: `attavo drive --recover` retires a build-01.started
     marker naming a dead pid with a failed record, class died,
     provenance product -- committed by the driver identity, pushed to
@@ -914,7 +915,7 @@ def test_drive_recover_writes_a_died_record_for_a_dead_invocation(tmp_path):
     assert marker.is_file()  # the marker itself is left in place, retired by the record
 
 
-def test_drive_recover_refuses_without_a_stall_bound(tmp_path):
+def test_drive_recover_refuses_without_a_stall_bound(tmp_path: Path) -> None:
     """No [drive].stall_after_s: a hung invocation cannot be told from a
     running one, so --recover refuses rather than guessing a bound."""
     root = make_tenant(tmp_path, "build_valid")
@@ -929,7 +930,7 @@ def test_drive_recover_refuses_without_a_stall_bound(tmp_path):
     assert record_files(root, "build") == []
 
 
-def test_drive_recover_does_nothing_when_every_invocation_has_its_record(tmp_path):
+def test_drive_recover_does_nothing_when_every_invocation_has_its_record(tmp_path: Path) -> None:
     """A tenant with no dangling marker: --recover is a no-op, not a
     refusal -- there is simply nothing to recover."""
     root = make_tenant(tmp_path, "build_valid")
@@ -945,7 +946,7 @@ def test_drive_recover_does_nothing_when_every_invocation_has_its_record(tmp_pat
     assert len(record_files(root, "build")) == 1
 
 
-def test_drive_forge_poll_defaults_are_a_real_forges_clock():
+def test_drive_forge_poll_defaults_are_a_real_forges_clock() -> None:
     """The bound and interval every other test overrides with
     FAST_POLL_ENV default, unset, to at least five minutes and ten
     seconds -- tenant zero's own checks conclude about five minutes after

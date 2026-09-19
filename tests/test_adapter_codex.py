@@ -20,6 +20,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from helpers import FIXTURES
 
@@ -34,7 +35,7 @@ DONE_USAGE = {"input_tokens": 5, "output_tokens": 9, "cached_input_tokens": 0,
 # situation carries this exact item. command_execution's field names
 # (command, aggregated_output) are not independently confirmed live
 # this session; see item_events's own docstring in adapters/codex/run.
-RECORDED_STREAM = [
+RECORDED_STREAM: list[dict[str, Any]] = [
     {"type": "thread.started"},
     {"type": "turn.started"},
     {"type": "item.completed",
@@ -47,7 +48,7 @@ RECORDED_STREAM = [
 ]
 
 
-def base_env(tmp_path: Path) -> dict:
+def base_env(tmp_path: Path) -> dict[str, Any]:
     spec_dir = FIXTURES / "build_valid" / "specs" / "1"
     env = dict(os.environ)
     env.pop("ATTAVO_CHECKS_COMMAND", None)
@@ -64,8 +65,8 @@ def base_env(tmp_path: Path) -> dict:
     return env
 
 
-def run_with_events(tmp_path: Path, events: list[dict], final: dict,
-                    events_env: bool = True) -> subprocess.CompletedProcess:
+def run_with_events(tmp_path: Path, events: list[dict[str, Any]], final: dict[str, Any],
+                    events_env: bool = True) -> subprocess.CompletedProcess[str]:
     response = {"events": events, "final": final, "exit_code": 0}
     response_file = tmp_path / "response.json"
     response_file.write_text(json.dumps(response))
@@ -77,14 +78,14 @@ def run_with_events(tmp_path: Path, events: list[dict], final: dict,
                           check=False, env=env)
 
 
-def read_events(tmp_path: Path) -> list[dict]:
+def read_events(tmp_path: Path) -> list[dict[str, Any]]:
     path = tmp_path / "events.jsonl"
     if not path.is_file():
         return []
     return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
 
 
-def test_codex_recorded_fixtures_command_execution_item_matches_tenant_zeros_field_names():
+def test_codex_recorded_fixtures_command_execution_item_matches_tenant_zeros_field_names() -> None:
     """Issue #144, acceptance row 2. RECORDED_STREAM's own command_execution
     item is the live shape, not a guess: tenant zero's verify logs on
     attavo/code-factory (every item.completed line since #649) carry
@@ -98,7 +99,7 @@ def test_codex_recorded_fixtures_command_execution_item_matches_tenant_zeros_fie
     }
 
 
-def test_codex_maps_a_recorded_stream_to_events_and_the_record_is_unchanged(tmp_path):
+def test_codex_maps_a_recorded_stream_to_events_and_the_record_is_unchanged(tmp_path: Path) -> None:
     """Acceptance row 1. A recorded item.completed stream maps to
     message/tool_call/tool_result events, in order, each {at, kind,
     text}; the final report line is exactly what it would have been
@@ -126,7 +127,7 @@ def test_codex_maps_a_recorded_stream_to_events_and_the_record_is_unchanged(tmp_
     assert line_no_events == line
 
 
-def test_codex_no_events_file_when_atavo_events_is_unset(tmp_path):
+def test_codex_no_events_file_when_atavo_events_is_unset(tmp_path: Path) -> None:
     """With ATTAVO_EVENTS unset, no events file is written at all -- the
     mapping only ever writes to a path the product handed it."""
     run = run_with_events(tmp_path, RECORDED_STREAM, {"status": "done", "question": None},
@@ -135,7 +136,7 @@ def test_codex_no_events_file_when_atavo_events_is_unset(tmp_path):
     assert not (tmp_path / "events.jsonl").exists()
 
 
-def test_codex_tool_call_event_is_capped_at_400_chars(tmp_path):
+def test_codex_tool_call_event_is_capped_at_400_chars(tmp_path: Path) -> None:
     """text is capped at 400 characters and is one line: a command
     whose own first line is long is still capped -- the feed renders
     lines, not files."""
@@ -154,7 +155,7 @@ def test_codex_tool_call_event_is_capped_at_400_chars(tmp_path):
     assert "\n" not in tool_call["text"]
 
 
-def test_codex_events_are_one_line_across_multiline_command_and_output(tmp_path):
+def test_codex_events_are_one_line_across_multiline_command_and_output(tmp_path: Path) -> None:
     """A multi-line command and a multi-line output each map to just
     their own first line."""
     stream = [

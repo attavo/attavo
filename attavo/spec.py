@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any, cast
 
 from attavo.approval import approval_status
 from attavo.common import (
@@ -21,7 +22,7 @@ from attavo.records import latest_record, write_record
 
 # --- the spec contract ---
 
-def parse_spec(spec_md: Path) -> tuple[dict | None, str | None]:
+def parse_spec(spec_md: Path) -> tuple[dict[str, Any] | None, str | None]:
     lines = spec_md.read_text().splitlines()
     heading_idx = [i for i, l in enumerate(lines) if l.startswith("## ")]
     headings = [lines[i].rstrip() for i in heading_idx]
@@ -96,7 +97,7 @@ def stub_removed_refusal(root: Path, spec_dir: Path) -> str | None:
     return None
 
 
-def run_criteria(root: Path, spec_dir: Path, names: list[str]) -> list[dict]:
+def run_criteria(root: Path, spec_dir: Path, names: list[str]) -> list[dict[str, Any]]:
     criteria_dir = spec_dir / "criteria"
     stub_dir = spec_dir / "stub"
     with tempfile.TemporaryDirectory() as tmp:
@@ -166,7 +167,7 @@ def cmd_spec_gate(argv: list[str]) -> int:
         return 2
     latest_approval = latest_record(records_dir, "approval")
     if approved:
-        record = {"sha": git(root, "rev-parse", "HEAD").strip(), "spec_sha": spec_sha,
+        record: dict[str, Any] = {"sha": git(root, "rev-parse", "HEAD").strip(), "spec_sha": spec_sha,
                   "at": now_iso(), "status": "approved",
                   "approval_sha": latest_approval.get("sha") if latest_approval else None,
                   "criteria": [], "refusal": None}
@@ -190,8 +191,10 @@ def cmd_spec_gate(argv: list[str]) -> int:
         and commit_postdates(root, latest_approval["sha"], latest_build["sha"]))
 
     parsed, refusal = parse_spec(spec_md)
-    results: list[dict] = []
+    results: list[dict[str, Any]] = []
     if refusal is None:
+        # parse_spec returns a refusal exactly when it returns no spec.
+        parsed = cast(dict[str, Any], parsed)
         if built:
             refusal = stub_removed_refusal(root, spec_dir)
             if refusal is None:

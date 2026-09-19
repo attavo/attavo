@@ -16,6 +16,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import jsonschema
 
@@ -26,7 +27,7 @@ ATTAVO = ROOT / "bin" / "attavo"
 COUNSEL_SCHEMA = json.loads((ROOT / "schema" / "records" / "counsel.schema.json").read_text())
 
 
-def run_attavo(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
     import os
     full_env = dict(os.environ)
     if env:
@@ -88,14 +89,14 @@ def approve_and_halt(root: Path, question: str = "which overlay wins?") -> None:
     assert build.returncode == 3, build.stdout + build.stderr
 
 
-def write_counsel_response(tmp_path: Path, response: dict) -> Path:
+def write_counsel_response(tmp_path: Path, response: dict[str, Any]) -> Path:
     path = tmp_path / "counsel_response.json"
     path.write_text(json.dumps(response))
     return path
 
 
-def canned(verdict: str, **kwargs) -> dict:
-    base = {
+def canned(verdict: str, **kwargs: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
         "model": "fixture", "model_version": None, "adapter_version": "fixture-1",
         "tokens": {"input": 1, "output": 1}, "cost_usd": 0.0,
         "class": "unclassed", "verdict": verdict,
@@ -105,7 +106,7 @@ def canned(verdict: str, **kwargs) -> dict:
     return base
 
 
-def test_counsel_refuses_without_a_non_pass_record(tmp_path):
+def test_counsel_refuses_without_a_non_pass_record(tmp_path: Path) -> None:
     """Acceptance row 2 (half). A fresh item with no build, verify, or
     spec-gate record at all -- refused by name, nothing written."""
     root = make_tenant(tmp_path, "build_valid")
@@ -117,7 +118,7 @@ def test_counsel_refuses_without_a_non_pass_record(tmp_path):
     assert not records_dir(root).exists() or list(records_dir(root).glob("counsel-*.json")) == []
 
 
-def test_counsel_refuses_when_the_latest_record_is_a_pass(tmp_path):
+def test_counsel_refuses_when_the_latest_record_is_a_pass(tmp_path: Path) -> None:
     """Acceptance row 2 (rest). A passing build -- and the passing spec-01
     it rests on -- carries nothing to counsel -- refused the same as an
     item with no record at all: the spec-gate fallback only ever reads a
@@ -133,7 +134,7 @@ def test_counsel_refuses_when_the_latest_record_is_a_pass(tmp_path):
     assert "no non-pass build, verify, or spec-gate record" in run.stdout
 
 
-def test_counsel_answers_a_refused_spec_gate_record_when_no_build_or_verify_exists(tmp_path):
+def test_counsel_answers_a_refused_spec_gate_record_when_no_build_or_verify_exists(tmp_path: Path) -> None:
     """Acceptance row 1. No build or verify record exists at all -- the
     item never got approved -- but a refused spec-01.json does (issue
     #133's own specimen, tenant zero #683: a criterion the gate cannot
@@ -175,7 +176,7 @@ def test_counsel_answers_a_refused_spec_gate_record_when_no_build_or_verify_exis
     assert "checks.sh" in record["proposal"]["ruling_text"]
 
 
-def test_counsel_writes_a_valid_record_for_a_halted_item(tmp_path):
+def test_counsel_writes_a_valid_record_for_a_halted_item(tmp_path: Path) -> None:
     """Acceptance row 1. counsel writes counsel-NN.json (and a log) that
     validates against schema/records/counsel.schema.json, with class,
     verdict, citations, and proposal."""
@@ -212,7 +213,7 @@ def test_counsel_writes_a_valid_record_for_a_halted_item(tmp_path):
     assert record["proposal"]["ruling_text"] == "use the base tree's overlay"
 
 
-def test_counsel_commits_nothing_and_writes_only_under_records(tmp_path):
+def test_counsel_commits_nothing_and_writes_only_under_records(tmp_path: Path) -> None:
     """Acceptance row 2. counsel writes nothing outside
     paths.records/<N>/ and commits nothing -- the caller commits, as with
     every stage."""
@@ -237,7 +238,7 @@ def test_counsel_commits_nothing_and_writes_only_under_records(tmp_path):
     assert all(p.startswith("records/1/") for p in changed), changed
 
 
-def test_counsel_person_verdict_carries_a_one_line_question(tmp_path):
+def test_counsel_person_verdict_carries_a_one_line_question(tmp_path: Path) -> None:
     """Acceptance row 5 (person half). A person verdict carries the
     one-line question; ruling_text and patch stay null."""
     root = make_tenant(tmp_path, "build_valid")
@@ -261,7 +262,7 @@ def test_counsel_person_verdict_carries_a_one_line_question(tmp_path):
     assert record["proposal"]["patch"] is None
 
 
-def test_counsel_answer_verdict_carries_ruling_text_and_three_citations(tmp_path):
+def test_counsel_answer_verdict_carries_ruling_text_and_three_citations(tmp_path: Path) -> None:
     """Acceptance row 5 (answer half)."""
     root = make_tenant(tmp_path, "build_valid")
     configure_counsel_adapter(root)
@@ -288,7 +289,7 @@ def test_counsel_answer_verdict_carries_ruling_text_and_three_citations(tmp_path
     assert {c["kind"] for c in record["citations"]} == {"instruction", "mechanism", "guard"}
 
 
-def test_counsel_patch_verdict_carries_file_symbol_rejection_test_and_diff(tmp_path):
+def test_counsel_patch_verdict_carries_file_symbol_rejection_test_and_diff(tmp_path: Path) -> None:
     """Acceptance row 5 (patch half)."""
     root = make_tenant(tmp_path, "build_valid")
     configure_counsel_adapter(root)
@@ -313,7 +314,7 @@ def test_counsel_patch_verdict_carries_file_symbol_rejection_test_and_diff(tmp_p
     assert record["proposal"]["patch"] == patch
 
 
-def test_counsel_refuses_without_an_executor_counsel_or_verify_adapter(tmp_path):
+def test_counsel_refuses_without_an_executor_counsel_or_verify_adapter(tmp_path: Path) -> None:
     """No [executor].counsel and no [executor].verify -- refused by name,
     nothing written; build_valid declares [executor].build only."""
     root = make_tenant(tmp_path, "build_valid")
@@ -325,7 +326,7 @@ def test_counsel_refuses_without_an_executor_counsel_or_verify_adapter(tmp_path)
     assert not (records_dir(root) / "counsel-01.json").exists()
 
 
-def test_counsel_falls_back_to_executor_verify_when_counsel_is_undeclared(tmp_path):
+def test_counsel_falls_back_to_executor_verify_when_counsel_is_undeclared(tmp_path: Path) -> None:
     """"defaulting to [executor].verify" -- no [executor].counsel, but
     [executor].verify is fixture: counsel runs."""
     root = make_tenant(tmp_path, "build_valid")
@@ -341,7 +342,7 @@ def test_counsel_falls_back_to_executor_verify_when_counsel_is_undeclared(tmp_pa
     assert record["adapter"] == "fixture"
 
 
-def test_counsel_chooses_the_most_recent_non_pass_record_across_stages(tmp_path):
+def test_counsel_chooses_the_most_recent_non_pass_record_across_stages(tmp_path: Path) -> None:
     """A passed build with a non-pass verify: counsel reads verify, not
     build, since verify's own record is the more recent stop."""
     root = make_tenant(tmp_path, "build_valid")
@@ -367,7 +368,7 @@ def test_counsel_chooses_the_most_recent_non_pass_record_across_stages(tmp_path)
 # --- issue #175: the forge and the graph in the evidence set, a fourth
 # proposal shape, and the operator's own question ---
 
-def test_counsel_forge_is_not_read_without_any_forge_section(tmp_path):
+def test_counsel_forge_is_not_read_without_any_forge_section(tmp_path: Path) -> None:
     """Acceptance row 2 (half). No [forge] table at all: counsel's own
     record says the forge was not read, naming the missing key -- never a
     record that reads as if the forge were green."""
@@ -385,7 +386,7 @@ def test_counsel_forge_is_not_read_without_any_forge_section(tmp_path):
     assert record["forge"]["checks"] == []
 
 
-def test_counsel_forge_is_not_read_without_a_check_log_command(tmp_path):
+def test_counsel_forge_is_not_read_without_a_check_log_command(tmp_path: Path) -> None:
     """Acceptance row 2 (rest, the rejection test itself, red before this
     lane). [forge].checks_command is configured but [forge].check_log_command
     is not: still not read -- absent is not silently the same as green."""
@@ -434,7 +435,7 @@ print(json.dumps({
 """
 
 
-def test_counsel_reads_the_forge_and_hands_the_adapter_a_checks_file(tmp_path):
+def test_counsel_reads_the_forge_and_hands_the_adapter_a_checks_file(tmp_path: Path) -> None:
     """Acceptance row 1 (mechanism half). [forge].checks_command and
     [forge].check_log_command both configured: counsel's own record
     carries what the forge reported, and the file handed to the adapter
@@ -477,7 +478,7 @@ def test_counsel_reads_the_forge_and_hands_the_adapter_a_checks_file(tmp_path):
     assert "--- LOG test ---" not in log_text
 
 
-def test_counsel_hands_the_adapter_a_graph_file(tmp_path):
+def test_counsel_hands_the_adapter_a_graph_file(tmp_path: Path) -> None:
     """Acceptance row 1 (mechanism half). ATTAVO_COUNSEL_GRAPH names a
     file describing the default branch since this item's branch point and
     this branch's own commits."""
@@ -496,7 +497,7 @@ def test_counsel_hands_the_adapter_a_graph_file(tmp_path):
     assert "this branch's own commits" in graph_text
 
 
-def test_counsel_proposal_issue_validates_against_schema(tmp_path):
+def test_counsel_proposal_issue_validates_against_schema(tmp_path: Path) -> None:
     """Acceptance row 3. proposal.issue -- a title and a body in this
     repository's own issue format -- validates against
     schema/records/counsel.schema.json, for a "patch" verdict whose
@@ -529,7 +530,7 @@ def test_counsel_proposal_issue_validates_against_schema(tmp_path):
     assert "## Acceptance" in record["proposal"]["issue"]["body"]
 
 
-def test_counsel_ask_requires_nonempty_text(tmp_path):
+def test_counsel_ask_requires_nonempty_text(tmp_path: Path) -> None:
     """Acceptance row 4 (guard half)."""
     root = make_tenant(tmp_path, "build_valid")
     configure_counsel_adapter(root)
@@ -541,7 +542,7 @@ def test_counsel_ask_requires_nonempty_text(tmp_path):
     assert not (records_dir(root) / "counsel-01.json").exists()
 
 
-def test_counsel_ask_reads_the_latest_record_even_when_it_passed(tmp_path):
+def test_counsel_ask_reads_the_latest_record_even_when_it_passed(tmp_path: Path) -> None:
     """Acceptance row 4. attavo counsel N --ask "<text>" reads the item's
     latest records regardless of status -- a question is not bound to a
     stop -- writes a record with question set, runs no stage, edits
@@ -576,7 +577,7 @@ def test_counsel_ask_reads_the_latest_record_even_when_it_passed(tmp_path):
     assert all(p.startswith("records/1/") for p in changed), changed
 
 
-def test_counsel_question_is_null_without_ask(tmp_path):
+def test_counsel_question_is_null_without_ask(tmp_path: Path) -> None:
     """Regression: the ordinary stop path still writes question: null."""
     root = make_tenant(tmp_path, "build_valid")
     configure_counsel_adapter(root)
@@ -625,12 +626,12 @@ def configure_158_forge(root: Path) -> None:
                     f"python3 {check_log_script.name}")
 
 
-def counsel_158_situation(adapter_name: str) -> dict:
+def counsel_158_situation(adapter_name: str) -> dict[str, Any]:
     manifest = json.loads((ROOT / "adapters" / adapter_name / "conformance.json").read_text())
-    return manifest["situations"]["counsel_158_forge_evidence"]
+    return cast(dict[str, Any], manifest["situations"]["counsel_158_forge_evidence"])
 
 
-def assert_158_citation_and_no_retry(record: dict) -> None:
+def assert_158_citation_and_no_retry(record: dict[str, Any]) -> None:
     jsonschema.validate(record, COUNSEL_SCHEMA)
     assert record["forge"]["read"] is True
     assert {(c["name"], c["conclusion"]) for c in record["forge"]["checks"]} == {
@@ -640,7 +641,7 @@ def assert_158_citation_and_no_retry(record: dict) -> None:
     assert "retry" not in (record["proposal"]["ruling_text"] or "").lower()
 
 
-def test_counsel_158_specimen_cites_the_marker_not_retry_with_claude_code(tmp_path):
+def test_counsel_158_specimen_cites_the_marker_not_retry_with_claude_code(tmp_path: Path) -> None:
     """Acceptance row 1. counsel-04's own answer, before this lane, was
     "retry only after the forge exposes concluded, green checks for that
     exact sha" -- the mechanism read correctly, the remedy wrong, because
@@ -668,7 +669,7 @@ def test_counsel_158_specimen_cites_the_marker_not_retry_with_claude_code(tmp_pa
     assert_158_citation_and_no_retry(record)
 
 
-def test_counsel_158_specimen_cites_the_marker_not_retry_with_codex(tmp_path):
+def test_counsel_158_specimen_cites_the_marker_not_retry_with_codex(tmp_path: Path) -> None:
     """Acceptance row 1, codex half -- COUNSEL_SCHEMA and
     counsel_instruction are identical between the two adapters by
     design; this proves the mechanism through codex's own real binary

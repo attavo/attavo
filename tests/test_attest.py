@@ -19,7 +19,9 @@ Run: python3 -m pytest tests -q
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import jsonschema
 import pytest
@@ -31,7 +33,7 @@ ATTAVO = ROOT / "bin" / "attavo"
 STATEMENT_SCHEMA = json.loads((ROOT / "schema" / "attestation.schema.json").read_text())
 
 
-def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
                           capture_output=True, text=True, check=False)
 
@@ -63,14 +65,14 @@ def merge_into_main(root: Path, branch: str) -> None:
     git(root, "merge", "--no-ff", "-m", f"Merge branch '{branch}' into main", branch)
 
 
-def records_snapshot(root: Path) -> list:
+def records_snapshot(root: Path) -> list[Any]:
     records_dir = root / "records"
     return sorted(records_dir.rglob("*")) if records_dir.is_dir() else []
 
 
 # --- row 1: a coherent chain prints a valid statement and writes nothing ---
 
-def test_attest_prints_a_valid_statement_on_a_coherent_chain_and_writes_nothing(tmp_path):
+def test_attest_prints_a_valid_statement_on_a_coherent_chain_and_writes_nothing(tmp_path: Path) -> None:
     """Acceptance row 1: the merge commit carries no attavo/N-* branch
     information at all -- 'improve-thing' names nothing about item 1 --
     proving the derivation reads record paths, not the branch name."""
@@ -96,7 +98,7 @@ def test_attest_prints_a_valid_statement_on_a_coherent_chain_and_writes_nothing(
 
 # --- row 2: every refusal and the --partial not-yet path, same as before ---
 
-def test_attest_refuses_a_chain_with_a_missing_verify_record(tmp_path):
+def test_attest_refuses_a_chain_with_a_missing_verify_record(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "build_valid")
     configure_forge(root)
     git(root, "checkout", "-b", "attavo/1-x")
@@ -115,7 +117,7 @@ def test_attest_refuses_a_chain_with_a_missing_verify_record(tmp_path):
     assert records_snapshot(root) == before
 
 
-def test_attest_refuses_a_build_whose_approval_sha_is_not_the_latest_approval(tmp_path):
+def test_attest_refuses_a_build_whose_approval_sha_is_not_the_latest_approval(tmp_path: Path) -> None:
     """A re-approval after the build must force a re-run."""
     root = make_tenant(tmp_path, "build_valid")
     configure_forge(root)
@@ -131,7 +133,7 @@ def test_attest_refuses_a_build_whose_approval_sha_is_not_the_latest_approval(tm
     assert "approval_sha" in run.stderr
 
 
-def test_attest_exits_0_and_writes_nothing_when_the_merge_commit_names_zero_items(tmp_path):
+def test_attest_exits_0_and_writes_nothing_when_the_merge_commit_names_zero_items(tmp_path: Path) -> None:
     """Issue #58: not every merge is an item merge. The coherence
     template's signing steps rely on stdout not being JSON here -- a
     merge group can carry no item exactly as easily as a pull request
@@ -151,7 +153,7 @@ def test_attest_exits_0_and_writes_nothing_when_the_merge_commit_names_zero_item
         json.loads(run.stdout)
 
 
-def test_attest_refuses_when_the_merge_commit_names_two_items(tmp_path):
+def test_attest_refuses_when_the_merge_commit_names_two_items(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "build_valid")
     git(root, "checkout", "-b", "multi")
     (root / "records" / "1").mkdir(parents=True)
@@ -166,7 +168,7 @@ def test_attest_refuses_when_the_merge_commit_names_two_items(tmp_path):
     assert "1" in run.stderr and "2" in run.stderr
 
 
-def test_attest_exits_2_with_no_manifest(tmp_path):
+def test_attest_exits_2_with_no_manifest(tmp_path: Path) -> None:
     root = tmp_path / "no_manifest"
     root.mkdir()
     (root / "f.txt").write_text("x\n")
@@ -256,7 +258,8 @@ OTHER_REFUSALS = [
 
 
 @pytest.mark.parametrize("build, needle", OTHER_REFUSALS)
-def test_attest_refusals_are_unaffected_by_partial(tmp_path, build, needle):
+def test_attest_refusals_are_unaffected_by_partial(
+        tmp_path: Path, build: Callable[[Path], object], needle: str | None) -> None:
     """--partial only forgives a missing (or superseded-verify) record;
     every other refusal -- a stale approval_sha, or two items in the
     merge diff -- is identical with or without it."""
@@ -273,7 +276,7 @@ def test_attest_refusals_are_unaffected_by_partial(tmp_path, build, needle):
         assert needle in plain.stderr
 
 
-def test_partial_exits_0_naming_verify_absent_and_writes_nothing(tmp_path):
+def test_partial_exits_0_naming_verify_absent_and_writes_nothing(tmp_path: Path) -> None:
     """spec, approval, build present, verify absent, on a no-fast-forward
     merge -- attest --partial exits 0, names the item and the stages
     present and absent, and writes nothing."""
@@ -291,7 +294,7 @@ def test_partial_exits_0_naming_verify_absent_and_writes_nothing(tmp_path):
     assert git(root, "status", "--porcelain") == ""
 
 
-def test_partial_still_refuses_a_stale_approval_sha(tmp_path):
+def test_partial_still_refuses_a_stale_approval_sha(tmp_path: Path) -> None:
     """The same fixture with a re-approval after the build -- --partial
     does not bypass the approval_sha chain assertion."""
     root = make_tenant(tmp_path, "build_valid")
@@ -304,7 +307,7 @@ def test_partial_still_refuses_a_stale_approval_sha(tmp_path):
     assert "approval_sha" in run.stderr
 
 
-def test_without_partial_the_missing_verify_fixture_still_refuses(tmp_path):
+def test_without_partial_the_missing_verify_fixture_still_refuses(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "build_valid")
     configure_forge(root)
     build_missing_verify_record(root)
@@ -315,7 +318,7 @@ def test_without_partial_the_missing_verify_fixture_still_refuses(tmp_path):
     assert "no verify record" in run.stderr
 
 
-def test_partial_exits_0_naming_the_superseded_verify_and_the_build_it_named(tmp_path):
+def test_partial_exits_0_naming_the_superseded_verify_and_the_build_it_named(tmp_path: Path) -> None:
     """Acceptance row 1, issue #109: spec, approval, build-01 pass,
     verify-01 (naming build-01), build-02 pass. A verify record can only
     name a build that existed when it was written, so verify-01 is
@@ -338,7 +341,7 @@ def test_partial_exits_0_naming_the_superseded_verify_and_the_build_it_named(tmp
     assert git(root, "status", "--porcelain") == ""
 
 
-def test_attest_full_refuses_the_same_records_naming_the_superseded_verify(tmp_path):
+def test_attest_full_refuses_the_same_records_naming_the_superseded_verify(tmp_path: Path) -> None:
     """Acceptance row 2, issue #109: the same records without --partial
     refuse -- a superseded verify is still not a verify for the latest
     build -- with the new message, never the retired mismatch wording.
@@ -357,7 +360,7 @@ def test_attest_full_refuses_the_same_records_naming_the_superseded_verify(tmp_p
     assert "verify's build_sha does not name the latest build" not in run.stderr
 
 
-def test_attest_and_partial_agree_when_verify_two_names_build_two(tmp_path, monkeypatch):
+def test_attest_and_partial_agree_when_verify_two_names_build_two(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Acceptance row 3, issue #109: verify-02 names build-02 and passes
     -- the chain holds, so attest and attest --partial behave exactly as
     they did before this lane, both printing the same statement."""
@@ -378,7 +381,7 @@ def test_attest_and_partial_agree_when_verify_two_names_build_two(tmp_path, monk
     jsonschema.validate(plain_statement, STATEMENT_SCHEMA)
 
 
-def test_statement_carries_no_ci_runs_key(tmp_path):
+def test_statement_carries_no_ci_runs_key(tmp_path: Path) -> None:
     """The product does not count a forge's own CI runs; a forge-read
     producer for the number is Phase 4's, if a decision ever needs it."""
     root = make_tenant(tmp_path, "build_valid")
@@ -396,7 +399,7 @@ def test_statement_carries_no_ci_runs_key(tmp_path):
 
 # --- row 3: --dry-run no longer exists ---
 
-def test_dash_dash_dry_run_is_refused_as_an_unknown_argument(tmp_path):
+def test_dash_dash_dry_run_is_refused_as_an_unknown_argument(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "build_valid")
     configure_forge(root)
     git(root, "checkout", "-b", "attavo/1-x")

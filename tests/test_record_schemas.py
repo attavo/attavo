@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import jsonschema
 import pytest
@@ -24,23 +25,23 @@ ATTAVO = ROOT / "bin" / "attavo"
 SCHEMAS_DIR = ROOT / "schema" / "records"
 
 
-def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess:
+def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
                           capture_output=True, text=True, check=False)
 
 
-def load_schema(stage: str) -> dict:
-    return json.loads((SCHEMAS_DIR / f"{stage}.schema.json").read_text())
+def load_schema(stage: str) -> dict[str, Any]:
+    return cast(dict[str, Any], json.loads((SCHEMAS_DIR / f"{stage}.schema.json").read_text()))
 
 
-def attavo_module():
+def attavo_module() -> Any:
     """attavo.records imported in-process, for the write_record/load_records
     unit tests below that a CLI invocation cannot provoke (there is no
     command-line path to a record carrying a key its schema forbids)."""
     return importlib.import_module("attavo.records")
 
 
-def test_records_match_their_shapes(tmp_path):
+def test_records_match_their_shapes(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "build_valid")
     toml = root / "attavo.toml"
     toml.write_text(toml.read_text()
@@ -121,7 +122,7 @@ def test_records_match_their_shapes(tmp_path):
         assert rec["item"] == "1", stage
 
 
-def test_records_carry_product_version_distinct_from_pin(tmp_path):
+def test_records_carry_product_version_distinct_from_pin(tmp_path: Path) -> None:
     """Issue #49: a record names both what ran (product_version, derived
     from the running checkout via git describe) and what the tenant
     declared (product_pin, copied verbatim from the manifest). The
@@ -155,7 +156,7 @@ def test_records_carry_product_version_distinct_from_pin(tmp_path):
         assert rec["product_version"] != rec["product_pin"]
 
 
-def test_product_version_unknown_when_product_root_is_not_a_git_repo(tmp_path):
+def test_product_version_unknown_when_product_root_is_not_a_git_repo(tmp_path: Path) -> None:
     """Issue #49 follow-up: GitHub Actions extracts an action into
     _actions/ from a tarball, not a git checkout -- PRODUCT_ROOT there has
     no .git, so `git describe` fails and, unguarded, raises inside
@@ -185,7 +186,7 @@ def test_product_version_unknown_when_product_root_is_not_a_git_repo(tmp_path):
     assert rec["product_version"] == "unknown"
 
 
-def test_manifest_schema_accepts_open_executor_config():
+def test_manifest_schema_accepts_open_executor_config() -> None:
     """Issue #24, acceptance 5 (manifest half): [executor.<adapter-name>]
     is an open table -- the schema permits any keys under it, none
     required, alongside the existing build/verify string keys."""
@@ -206,7 +207,7 @@ def test_manifest_schema_accepts_open_executor_config():
     jsonschema.validate(manifest, schema)
 
 
-def base_manifest() -> dict:
+def base_manifest() -> dict[str, Any]:
     return {
         "schema_version": 1,
         "attavo": {"version": "v0.3.3"},
@@ -219,7 +220,7 @@ def base_manifest() -> dict:
     }
 
 
-def test_manifest_schema_describes_checks():
+def test_manifest_schema_describes_checks() -> None:
     """Issue #30, acceptance 4 (manifest half): [checks] is optional, with
     command required inside it -- a manifest with no [checks] table at
     all is still valid (unlike [tests], which build itself requires)."""
@@ -235,7 +236,7 @@ def test_manifest_schema_describes_checks():
 
 # --- issue #60: records declare their own record_version and item ---
 
-def test_write_record_refuses_a_key_its_schema_does_not_declare(tmp_path):
+def test_write_record_refuses_a_key_its_schema_does_not_declare(tmp_path: Path) -> None:
     """Acceptance 2: write_record enforces the declared key set at write
     time -- a record carrying a key its stage's schema does not list under
     "properties" is refused, and nothing is written. Enforced with the
@@ -244,7 +245,7 @@ def test_write_record_refuses_a_key_its_schema_does_not_declare(tmp_path):
     tenant pins, and a runtime dependency changes installation."""
     attavo = attavo_module()
     schema = load_schema("spec")
-    record = {k: None for k in schema["properties"]
+    record: dict[str, Any] = {k: None for k in schema["properties"]
              if k not in ("record_version", "item", "product_version", "product_pin")}
     record["unexpected_key"] = "not in the schema"
 
@@ -254,7 +255,7 @@ def test_write_record_refuses_a_key_its_schema_does_not_declare(tmp_path):
     assert list(records_dir.glob("spec-*.json")) == []
 
 
-def test_write_record_stamps_record_version_from_the_schemas_id(tmp_path):
+def test_write_record_stamps_record_version_from_the_schemas_id(tmp_path: Path) -> None:
     """Acceptance/correction point 2: record_version is read from the
     stage schema's own $id at call time rather than carried separately in
     bin/attavo, so it cannot drift from what the schema declares. Point
@@ -272,7 +273,7 @@ def test_write_record_stamps_record_version_from_the_schemas_id(tmp_path):
     real_schema_dir = attavo.SCHEMA_RECORDS_DIR
     attavo.SCHEMA_RECORDS_DIR = schema_dir / "records"
     try:
-        record = {k: None for k in build_schema["properties"]
+        record: dict[str, Any] = {k: None for k in build_schema["properties"]
                  if k not in ("record_version", "item", "product_version", "product_pin")}
         path = attavo.write_record(tmp_path / "records" / "1", "build", record,
                                    {"attavo": {}}, "1")
@@ -282,13 +283,13 @@ def test_write_record_stamps_record_version_from_the_schemas_id(tmp_path):
     assert json.loads(path.read_text())["record_version"] == int(tail) + 1
 
 
-def _blank_record(stage: str) -> dict:
+def _blank_record(stage: str) -> dict[str, Any]:
     schema = load_schema(stage)
     return {k: None for k in schema["properties"]
             if k not in ("record_version", "item", "product_version", "product_pin")}
 
 
-def test_write_record_refuses_a_failed_record_with_no_trail(tmp_path):
+def test_write_record_refuses_a_failed_record_with_no_trail(tmp_path: Path) -> None:
     """Issue #53, rejection test 1. A failed record whose log is empty and
     whose refusal and halted are both null explains nothing -- write_record
     refuses it by name and writes neither the record nor the log. Tenant
@@ -304,7 +305,7 @@ def test_write_record_refuses_a_failed_record_with_no_trail(tmp_path):
     assert list(records_dir.glob("build-*.log")) == []
 
 
-def test_write_record_accepts_a_returned_record_with_no_log(tmp_path):
+def test_write_record_accepts_a_returned_record_with_no_log(tmp_path: Path) -> None:
     """Issue #53, rejection test 2. A returned verify record owes no log at
     all, because no adapter ran -- accepted, and write_record writes no log
     file for it. #576's verify-02 shape."""
@@ -318,7 +319,7 @@ def test_write_record_accepts_a_returned_record_with_no_log(tmp_path):
     assert not path.with_suffix(".log").exists()
 
 
-def test_write_record_accepts_a_failed_record_with_a_populated_refusal(tmp_path):
+def test_write_record_accepts_a_failed_record_with_a_populated_refusal(tmp_path: Path) -> None:
     """Issue #53, lane table row 5. A failed record with a populated
     refusal (or halted) and an empty log is accepted -- the refusal or
     halted text is itself the trail the rule requires."""
@@ -333,7 +334,7 @@ def test_write_record_accepts_a_failed_record_with_a_populated_refusal(tmp_path)
     assert path.with_suffix(".log").read_text() == ""
 
 
-def _load_check_record_schema_version():
+def _load_check_record_schema_version() -> Any:
     """scripts/check_record_schema_version.py -- schema_version_drift's
     one home. CI's schema-version job (.github/workflows/ci.yml, on
     pull_request and merge_group) imports the same module to run it
@@ -344,6 +345,7 @@ def _load_check_record_schema_version():
     real schema rather than the merge base."""
     path = ROOT / "scripts" / "check_record_schema_version.py"
     spec = importlib.util.spec_from_file_location("check_record_schema_version", path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -352,7 +354,7 @@ def _load_check_record_schema_version():
 schema_version_drift = _load_check_record_schema_version().schema_version_drift
 
 
-def test_schema_shape_change_without_a_version_bump_is_refused():
+def test_schema_shape_change_without_a_version_bump_is_refused() -> None:
     """Acceptance 3, run against a mutated schema fixture: drop-in a new
     required field on the real, committed build schema without touching
     its $id -- refused. The identical mutation with $id bumped alongside
@@ -375,7 +377,7 @@ def test_schema_shape_change_without_a_version_bump_is_refused():
     assert schema_version_drift(base, reworded) is None
 
 
-def test_load_records_defaults_a_version_1_record_and_fills_its_item(tmp_path):
+def test_load_records_defaults_a_version_1_record_and_fills_its_item(tmp_path: Path) -> None:
     """Acceptance 4: a record written before record_version and item
     shipped -- tenant zero's real shape at 3648830, common keys across 49
     records: ['at', 'sha'] and nothing else -- loads with record_version 1
@@ -398,7 +400,7 @@ def test_load_records_defaults_a_version_1_record_and_fills_its_item(tmp_path):
     assert on_disk == tenant_zero_shape
 
 
-def test_load_records_refuses_an_item_that_disagrees_with_its_directory(tmp_path):
+def test_load_records_refuses_an_item_that_disagrees_with_its_directory(tmp_path: Path) -> None:
     """Acceptance 5: a record whose item field names a different item
     than the directory it was found in -- a misfiled or copied record --
     is refused rather than trusted."""
@@ -412,7 +414,7 @@ def test_load_records_refuses_an_item_that_disagrees_with_its_directory(tmp_path
         attavo.load_records(tmp_path / "records")
 
 
-def test_only_load_record_parses_record_file_content():
+def test_only_load_record_parses_record_file_content() -> None:
     """Acceptance 6: _load_record is the one place in this repository
     that turns a <stage>-NN.json record's bytes into a dict; parse_attempts
     and load_records both read through it rather than calling json.loads
@@ -429,7 +431,9 @@ def test_only_load_record_parses_record_file_content():
     assert "data = json.loads(path.read_text())" in text
 
     for fn in ("parse_attempts", "load_records"):
-        start = text.index(f"\ndef {fn}(")
+        # The implementation is the last def of the name: the typed loaders'
+        # @overload stubs (issue #189) precede it.
+        start = text.rindex(f"\ndef {fn}(")
         end = text.index("\ndef ", start + 1)
         body = text[start:end]
         assert "json.loads(" not in body, f"{fn} should read through _load_record, not parse directly"

@@ -2,24 +2,28 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any, Literal, cast, overload
 
 from attavo.common import PRODUCT_ROOT, product_version
+from attavo.types import ApprovalRecord, BuildRecord, CounselRecord, SpecRecord, VerifyRecord
 
 # --- record files: <stage>-NN.json, one per attempt, never overwritten ---
 
 SCHEMA_RECORDS_DIR = PRODUCT_ROOT / "schema" / "records"
 
 
-def stage_schema(stage: str) -> dict:
+def stage_schema(stage: str) -> dict[str, Any]:
     """schema/records/<stage>.schema.json -- this repository's own
     declaration of that stage's record shape (issue #60). The only
     artifact the outbound contract needs; there is no accessor for it
     beyond reading the file."""
-    return json.loads((SCHEMA_RECORDS_DIR / f"{stage}.schema.json").read_text())
+    schema: dict[str, Any] = json.loads((SCHEMA_RECORDS_DIR / f"{stage}.schema.json").read_text())
+    return schema
 
 
-def schema_id_version(schema: dict) -> int:
+def schema_id_version(schema: dict[str, Any]) -> int:
     """The trailing integer of a schema's $id (".../records/build/2" -> 2)
     -- the single place a record shape's version lives. write_record reads
     this at call time rather than carrying its own copy, so the version it
@@ -33,7 +37,7 @@ class RecordItemMismatch(RuntimeError):
     rather than trusted."""
 
 
-def _load_record(path: Path, item_id: str) -> dict:
+def _load_record(path: Path, item_id: str) -> dict[str, Any]:
     """The one place in this repository that turns a record file's bytes
     into a dict (issue #60, acceptance 6). Defaults record_version to 1
     when absent -- version 1 is every record written before this release
@@ -47,11 +51,28 @@ def _load_record(path: Path, item_id: str) -> dict:
     elif item != item_id:
         raise RecordItemMismatch(
             f"{path}: item {item!r} disagrees with its directory {item_id!r}")
-    return data
+    return cast(dict[str, Any], data)
 
 
-def parse_attempts(records_dir: Path, stage: str) -> dict[int, dict]:
-    attempts: dict[int, dict] = {}
+# The typed loaders: a literal stage name selects the record kind the caller
+# gets back (issue #189). The record is read from a file and not validated
+# here, so the kind is the schema's promise, the same one the write side
+# already keeps (write_record refuses a key its schema does not declare);
+# a stage held in a variable is the untyped fallback.
+@overload
+def parse_attempts(records_dir: Path, stage: Literal["spec"]) -> dict[int, SpecRecord]: ...
+@overload
+def parse_attempts(records_dir: Path, stage: Literal["approval"]) -> dict[int, ApprovalRecord]: ...
+@overload
+def parse_attempts(records_dir: Path, stage: Literal["build"]) -> dict[int, BuildRecord]: ...
+@overload
+def parse_attempts(records_dir: Path, stage: Literal["verify"]) -> dict[int, VerifyRecord]: ...
+@overload
+def parse_attempts(records_dir: Path, stage: Literal["counsel"]) -> dict[int, CounselRecord]: ...
+@overload
+def parse_attempts(records_dir: Path, stage: str) -> dict[int, Any]: ...
+def parse_attempts(records_dir: Path, stage: str) -> dict[int, Any]:
+    attempts: dict[int, Any] = {}
     if not records_dir.is_dir():
         return attempts
     for f in records_dir.glob(f"{stage}-*.json"):
@@ -65,7 +86,19 @@ def parse_attempts(records_dir: Path, stage: str) -> dict[int, dict]:
     return attempts
 
 
-def latest_record(records_dir: Path, stage: str) -> dict | None:
+@overload
+def latest_record(records_dir: Path, stage: Literal["spec"]) -> SpecRecord | None: ...
+@overload
+def latest_record(records_dir: Path, stage: Literal["approval"]) -> ApprovalRecord | None: ...
+@overload
+def latest_record(records_dir: Path, stage: Literal["build"]) -> BuildRecord | None: ...
+@overload
+def latest_record(records_dir: Path, stage: Literal["verify"]) -> VerifyRecord | None: ...
+@overload
+def latest_record(records_dir: Path, stage: Literal["counsel"]) -> CounselRecord | None: ...
+@overload
+def latest_record(records_dir: Path, stage: str) -> Any | None: ...
+def latest_record(records_dir: Path, stage: str) -> Any:
     attempts = parse_attempts(records_dir, stage)
     return attempts[max(attempts)] if attempts else None
 
@@ -83,8 +116,8 @@ def latest_attempt_path(records_dir: Path, stage: str) -> Path | None:
     return records_dir / f"{stage}-{max(attempts):02d}.json"
 
 
-def write_record(records_dir: Path, stage: str, record: dict, m: dict, item: str,
-                 log: str | None = None) -> Path:
+def write_record(records_dir: Path, stage: str, record: Mapping[str, Any], m: dict[str, Any],
+                 item: str, log: str | None = None) -> Path:
     """Every record gains record_version (this stage schema's own $id
     version -- issue #60) and item (verbatim from the caller, matching the
     record's directory segment), plus product_version (what ran, derived
@@ -131,13 +164,13 @@ def write_record(records_dir: Path, stage: str, record: dict, m: dict, item: str
 RECORD_RE = re.compile(r"^([a-z]+)-([0-9]{2,})\.json$")
 
 
-def load_records(records_dir: Path) -> dict[str, dict[str, dict]]:
+def load_records(records_dir: Path) -> dict[str, dict[str, dict[str, Any]]]:
     """{item_id: {stage: latest_record}} for every <records>/<item>/<stage>-NN.json."""
-    items: dict[str, dict[str, dict]] = {}
+    items: dict[str, dict[str, dict[str, Any]]] = {}
     if not records_dir.is_dir():
         return items
     for item_dir in sorted(p for p in records_dir.iterdir() if p.is_dir()):
-        by_stage: dict[str, dict[int, dict]] = {}
+        by_stage: dict[str, dict[int, dict[str, Any]]] = {}
         for rec in sorted(item_dir.glob("*.json")):
             m = RECORD_RE.match(rec.name)
             if not m:

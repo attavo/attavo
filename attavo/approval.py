@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 from attavo.common import (
     MANIFEST,
@@ -73,7 +74,7 @@ def cmd_approve(argv: list[str]) -> int:
     return 0
 
 
-def approval_status(root: Path, m: dict, item_id: str) -> str:
+def approval_status(root: Path, m: dict[str, Any], item_id: str) -> str:
     """"absent", "expired", or "valid": whether the latest approval record
     for item_id still binds to the spec's current commit. Raises
     ShallowCheckoutError on a shallow checkout, same as last_commit_touching.

@@ -27,6 +27,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -36,7 +37,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CODEX_RUN = ROOT / "adapters" / "codex" / "run"
 
 
-def base_env(tmp_path: Path, config: dict | None = None) -> dict:
+def base_env(tmp_path: Path, config: dict[str, Any] | None = None) -> dict[str, Any]:
     spec_dir = FIXTURES / "build_valid" / "specs" / "1"
     env = dict(os.environ)
     env.pop("ATTAVO_CHECKS_COMMAND", None)
@@ -53,25 +54,25 @@ def base_env(tmp_path: Path, config: dict | None = None) -> dict:
     return env
 
 
-def run_codex(env: dict) -> subprocess.CompletedProcess:
+def run_codex(env: dict[str, Any]) -> subprocess.CompletedProcess[str]:
     return subprocess.run([str(CODEX_RUN)], capture_output=True, text=True,
                           check=False, env=env)
 
 
-def dry_run(tmp_path: Path, config: dict | None = None,
-           extra_env: dict | None = None) -> dict:
+def dry_run(tmp_path: Path, config: dict[str, Any] | None = None,
+           extra_env: dict[str, Any] | None = None) -> dict[str, Any]:
     env = base_env(tmp_path, config)
     env["ATTAVO_ADAPTER_DRY_RUN"] = "1"
     if extra_env:
         env.update(extra_env)
     run = run_codex(env)
     assert run.returncode == 0, run.stderr
-    return json.loads(run.stdout)
+    return cast(dict[str, Any], json.loads(run.stdout))
 
 
-def run_with_response(tmp_path: Path, events: list[dict], final, exit_code: int = 0,
-                      config: dict | None = None, extra_env: dict | None = None
-                      ) -> subprocess.CompletedProcess:
+def run_with_response(tmp_path: Path, events: list[dict[str, Any]], final: dict[str, Any], exit_code: int = 0,
+                      config: dict[str, Any] | None = None, extra_env: dict[str, Any] | None = None
+                      ) -> subprocess.CompletedProcess[str]:
     response_file = tmp_path / "response.json"
     response_file.write_text(json.dumps({"events": events, "final": final, "exit_code": exit_code}))
     env = base_env(tmp_path, config)
@@ -81,9 +82,9 @@ def run_with_response(tmp_path: Path, events: list[dict], final, exit_code: int 
     return run_codex(env)
 
 
-def run_with_responses(tmp_path: Path, canned: list[dict],
-                       config: dict | None = None, extra_env: dict | None = None
-                       ) -> subprocess.CompletedProcess:
+def run_with_responses(tmp_path: Path, canned: list[dict[str, Any]],
+                       config: dict[str, Any] | None = None, extra_env: dict[str, Any] | None = None
+                       ) -> subprocess.CompletedProcess[str]:
     """canned is a queue of {"events", "final", "exit_code"} objects, one
     per invocation this adapter makes in order, its last element
     repeating once exhausted (issue #88: the non-question retry is a
@@ -100,14 +101,14 @@ def run_with_responses(tmp_path: Path, canned: list[dict],
 DONE_USAGE = {"input_tokens": 15272, "cached_input_tokens": 12160,
              "cache_write_input_tokens": 0, "output_tokens": 5,
              "reasoning_output_tokens": 0}
-DONE_EVENTS = [
+DONE_EVENTS: list[dict[str, Any]] = [
     {"type": "thread.started", "thread_id": "t1"},
     {"type": "turn.started"},
     {"type": "turn.completed", "usage": DONE_USAGE},
 ]
 
 
-def test_model_is_required(tmp_path):
+def test_model_is_required(tmp_path: Path) -> None:
     """No model id appears anywhere codex itself reports (confirmed live
     2026-09-08 against codex-cli 0.153.4: not the event stream, not
     `codex doctor`, not any config file), so [executor.codex].model is
@@ -124,7 +125,7 @@ def test_model_is_required(tmp_path):
     assert "model" in real.stderr
 
 
-def test_model_reported_is_exactly_the_configured_one_never_derived(tmp_path):
+def test_model_reported_is_exactly_the_configured_one_never_derived(tmp_path: Path) -> None:
     """The report's model is [executor.codex].model verbatim -- there is
     nothing in a real response to derive it from, unlike claude-code's
     modelUsage breakdown."""
@@ -135,7 +136,7 @@ def test_model_reported_is_exactly_the_configured_one_never_derived(tmp_path):
     assert line["model"] == "gpt-5.1-codex"
 
 
-def test_subscription_auth_refuses_with_an_api_key_in_the_environment(tmp_path):
+def test_subscription_auth_refuses_with_an_api_key_in_the_environment(tmp_path: Path) -> None:
     """Issue #41 (2026-09-09 addendum). [executor.codex].auth mirrors
     claude-code's auth = "subscription": the operator's own machine logs
     in via a ChatGPT plan, and OPENAI_API_KEY left in the environment
@@ -152,13 +153,13 @@ def test_subscription_auth_refuses_with_an_api_key_in_the_environment(tmp_path):
     assert "OPENAI_API_KEY" in run.stderr
 
 
-def test_subscription_auth_is_the_default_and_proceeds_with_no_key(tmp_path):
+def test_subscription_auth_is_the_default_and_proceeds_with_no_key(tmp_path: Path) -> None:
     run = run_with_response(tmp_path, DONE_EVENTS, {"status": "done", "question": None},
                             config={"model": "gpt-test"})
     assert run.returncode == 0, run.stderr
 
 
-def test_api_auth_refuses_without_an_api_key(tmp_path):
+def test_api_auth_refuses_without_an_api_key(tmp_path: Path) -> None:
     env = base_env(tmp_path, config={"model": "gpt-test", "auth": "api"})
     run = run_codex(env)
     assert run.returncode == 1
@@ -166,7 +167,7 @@ def test_api_auth_refuses_without_an_api_key(tmp_path):
     assert "OPENAI_API_KEY" in run.stderr
 
 
-def test_cost_usd_is_always_null(tmp_path):
+def test_cost_usd_is_always_null(tmp_path: Path) -> None:
     """No dollar figure appears anywhere codex reports under any auth
     mode (confirmed live 2026-09-08); a non-null cost on a codex record
     would be evidence the wrong credential was used, not a measurement."""
@@ -177,7 +178,7 @@ def test_cost_usd_is_always_null(tmp_path):
     assert line["cost_usd"] is None
 
 
-def test_sandbox_is_workspace_write_for_build_and_read_only_for_verify(tmp_path):
+def test_sandbox_is_workspace_write_for_build_and_read_only_for_verify(tmp_path: Path) -> None:
     """verify's instruction says "make no edits, write no files, commit
     nothing"; the sandbox enforces it mechanically rather than this
     adapter trusting the instruction alone."""
@@ -188,7 +189,7 @@ def test_sandbox_is_workspace_write_for_build_and_read_only_for_verify(tmp_path)
     assert verify["argv"][verify["argv"].index("--sandbox") + 1] == "read-only"
 
 
-def test_prompt_is_never_in_argv(tmp_path):
+def test_prompt_is_never_in_argv(tmp_path: Path) -> None:
     """codex's `-p` is `--profile`, not a prompt flag -- confirmed live
     2026-09-08 -- so the instruction must never appear in argv at all;
     it goes in on stdin, which is why dry_run's own envelope carries it
@@ -199,12 +200,12 @@ def test_prompt_is_never_in_argv(tmp_path):
     assert "-" in dry["argv"]
 
 
-def test_model_flag_from_config(tmp_path):
+def test_model_flag_from_config(tmp_path: Path) -> None:
     dry = dry_run(tmp_path, config={"model": "gpt-5.1-codex"})
     assert dry["argv"][dry["argv"].index("--model") + 1] == "gpt-5.1-codex"
 
 
-def test_real_invocation_tolerates_tracing_lines_in_the_event_stream(tmp_path):
+def test_real_invocation_tolerates_tracing_lines_in_the_event_stream(tmp_path: Path) -> None:
     """codex writes ERROR tracing lines to the same stdout stream as its
     JSONL events under --json (confirmed live 2026-09-08: retried
     websocket connections interleave "ERROR codex_api::..." lines with
@@ -247,7 +248,7 @@ def make_diff(tmp_path: Path, n_files: int, lines_per_file: int) -> Path:
     return diff_path
 
 
-def test_verify_instruction_names_the_diffs_path_not_its_text(tmp_path):
+def test_verify_instruction_names_the_diffs_path_not_its_text(tmp_path: Path) -> None:
     """Issue #86, rejection test 1. Specimen: tenant zero #659, verify-01,
     codex exec exit 1, "Input exceeds the maximum length of 1048576
     characters (actual_chars: 1297762)" -- ATTAVO_DIFF inlined in full
@@ -269,7 +270,7 @@ def test_verify_instruction_names_the_diffs_path_not_its_text(tmp_path):
     assert "line of a large deletion diff" not in instruction
 
 
-def test_build_instruction_names_the_feedback_files_path_not_its_text(tmp_path):
+def test_build_instruction_names_the_feedback_files_path_not_its_text(tmp_path: Path) -> None:
     """Issue #86, rejection test (build side): the same size-dependence
     applied to a large ATTAVO_FEEDBACK file -- the previous iteration's
     failing criteria, test output, and checks output -- inlined whole.
@@ -295,11 +296,11 @@ PROPER_QUESTION = ("Which of the two conflicting rulings on issue #12 "
                   "applies to criterion 3?")
 
 
-def _events(question) -> tuple[list[dict], dict]:
+def _events(question: str | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     return DONE_EVENTS, {"status": "question", "question": question}
 
 
-def test_codex_report_without_question_mark_is_reinstructed_once(tmp_path):
+def test_codex_report_without_question_mark_is_reinstructed_once(tmp_path: Path) -> None:
     """Issue #88, rejection test 1 (codex). A "question" with no "?" is a
     report, not a question: the adapter re-invokes once, appending
     REINSTRUCTION, and a proper question on the retry is returned as the
@@ -319,7 +320,7 @@ def test_codex_report_without_question_mark_is_reinstructed_once(tmp_path):
     assert "class" not in line
 
 
-def test_codex_two_reports_in_a_row_halts_with_class_non_question(tmp_path):
+def test_codex_two_reports_in_a_row_halts_with_class_non_question(tmp_path: Path) -> None:
     """Issue #88, rejection test 2 (codex). Two non-questions in a row
     still halt, but the report line names the class and both raw results
     reach the transcript.
@@ -337,9 +338,9 @@ def test_codex_two_reports_in_a_row_halts_with_class_non_question(tmp_path):
     assert line["class"] == "non-question"
 
 
-def _events_with_usage(question, status, input_tokens, output_tokens
-                       ) -> tuple[list[dict], dict]:
-    events = [
+def _events_with_usage(question: str | None, status: str, input_tokens: int, output_tokens: int
+                       ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    events: list[dict[str, Any]] = [
         {"type": "thread.started", "thread_id": "t1"},
         {"type": "turn.started"},
         {"type": "turn.completed",
@@ -354,7 +355,7 @@ def _events_with_usage(question, status, input_tokens, output_tokens
     ("question", REPORT_2),
 ])
 def test_codex_retry_sums_tokens_across_both_invocations(
-        tmp_path, second_status, second_question):
+        tmp_path: Path, second_status: str, second_question: str) -> None:
     """Issue #88 (codex). A non-question costs two executor turns, not
     one: the report line must sum both calls' tokens, whatever the
     retry's own outcome, or the record undercounts by exactly the
@@ -373,7 +374,7 @@ def test_codex_retry_sums_tokens_across_both_invocations(
     assert line["cost_usd"] is None
 
 
-def test_codex_declares_it_cannot_check_the_subagent_guard(tmp_path):
+def test_codex_declares_it_cannot_check_the_subagent_guard(tmp_path: Path) -> None:
     """Issue #88, rejection test 4. codex exec has no subagent or
     background-task concept anywhere in its surface (confirmed against
     `codex exec --help`, codex-cli 0.153.4) -- its conformance.json
@@ -387,7 +388,7 @@ def test_codex_declares_it_cannot_check_the_subagent_guard(tmp_path):
     assert guard.get("reason")
 
 
-def test_nonzero_exit_with_error_only_on_stderr_reaches_the_log(tmp_path):
+def test_nonzero_exit_with_error_only_on_stderr_reaches_the_log(tmp_path: Path) -> None:
     """Issue #86, rejection test 3 (confirmation). Specimen: tenant zero
     #659 verify-01 -- codex exec exit 1 with "Input exceeds the maximum
     length..." and the failed record's own log carried only
@@ -415,7 +416,7 @@ def test_nonzero_exit_with_error_only_on_stderr_reaches_the_log(tmp_path):
     assert "Input exceeds the maximum length" in run.stdout
 
 
-def test_ceiling_refuses_an_oversized_instruction(tmp_path):
+def test_ceiling_refuses_an_oversized_instruction(tmp_path: Path) -> None:
     """Issue #93, rejection test 2. codex's own declared limit
     (conformance.json's input_limit: 1048576 chars, its own
     input_too_large error) is patched down via
@@ -438,7 +439,7 @@ def test_ceiling_refuses_an_oversized_instruction(tmp_path):
     assert any(n > 10 for n in numbers), "both numbers (limit and size) must appear"
 
 
-def test_ceiling_refuses_before_invoking_codex(tmp_path):
+def test_ceiling_refuses_before_invoking_codex(tmp_path: Path) -> None:
     """Issue #93, rejection test 2 (invokes nothing). A fake codex on
     PATH would leave a sentinel file if it ran; the ceiling refusal
     happens before the adapter ever shells out, and before the model
@@ -458,7 +459,7 @@ def test_ceiling_refuses_before_invoking_codex(tmp_path):
     assert not sentinel.exists(), "codex must never be invoked over the ceiling"
 
 
-def counsel_extra_env(tmp_path: Path) -> dict:
+def counsel_extra_env(tmp_path: Path) -> dict[str, Any]:
     """Issue #100: the record, its log, the diff, the tenant manifest,
     and this product's own root, all handed by path."""
     record_path = tmp_path / "build-01.json"
@@ -479,14 +480,14 @@ def counsel_extra_env(tmp_path: Path) -> dict:
     }
 
 
-def test_codex_counsel_sandbox_is_read_only(tmp_path):
+def test_codex_counsel_sandbox_is_read_only(tmp_path: Path) -> None:
     """Issue #100, acceptance row 4. counsel runs under the same
     read-only sandbox as verify."""
     dry = dry_run(tmp_path, extra_env=counsel_extra_env(tmp_path))
     assert dry["argv"][dry["argv"].index("--sandbox") + 1] == "read-only"
 
 
-def test_codex_counsel_names_the_product_root_and_the_record(tmp_path):
+def test_codex_counsel_names_the_product_root_and_the_record(tmp_path: Path) -> None:
     """Issue #100, acceptance row 4. The instruction names this product's
     own root and the record path -- both handed by path, not inlined."""
     extra = counsel_extra_env(tmp_path)
@@ -498,12 +499,12 @@ def test_codex_counsel_names_the_product_root_and_the_record(tmp_path):
     assert "bin/attavo" in instruction
 
 
-def test_codex_counsel_schema_requires_the_structured_answer(tmp_path):
+def test_codex_counsel_schema_requires_the_structured_answer(tmp_path: Path) -> None:
     dry = dry_run(tmp_path, extra_env=counsel_extra_env(tmp_path))
     assert set(dry["schema"]["required"]) == {"class", "verdict", "citations", "proposal"}
 
 
-def test_codex_counsel_instruction_stays_under_the_bound_with_large_files(tmp_path):
+def test_codex_counsel_instruction_stays_under_the_bound_with_large_files(tmp_path: Path) -> None:
     """Issue #100, acceptance row 4 -- counsel handles a large record log
     the same way build and verify already do (issue #86): named by path,
     never inlined."""
@@ -518,7 +519,7 @@ def test_codex_counsel_instruction_stays_under_the_bound_with_large_files(tmp_pa
     assert str(large_log) in instruction
 
 
-def test_codex_verify_instruction_states_what_a_stub_is(tmp_path):
+def test_codex_verify_instruction_states_what_a_stub_is(tmp_path: Path) -> None:
     """Issue #90 (closed by #93). ATTAVO_SPEC_DIR's own spec, fixtures'
     build_valid/specs/1, carries a stub/ -- the instruction now names its
     path beside a sentence saying it is the fixture the criteria were
@@ -533,14 +534,14 @@ def test_codex_verify_instruction_states_what_a_stub_is(tmp_path):
     assert "not a finding" in instruction
 
 
-def test_codex_build_instruction_says_nothing_about_the_stub(tmp_path):
+def test_codex_build_instruction_says_nothing_about_the_stub(tmp_path: Path) -> None:
     """The stub sentence is verify's objective, not build's -- a spec
     carrying a stub/ must not change the build instruction at all."""
     dry = dry_run(tmp_path)
     assert "is not the intended change" not in dry["instruction"]
 
 
-def test_codex_verify_instruction_says_nothing_about_a_stub_when_absent(tmp_path):
+def test_codex_verify_instruction_says_nothing_about_a_stub_when_absent(tmp_path: Path) -> None:
     """A spec with no stub/ (fixtures' prose_criterion/specs/1) gets no
     stub section at all -- the sentence is conditioned on the stub
     existing, not always appended."""
