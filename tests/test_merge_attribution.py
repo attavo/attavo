@@ -20,17 +20,12 @@ ATTAVO = ROOT / "bin" / "attavo"
 
 
 def attavo_module():
-    """bin/attavo imported in-process, for a direct unit test of
+    """attavo.doctor imported in-process, for a direct unit test of
     _merges_reachable and merge_introducing_records -- reproducing the
     misattribution these tests name takes git plumbing no CLI subcommand
     exposes raw."""
-    import importlib.machinery
-    import importlib.util
-    loader = importlib.machinery.SourceFileLoader("attavo_merge_attribution_under_test", str(ATTAVO))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    return module
+    import importlib
+    return importlib.import_module("attavo.doctor")
 
 
 def run_doctor(root: Path) -> dict:
