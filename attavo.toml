@@ -23,7 +23,7 @@ model = "gpt-5.6-sol"
 
 [spec]
 [spec.boundary]
-paths = ["bin/**", "adapters/**", "schema/**", "templates/**", "action.yml", "scripts/**"]
+paths = ["bin/**", "attavo/**", "adapters/**", "schema/**", "templates/**", "action.yml", "scripts/**"]
 
 [gates]
 [gates.spec]
