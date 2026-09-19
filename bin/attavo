@@ -2426,7 +2426,11 @@ def cmd_verify(argv: list[str]) -> int:
     # forge on head_sha is what the forge actually checked and what will
     # be merged; build_sha and forge_checks["sha"] can differ, and both
     # are kept on the record rather than one sha serving two purposes.
-    forge_checks, forge_ok = read_forge_checks(root, checks_command, head_sha)
+    # head_sha is a marker commit just pushed (issue #178): the forge has
+    # not attached anything to it yet on the first read, so this polls
+    # with the same bound and interval the drive's own guard uses, giving
+    # those checks room to conclude before this read judges them.
+    forge_checks, forge_ok = poll_forge_checks(root, checks_command, head_sha)
 
     if not forge_ok:
         record = {
