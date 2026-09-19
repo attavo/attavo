@@ -15,7 +15,7 @@ jobs:
           python-version: "3.11"
       - run: pip install pytest jsonschema
       - run: >
-          python3 -m pytest tests -q
+          timeout 180 python3 -m pytest tests -q --durations=10
           --deselect tests/test_doctor.py::test_every_gate_rejects
           --deselect tests/test_doctor.py::test_one_item_traversed_every_stage
           --deselect tests/test_doctor.py::test_no_commit_lacks_a_record
