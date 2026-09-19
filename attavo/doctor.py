@@ -487,15 +487,23 @@ def _log_owes_tool_error(log: str | None) -> bool:
     "thread.started" event, then nothing but "[adapter exited 1]" -- the
     tool's real error line dropped before this reached the log, issue
     #86's own bug in split_adapter_stdout). A log that is only the exit
-    marker, nothing before it at all, still owes the same line."""
+    marker, nothing before it at all, still owes the same line. An
+    `error` event with a non-empty string `message` is the tool's own
+    error delivered as an event (issue #200: "Selected model is at
+    capacity"), so it owes nothing."""
     if not log:
         return False
     lines = [l for l in log.splitlines() if l.strip()]
     if not lines or not ADAPTER_EXIT_RE.match(lines[-1]):
         return False
     for l in lines[:-1]:
-        if _parse_json_line(l) is _JSON_LINE_PARSE_FAILED:
+        parsed = _parse_json_line(l)
+        if parsed is _JSON_LINE_PARSE_FAILED:
             return False
+        if isinstance(parsed, dict) and parsed.get("type") == "error":
+            message = parsed.get("message")
+            if isinstance(message, str) and message:
+                return False
     return True
 
 
