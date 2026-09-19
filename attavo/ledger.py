@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from attavo.build import commits_with_diffs, driver_identity
 from attavo.common import MANIFEST, STAGES, git, read_manifest
@@ -50,7 +51,7 @@ def first_commit_touching(root: Path, relpath: str) -> str | None:
     return lines[0] if lines else None
 
 
-def _record_blobs_at(root: Path, specs: list[tuple[str, str]], item_id: str) -> dict[tuple[str, str], dict]:
+def _record_blobs_at(root: Path, specs: list[tuple[str, str]], item_id: str) -> dict[tuple[str, str], dict[str, Any]]:
     """{(sha, relpath): record dict} for every (sha, relpath) pair, read by
     one `git cat-file --batch` process for the whole list rather than one
     `git show` per record (issue #153, ledger's only need for a record at a
@@ -67,7 +68,7 @@ def _record_blobs_at(root: Path, specs: list[tuple[str, str]], item_id: str) -> 
                          input=stdin.encode(), capture_output=True, check=False)
     data = out.stdout
     pos = 0
-    result: dict[tuple[str, str], dict] = {}
+    result: dict[tuple[str, str], dict[str, Any]] = {}
     for key in specs:
         newline = data.index(b"\n", pos)
         header = data[pos:newline].decode()
@@ -90,7 +91,7 @@ def _record_blobs_at(root: Path, specs: list[tuple[str, str]], item_id: str) -> 
     return result
 
 
-def item_ledger(root: Path, m: dict, item_id: str, merges: list[dict] | None = None) -> dict:
+def item_ledger(root: Path, m: dict[str, Any], item_id: str, merges: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """{"item", "rows", "summary"}: one row per act between item_id's first
     spec commit and its merge (merge_introducing_records, the same
     derivation doctor's proof two and attest both already read) or HEAD
@@ -160,7 +161,7 @@ def item_ledger(root: Path, m: dict, item_id: str, merges: list[dict] | None = N
     record_content = _record_blobs_at(
         root, [(sha, relpath) for sha, (_, relpath) in record_touches.items()], item_id)
 
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     operator_acts = product_acts = executor_commits = 0
     since = None
     approval_seen = False

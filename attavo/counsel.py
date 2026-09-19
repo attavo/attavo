@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any, cast
 
 from attavo.build import (
     adapter_reports,
@@ -17,6 +18,7 @@ from attavo.build import (
 )
 from attavo.common import MANIFEST, PRODUCT_ROOT, derive_item_id, git, now_iso, read_manifest
 from attavo.records import latest_attempt_path, latest_record, write_record
+from attavo.types import SpecRecord, StageRecord
 from attavo.verify import diff_since_approval, read_forge_checks
 
 # --- counsel: a stop is read inside the product first, before a person
@@ -27,7 +29,7 @@ from attavo.verify import diff_since_approval, read_forge_checks
 COUNSEL_STAGES = ("build", "verify")
 
 
-def latest_non_pass_stage_record(records_dir: Path) -> tuple[str | None, dict | None, Path | None]:
+def latest_non_pass_stage_record(records_dir: Path) -> tuple[str | None, StageRecord | None, Path | None]:
     """(stage, record, path) for the item's most recent non-pass build or
     verify record, by its own "at" timestamp -- or, when neither stage
     carries one, the item's latest refused spec-gate record (issue #133):
@@ -37,12 +39,13 @@ def latest_non_pass_stage_record(records_dir: Path) -> tuple[str | None, dict | 
     None) when none of the three exists. "Most recent" rather than
     "build, else verify" so a stop on the stage that ran later (typically
     verify, bound to a build that already passed) is the one counseled."""
-    candidates: list[tuple[str, dict, Path]] = []
+    candidates: list[tuple[str, StageRecord, Path]] = []
     for stage in COUNSEL_STAGES:
         path = latest_attempt_path(records_dir, stage)
         if path is None:
             continue
-        rec = latest_record(records_dir, stage)
+        # A path exists, so the record read from the same files does too.
+        rec = cast(StageRecord, latest_record(records_dir, stage))
         if rec.get("status") == "pass":
             continue
         candidates.append((stage, rec, path))
@@ -51,13 +54,13 @@ def latest_non_pass_stage_record(records_dir: Path) -> tuple[str | None, dict | 
         return candidates[-1]
     spec_path = latest_attempt_path(records_dir, "spec")
     if spec_path is not None:
-        spec_rec = latest_record(records_dir, "spec")
+        spec_rec = cast(SpecRecord, latest_record(records_dir, "spec"))
         if spec_rec.get("status") == "refused":
             return "spec", spec_rec, spec_path
     return None, None, None
 
 
-def latest_stage_record(records_dir: Path) -> tuple[str | None, dict | None, Path | None]:
+def latest_stage_record(records_dir: Path) -> tuple[str | None, StageRecord | None, Path | None]:
     """(stage, record, path) for the item's most recent build or verify
     record regardless of status, by its own "at" timestamp -- or, when
     neither stage carries one, the item's latest spec-gate record,
@@ -66,23 +69,23 @@ def latest_stage_record(records_dir: Path) -> tuple[str | None, dict | None, Pat
     filter latest_non_pass_stage_record applies does not apply here.
     (None, None, None) when the item carries no record of any of the
     three stages yet."""
-    candidates: list[tuple[str, dict, Path]] = []
+    candidates: list[tuple[str, StageRecord, Path]] = []
     for stage in COUNSEL_STAGES:
         path = latest_attempt_path(records_dir, stage)
         if path is None:
             continue
-        candidates.append((stage, latest_record(records_dir, stage), path))
+        candidates.append((stage, cast(StageRecord, latest_record(records_dir, stage)), path))
     if candidates:
         candidates.sort(key=lambda c: c[1].get("at") or "")
         return candidates[-1]
     spec_path = latest_attempt_path(records_dir, "spec")
     if spec_path is not None:
-        return "spec", latest_record(records_dir, "spec"), spec_path
+        return "spec", cast(SpecRecord, latest_record(records_dir, "spec")), spec_path
     return None, None, None
 
 
-def counsel_forge_evidence(root: Path, forge_cfg: dict, sha: str | None, tmp: Path
-                          ) -> tuple[dict, Path]:
+def counsel_forge_evidence(root: Path, forge_cfg: dict[str, Any], sha: str | None, tmp: Path
+                          ) -> tuple[dict[str, Any], Path]:
     """(forge, checks_path) -- issue #175. forge is the summary counsel's
     own record carries: {"read", "reason", "checks"}, "checks" a list of
     {"name", "conclusion"} pairs. checks_path is always written, under
@@ -114,9 +117,11 @@ def counsel_forge_evidence(root: Path, forge_cfg: dict, sha: str | None, tmp: Pa
         checks_path.write_text(json.dumps(envelope, indent=2) + "\n")
         return envelope, checks_path
 
+    # reason is None only when checks_command, check_log_command, and sha are all set.
+    checks_command, sha = cast(str, checks_command), cast(str, sha)
     raw_checks, _ok = read_forge_checks(root, checks_command, sha)
-    payload_checks: list[dict] = []
-    record_checks: list[dict] = []
+    payload_checks: list[dict[str, Any]] = []
+    record_checks: list[dict[str, Any]] = []
     for i, c in enumerate(raw_checks["conclusions"]):
         name, conclusion = c["name"], c["conclusion"]
         log_path = None
@@ -137,7 +142,7 @@ def counsel_forge_evidence(root: Path, forge_cfg: dict, sha: str | None, tmp: Pa
     return {"read": True, "reason": None, "checks": record_checks}, checks_path
 
 
-def counsel_graph_text(root: Path, m: dict, item_id: str, sha: str | None,
+def counsel_graph_text(root: Path, m: dict[str, Any], item_id: str, sha: str | None,
                        checks_command: str | None) -> str:
     """A text report of the item's own place on the branch (issue #175):
     the default branch's first-parent log since the item's own branch
@@ -238,6 +243,8 @@ def cmd_counsel(argv: list[str]) -> int:
     if stop_record is None:
         print(f"attavo counsel: refused: {no_record_msg}")
         return 1
+    # latest_*_stage_record returns all three of (stage, record, path) or none.
+    stage, record_path = cast(str, stage), cast(Path, record_path)
 
     executor = m.get("executor") or {}
     adapter_name = executor.get("counsel") or executor.get("verify")
@@ -306,7 +313,7 @@ def cmd_counsel(argv: list[str]) -> int:
     tokens = {"input": 0, "output": 0}
     cost_usd = None
     cls = verdict = None
-    citations: list = []
+    citations: list[Any] = []
     proposal = {"ruling_text": None, "patch": None, "question": None, "issue": None}
 
     if (run.returncode == 0 and payload is not None

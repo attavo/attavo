@@ -4,10 +4,12 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from attavo.common import MANIFEST, derive_item_id, read_manifest
 from attavo.records import latest_record, parse_attempts
 from attavo.stops import STOP_STAGES, counsel_record_for, gate_stop
+from attavo.types import Stop
 
 # --- file-findings: one tenant issue per finding, nothing filed silently ---
 
@@ -70,7 +72,7 @@ def cmd_file_findings(argv: list[str]) -> int:
 FILE_STOPS_LOG_TAIL_LINES = 20
 
 
-def compose_stop_title(item_id: str, stage: str, n: int, stop: dict) -> str:
+def compose_stop_title(item_id: str, stage: str, n: int, stop: Stop) -> str:
     """`stop <class>/<provenance> on item <N>: <stage>-<NN>` -- the title
     the tenant's file-issue script would otherwise fall back to
     <untitled> for. An empty class or provenance is a record defect, not
@@ -114,7 +116,7 @@ def cmd_file_stops(argv: list[str]) -> int:
     # verify, which write their own records uncommitted -- a caller that
     # wants it on the ledger commits it itself; drive does, in the same
     # commit as the record and its log (issue #89).
-    pending: list[tuple[str, int, dict, Path]] = []
+    pending: list[tuple[str, int, Stop, Path]] = []
     for stage in STOP_STAGES:
         attempts = parse_attempts(item_records_dir, stage)
         for n in sorted(attempts):

@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import cast
 
 from attavo.common import MANIFEST, git, now_iso, product_version, read_manifest
 from attavo.records import latest_attempt_path, latest_record, parse_attempts
+from attavo.types import ApprovalRecord, AttestRecord, BuildRecord, SpecRecord, VerifyRecord
 
 # --- attest: the signed envelope over one item's whole traversal ---
 
@@ -34,8 +36,11 @@ def derive_attest_items(root: Path, records_rel: str) -> tuple[set[str], str | N
 
 NOT_YET = object()
 
+ChainRecords = tuple[SpecRecord, ApprovalRecord, BuildRecord, VerifyRecord]
 
-def check_attest_chain(records_dir: Path, item_id: str, partial: bool = False):
+
+def check_attest_chain(records_dir: Path, item_id: str, partial: bool = False
+                       ) -> tuple[ChainRecords | object | None, str | None]:
     """The two assertions attavo attest refuses on: the latest spec,
     approval, build, and verify records for item_id all exist, and
     build's approval_sha names the latest approval -- a re-approval after
@@ -107,7 +112,9 @@ def check_attest_chain(records_dir: Path, item_id: str, partial: bool = False):
         return NOT_YET, (f"item {item_id} not yet (present: {', '.join(present) or 'none'}; "
                          f"absent: {', '.join(missing)})")
 
-    return (latest_spec, latest_approval, latest_build, latest_verify), None
+    # Every record is present here: without partial, the loop above refused on
+    # a missing one; with partial, `missing` non-empty returned NOT_YET.
+    return cast(ChainRecords, (latest_spec, latest_approval, latest_build, latest_verify)), None
 
 
 def cmd_attest(argv: list[str]) -> int:
@@ -154,7 +161,7 @@ def cmd_attest(argv: list[str]) -> int:
     if chain is NOT_YET:
         print(f"attavo attest --partial: {message}")
         return 0
-    latest_spec, latest_approval, latest_build, latest_verify = chain
+    latest_spec, latest_approval, latest_build, latest_verify = cast(ChainRecords, chain)
 
     spec_path = latest_attempt_path(records_dir, "spec")
     approval_path = latest_attempt_path(records_dir, "approval")
@@ -169,7 +176,7 @@ def cmd_attest(argv: list[str]) -> int:
     # run anywhere but the merge group.
     head_sha = git(root, "rev-parse", "HEAD").strip()
 
-    statement = {
+    statement: AttestRecord = {
         "sha": head_sha,
         "merge_sha": head_sha,
         "item": item_id,

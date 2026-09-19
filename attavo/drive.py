@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import io
 import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 from attavo.approval import approval_status
 from attavo.build import cmd_build, driver_identity
@@ -91,7 +93,7 @@ def push_record_commit(root: Path, branch: str) -> tuple[bool, str | None]:
     return True, None
 
 
-def drive_state(root: Path, m: dict, item_id: str) -> tuple[str, str | None, Path]:
+def drive_state(root: Path, m: dict[str, Any], item_id: str) -> tuple[str, str | None, Path]:
     """("no-approval" | "build" | "verify" | "ready", detail, records_dir):
     the next mechanical step for item_id, read from its latest records
     alone. A build only counts as current when it is a pass bound to the
@@ -109,8 +111,9 @@ def drive_state(root: Path, m: dict, item_id: str) -> tuple[str, str | None, Pat
     latest_approval = latest_record(records_dir, "approval")
     latest_build = latest_record(records_dir, "build")
     build_current = (latest_build is not None and latest_build.get("status") == "pass"
-                     and latest_build.get("approval_sha") == (latest_approval or {}).get("sha"))
-    if not build_current:
+                     and latest_build.get("approval_sha")
+                     == (latest_approval.get("sha") if latest_approval else None))
+    if latest_build is None or not build_current:
         return "build", None, records_dir
 
     latest_verify = latest_record(records_dir, "verify")
@@ -154,11 +157,11 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str,
         commit_record(root, [marker], f"attavo: {stage} invocation {nn:02d} started for item {item_id}")
     except RuntimeError as exc:
         print(f"attavo drive: stopped: could not commit the {stage} invocation marker: {exc}")
-        return 1
+        return 1  # type: ignore[return-value]  # defect (#189): an int, not the (rc, done) its callers unpack
     ok, err = push_record_commit(root, branch)
     if not ok:
         print(f"attavo drive: stopped: could not push the {stage} invocation marker: {err}")
-        return 1
+        return 1  # type: ignore[return-value]  # defect (#189): an int, not the (rc, done) its callers unpack
 
     rc = cmd_build([item_id]) if stage == "build" else cmd_verify([item_id])
     after = latest_attempt_path(records_dir, stage)
@@ -168,7 +171,8 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str,
         # configured) -- the stage command already printed why.
         return (rc if rc != 0 else 1), True
 
-    record = latest_record(records_dir, stage)
+    # An attempt path exists, so the record read from the same files does too.
+    record = cast(dict[str, Any], latest_record(records_dir, stage))
     status_out = record.get("status")
     to_commit = [after]
     if status_out != "pass":
@@ -188,12 +192,12 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str,
         commit_record(root, to_commit, message)
     except RuntimeError as exc:
         print(f"attavo drive: stopped: could not commit the {stage} record: {exc}")
-        return 1
+        return 1  # type: ignore[return-value]  # defect (#189): an int, not the (rc, done) its callers unpack
 
     ok, err = push_record_commit(root, branch)
     if not ok:
         print(f"attavo drive: stopped: could not push the {stage} record: {err}")
-        return 1
+        return 1  # type: ignore[return-value]  # defect (#189): an int, not the (rc, done) its callers unpack
 
     if status_out == "halted":
         question = (record.get("halted") or {}).get("question")
@@ -208,7 +212,7 @@ def _drive_run_stage(root: Path, records_dir: Path, branch: str, stage: str,
     return rc, status_out != "pass"
 
 
-def _drive_step(root: Path, m: dict, item_id: str) -> tuple[int, bool]:
+def _drive_step(root: Path, m: dict[str, Any], item_id: str) -> tuple[int, bool]:
     """One mechanical step, exactly as a single `attavo drive` call always
     has -- and whether repetition under --until-ready should stop here:
     True for every refusal or stop (no valid approval, no
@@ -259,7 +263,7 @@ def cmd_drive(argv: list[str]) -> int:
     # until this process exits. Line-buffering makes a pipe reader see
     # each line the moment it is printed, the same as a terminal already
     # does; no other output path changes.
-    sys.stdout.reconfigure(line_buffering=True)
+    cast(io.TextIOWrapper, sys.stdout).reconfigure(line_buffering=True)
     until_ready = "--until-ready" in argv
     recover = "--recover" in argv
     positional = [a for a in argv if a not in ("--until-ready", "--recover")]
@@ -334,7 +338,7 @@ def _seconds_since(at: str | None) -> float | None:
     return (datetime.now(timezone.utc) - then).total_seconds()
 
 
-def _drive_recover(root: Path, m: dict, item_id: str) -> int:
+def _drive_recover(root: Path, m: dict[str, Any], item_id: str) -> int:
     """`attavo drive --recover [N]`: every invocation of item N that began
     and wrote no record ends in one here -- class died when its pid is
     gone or on another host, class hung when it is alive past
@@ -378,7 +382,7 @@ def _drive_recover(root: Path, m: dict, item_id: str) -> int:
                 continue
             cls = "hung"
             try:
-                os.kill(int(pid), signal.SIGTERM)
+                os.kill(cast(int, pid), signal.SIGTERM)  # invocation_alive: pid is an int
                 ended = "terminated"
             except OSError as exc:
                 ended = f"not terminated ({exc})"
@@ -394,10 +398,11 @@ def _drive_recover(root: Path, m: dict, item_id: str) -> int:
                   f"a later record already exists, read the records before recovering")
             return 1
         schema = stage_schema(stage)
-        record = {k: None for k in schema.get("required", [])}
-        approval = latest_record(records_dir, "approval") or {}
+        record: dict[str, Any] = {k: None for k in schema.get("required", [])}
+        approval = latest_record(records_dir, "approval")
         record.update({"sha": info.get("sha"), "start_sha": info.get("sha"),
-                       "approval_sha": approval.get("sha"), "at": info.get("at"),
+                       "approval_sha": approval.get("sha") if approval else None,
+                       "at": info.get("at"),
                        "adapter": (m.get("executor") or {}).get(stage),
                        "status": "failed", "refusal": None, "halted": None,
                        "stop": {"class": cls, "provenance": "product", "detail": detail}})

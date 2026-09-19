@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 from attavo.build import (
     adapter_reports,
@@ -33,14 +34,14 @@ FORGE_OK_CONCLUSIONS = {"success", "neutral", "skipped"}
 FORGE_UNCONCLUDED_STATUSES = {"queued", "in_progress", "pending", "waiting"}
 
 
-def read_forge_checks(root: Path, checks_command: str, sha: str) -> dict:
+def read_forge_checks(root: Path, checks_command: str, sha: str) -> tuple[dict[str, Any], bool]:
     """Runs the tenant's [forge].checks_command on sha; the product does
     not know what forge that command reads. One line per check as
     "<name> <conclusion>"; a command that fails to run, or any conclusion
     other than success/neutral/skipped, is not green."""
     run = subprocess.run(f"{checks_command} {shlex.quote(sha)}", shell=True, cwd=str(root),
                          capture_output=True, text=True, check=False)
-    conclusions = []
+    conclusions: list[dict[str, str]] = []
     for line in run.stdout.splitlines():
         line = line.strip()
         if not line:
@@ -133,7 +134,7 @@ def cmd_verify(argv: list[str]) -> int:
     forge_checks, forge_ok = poll_forge_checks(root, checks_command, head_sha)
 
     if not forge_ok:
-        record = {
+        record: dict[str, Any] = {
             "sha": head_sha,
             "build_sha": build_sha,
             "build_record": build_record_path.stem if build_record_path else None,
@@ -290,7 +291,7 @@ def drive_forge_poll_interval_s() -> float:
     return float(os.environ.get("ATTAVO_DRIVE_POLL_INTERVAL_S", DRIVE_FORGE_POLL_INTERVAL_DEFAULT_S))
 
 
-def forge_checks_unconcluded(forge_checks: dict) -> bool:
+def forge_checks_unconcluded(forge_checks: dict[str, Any]) -> bool:
     """Whether poll_forge_checks should keep waiting rather than stop at
     once: an empty read (the forge has not attached any check to this sha
     yet) or any one check still carrying a status (queued, in_progress,
@@ -304,7 +305,7 @@ def forge_checks_unconcluded(forge_checks: dict) -> bool:
     return any(c["conclusion"] in FORGE_UNCONCLUDED_STATUSES for c in conclusions)
 
 
-def poll_forge_checks(root: Path, checks_command: str, sha: str) -> tuple[dict, bool]:
+def poll_forge_checks(root: Path, checks_command: str, sha: str) -> tuple[dict[str, Any], bool]:
     """read_forge_checks, retried within drive_forge_poll_bound_s() while
     some check is still unconcluded (forge_checks_unconcluded) -- a check
     still running is not yet red, and drive gives it a little room to

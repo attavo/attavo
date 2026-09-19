@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from attavo.attest import check_attest_chain
 from attavo.common import (
@@ -22,7 +23,7 @@ from attavo.stops import STOP_CLASSES, STOP_PROVENANCES, STOP_STAGES, gate_stop
 
 # --- doctor's three proofs ---
 
-def proof_every_gate_rejects(root: Path, m: dict | None) -> Proof:
+def proof_every_gate_rejects(root: Path, m: dict[str, Any] | None) -> Proof:
     p = Proof("every-gate-rejects", "every gate rejects its fixture")
     if m is None:
         return p.fail(f"no {MANIFEST} at {root}; no gate is registered")
@@ -58,7 +59,7 @@ def proof_every_gate_rejects(root: Path, m: dict | None) -> Proof:
     return p.hold(f"{len(gates)} gate(s) rejected their fixture")
 
 
-def _merges_reachable(root: Path) -> tuple[list[dict], str | None]:
+def _merges_reachable(root: Path) -> tuple[list[dict[str, Any]], str | None]:
     """(merges, refusal): every merge commit on the default branch's own
     first-parent line -- sha, parents, and its own first-parent diff --
     read by one process rather than the git log plus one git diff per
@@ -114,7 +115,7 @@ def _merges_reachable(root: Path) -> tuple[list[dict], str | None]:
 
 def merge_introducing_records(root: Path, records_rel: str, item: str,
                               stages: tuple[str, ...],
-                              merges: list[dict] | None = None) -> tuple[str | None, str | None]:
+                              merges: list[dict[str, Any]] | None = None) -> tuple[str | None, str | None]:
     """(merge_sha, refusal): the merge commit on the default branch's own
     first-parent line whose first-parent diff introduces a record for
     every one of stages, under records_rel/item/ -- the same derivation
@@ -175,7 +176,7 @@ def write_invocation_marker(root: Path, records_dir: Path, stage: str, nn: int) 
     return path
 
 
-def invocation_alive(info: dict) -> bool:
+def invocation_alive(info: dict[str, Any]) -> bool:
     """Whether the marker's pid is a live process on this host. Another
     host's pid is unknowable from here and reads as not alive: a drive
     that ran elsewhere and wrote no record is died by absence."""
@@ -195,7 +196,7 @@ def invocation_alive(info: dict) -> bool:
     return True
 
 
-def invocation_age_s(info: dict) -> float | None:
+def invocation_age_s(info: dict[str, Any]) -> float | None:
     """Seconds since the marker's own `at` timestamp -- how long ago the
     invocation it names began, whatever host wrote it. None when `at` is
     missing or does not parse."""
@@ -210,10 +211,10 @@ def invocation_age_s(info: dict) -> float | None:
     return (datetime.now(timezone.utc) - stamp).total_seconds()
 
 
-def invocations_without_record(item_records_dir: Path) -> list[tuple[Path, dict]]:
+def invocations_without_record(item_records_dir: Path) -> list[tuple[Path, dict[str, Any]]]:
     """Every <stage>-NN.started under one item whose <stage>-NN.json has
     not arrived, with the marker's own dict ({} when unreadable)."""
-    out: list[tuple[Path, dict]] = []
+    out: list[tuple[Path, dict[str, Any]]] = []
     if not item_records_dir.is_dir():
         return out
     for marker in sorted(item_records_dir.glob(f"*{INVOCATION_MARKER_SUFFIX}")):
@@ -228,7 +229,7 @@ def invocations_without_record(item_records_dir: Path) -> list[tuple[Path, dict]
     return out
 
 
-def stall_bound_s(m: dict) -> int | None:
+def stall_bound_s(m: dict[str, Any]) -> int | None:
     """[drive].stall_after_s: the tenant's own bound past which a live
     invocation with no new event is hung. A bound the tenant did not
     write is a forecast, so there is no default."""
@@ -238,7 +239,7 @@ def stall_bound_s(m: dict) -> int | None:
     return int(bound)
 
 
-def proof_no_invocation_lacks_record(root: Path, m: dict | None) -> Proof:
+def proof_no_invocation_lacks_record(root: Path, m: dict[str, Any] | None) -> Proof:
     import socket
     p = Proof("no-invocation-lacks-record", "no invocation lacks its record")
     if m is None:
@@ -285,7 +286,7 @@ def proof_no_invocation_lacks_record(root: Path, m: dict | None) -> Proof:
                   unrecorded_invocations=0, running_invocations=running, in_flight=in_flight)
 
 
-def proof_one_item_every_stage(root: Path, m: dict | None) -> Proof:
+def proof_one_item_every_stage(root: Path, m: dict[str, Any] | None) -> Proof:
     p = Proof("one-item-every-stage", "one item has traversed every stage")
     if m is None:
         return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
@@ -344,7 +345,7 @@ def touches_boundary(root: Path, sha: str, boundary_paths: list[str]) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for path in diff for pattern in boundary_paths)
 
 
-def proof_no_commit_lacks_record(root: Path, m: dict | None) -> Proof:
+def proof_no_commit_lacks_record(root: Path, m: dict[str, Any] | None) -> Proof:
     p = Proof("no-commit-lacks-record", "no commit lacks a record")
     if m is None:
         return p.fail(f"no {MANIFEST} at {root}; the tenant has no record boundary")
@@ -446,7 +447,7 @@ ADAPTER_EXIT_RE = re.compile(r"^\[adapter exited \d+\]$")
 _JSON_LINE_PARSE_FAILED = object()
 
 
-def _parse_json_line(text: str):
+def _parse_json_line(text: str) -> Any:
     """A line's own parsed JSON value, or the sentinel
     _JSON_LINE_PARSE_FAILED when it does not parse -- the one call site
     in this file for a defensive, line-at-a-time JSON parse, shared by
@@ -481,7 +482,7 @@ def _log_owes_tool_error(log: str | None) -> bool:
     return True
 
 
-def proof_no_stop_lacks_cause(root: Path, m: dict | None) -> Proof:
+def proof_no_stop_lacks_cause(root: Path, m: dict[str, Any] | None) -> Proof:
     p = Proof("no-stop-lacks-cause", "no stop lacks its cause")
     if m is None:
         return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
@@ -572,7 +573,7 @@ def proof_no_stop_lacks_cause(root: Path, m: dict | None) -> Proof:
                  older_records=older)
 
 
-def attestation_command(m: dict) -> str | None:
+def attestation_command(m: dict[str, Any]) -> str | None:
     """[forge].attestation_command: the tenant's own read of the store,
     given a merge sha on stdin, printing the statement as JSON on exit 0
     and nothing on a non-zero exit. Absent is not passing (issue #158:
@@ -582,7 +583,7 @@ def attestation_command(m: dict) -> str | None:
     return cmd if isinstance(cmd, str) and cmd.strip() else None
 
 
-def statement_for(root: Path, cmd: str, merge_sha: str) -> tuple[dict | None, int]:
+def statement_for(root: Path, cmd: str, merge_sha: str) -> tuple[dict[str, Any] | None, int]:
     """The statement the forge holds for merge_sha and the command's exit
     code. The statement is None when the command exits non-zero or prints
     anything but a JSON object -- exit 2 means the store itself could not
@@ -605,7 +606,7 @@ def _is_ancestor(root: Path, earlier: str, later: str) -> bool:
     return run.returncode == 0
 
 
-def proof_every_attested_item_is_sealed(root: Path, m: dict | None) -> Proof:
+def proof_every_attested_item_is_sealed(root: Path, m: dict[str, Any] | None) -> Proof:
     p = Proof("every-attested-item-is-sealed", "every attested item has its statement in the store")
     if m is None:
         return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
