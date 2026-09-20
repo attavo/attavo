@@ -1,0 +1,99 @@
+{
+  "sha": "46edb422ea4c727a86e28dbda11f603bcf0bd4b4",
+  "build_sha": "0e8ab9c37017f066e677379c74a31ad29b5280e3",
+  "build_record": "build-02",
+  "approval_sha": "8c85d4291bab1bcf3bb31d6be0a877789eb0f195",
+  "at": "2026-09-20T18:32:05Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "46edb422ea4c727a86e28dbda11f603bcf0bd4b4",
+    "conclusions": [
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "The builder did not rerun mypy after changing the file that failed mypy",
+      "specimen": "attest/records/206/build-02.log and attest/records/206/build-02.json",
+      "retires": "build-02's unsupported pass status; replace it with a build record whose final tree has a recorded successful `python3 -m mypy` run",
+      "rejection_test": "test_build_pass_requires_typecheck_after_the_last_source_change",
+      "severity": "Blocking when a source change occurs after the most recent mypy invocation and the build is recorded as pass; harmless once mypy exits 0 on the unchanged final built tree."
+    }
+  ],
+  "tests_named": [
+    "test_build_pass_requires_typecheck_after_the_last_source_change"
+  ],
+  "commits": [],
+  "mutation": null,
+  "weak_stub": false,
+  "stub_ratio": null,
+  "tokens": {
+    "input": 389751,
+    "output": 3843
+  },
+  "cost_usd": null,
+  "wall_clock_s": 206.138,
+  "status": "pass",
+  "stop": null,
+  "record_version": 5,
+  "item": "206",
+  "product_version": "v0.26.0-43-g1cb8af3",
+  "product_pin": "v0.26.0"
+}

@@ -11,7 +11,7 @@
     attavo counsel [N]
     attavo record-only
     attavo attest [--partial] [N]
-    attavo drive [N] [--until-ready]
+    attavo drive [N] [--until-ready | --report]
     attavo ledger [N] [--json]
     attavo stops [N] [--json]
 
@@ -217,6 +217,14 @@ own account (a refusal, a halted or failed or refused record, or the
 forge never going green); a step that stops still prints exactly what
 the same step would print without the flag. Without --until-ready,
 drive is unchanged: one step, then stop, exactly as before.
+
+--report (reconciler R1) prints, as JSON against schema/drive-report.schema.json,
+what item N is waiting on: its state, whose move it is (yours, waits, acts,
+done), and one sentence in the operator's words. It reads what drive reads --
+the item's records, its invocation markers, one read of the forge -- and does
+nothing else: it writes no record, starts nothing, terminates nothing, and
+does not poll, so a concluded red check reads as blocked-on-checks for as long
+as it is red. It exits 0 on every state. See issue #206's lane for the states.
 
 ledger reads, never writes. For item N (or every item under
 paths.records when N is omitted), it walks the commits from the item's

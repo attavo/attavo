@@ -26,6 +26,7 @@ RECORD_KINDS = {
     "VerifyRecord": "records/verify.schema.json",
     "CounselRecord": "records/counsel.schema.json",
     "AttestRecord": "attestation.schema.json",
+    "DriveReport": "drive-report.schema.json",
 }
 
 # The Stop sub-shape appears in build and verify records, each with its own

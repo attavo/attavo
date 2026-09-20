@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 from attavo.approval import approval_status
 from attavo.build import cmd_build, driver_identity
@@ -266,7 +267,8 @@ def cmd_drive(argv: list[str]) -> int:
     cast(io.TextIOWrapper, sys.stdout).reconfigure(line_buffering=True)
     until_ready = "--until-ready" in argv
     recover = "--recover" in argv
-    positional = [a for a in argv if a not in ("--until-ready", "--recover")]
+    report = "--report" in argv
+    positional = [a for a in argv if a not in ("--until-ready", "--recover", "--report")]
     root = Path(".").resolve()
     item_id = positional[0] if positional else derive_item_id(root)
     if not item_id:
@@ -277,6 +279,15 @@ def cmd_drive(argv: list[str]) -> int:
     if m is None:
         print(f"attavo drive: no {MANIFEST} at {root}", file=sys.stderr)
         return 2
+
+    if report:
+        if until_ready or recover:
+            print("attavo drive: --report reads and does nothing else; drop --until-ready "
+                  "and --recover", file=sys.stderr)
+            return 2
+        from attavo.report import drive_report
+        print(json.dumps(drive_report(root, m, item_id), indent=2))
+        return 0
 
     if recover:
         return _drive_recover(root, m, item_id)
@@ -338,6 +349,35 @@ def _seconds_since(at: str | None) -> float | None:
     return (datetime.now(timezone.utc) - then).total_seconds()
 
 
+class InvocationReading(NamedTuple):
+    """What one marker with no record reads as, from here and now."""
+    stage: str
+    nn: int
+    log: str
+    last_at: str | None
+    age: float | None
+    cls: str  # "running" | "hung" | "died"
+
+
+def read_invocation(root: Path, bound: int, marker: Path, info: dict[str, Any]) -> InvocationReading:
+    """Whether an invocation that began and wrote no record is running
+    (a live pid, not past bound seconds since its last event or, with no
+    event, its own start), hung (alive past the bound), or died (its pid
+    is gone, or on another host). Reads only: `attavo drive --recover`
+    ends what this names hung, and `attavo drive --report` prints it."""
+    stage, nn_text = marker.stem.rsplit("-", 1)
+    nn = int(nn_text)
+    log, last_at = _events_tail(_events_path_for(root, stage, nn))
+    age = _seconds_since(last_at or info.get("at"))
+    if not invocation_alive(info):
+        cls = "died"
+    elif age is None or age <= bound:
+        cls = "running"
+    else:
+        cls = "hung"
+    return InvocationReading(stage, nn, log, last_at, age, cls)
+
+
 def _drive_recover(root: Path, m: dict[str, Any], item_id: str) -> int:
     """`attavo drive --recover [N]`: every invocation of item N that began
     and wrote no record ends in one here -- class died when its pid is
@@ -368,28 +408,22 @@ def _drive_recover(root: Path, m: dict[str, Any], item_id: str) -> int:
         has_origin = False
     recovered = 0
     for marker, info in pending:
-        stage, nn_text = marker.stem.rsplit("-", 1)
-        nn = int(nn_text)
-        events = _events_path_for(root, stage, nn)
-        log, last_at = _events_tail(events)
-        age = _seconds_since(last_at or info.get("at"))
+        stage, nn, log, last_at, age, cls = read_invocation(root, bound, marker, info)
         pid, host = info.get("pid"), info.get("host")
-        if invocation_alive(info):
-            if age is None or age <= bound:
-                print(f"attavo drive: {marker.stem} is running (pid {pid}, last event "
-                      f"{'unknown' if age is None else int(age)} s ago, bound {bound} s); "
-                      f"nothing to recover")
-                continue
-            cls = "hung"
+        if cls == "running":
+            print(f"attavo drive: {marker.stem} is running (pid {pid}, last event "
+                  f"{'unknown' if age is None else int(age)} s ago, bound {bound} s); "
+                  f"nothing to recover")
+            continue
+        if cls == "hung":
             try:
                 os.kill(cast(int, pid), signal.SIGTERM)  # invocation_alive: pid is an int
                 ended = "terminated"
             except OSError as exc:
                 ended = f"not terminated ({exc})"
-            detail = (f"pid {pid} on {host} alive with no event for {int(age)} s "
+            detail = (f"pid {pid} on {host} alive with no event for {int(cast(float, age))} s "
                       f"(bound {bound} s); {ended}")
         else:
-            cls = "died"
             detail = (f"pid {pid} on {host} is not running and wrote no {marker.stem}.json; "
                       f"started {info.get('at')}, last event {last_at or 'none'}")
         if next_attempt_number(records_dir, stage) != nn:

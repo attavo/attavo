@@ -1,0 +1,34 @@
+{
+  "sha": "514faadd94662bfa5b4d684aa296f1d944ce33f9",
+  "spec_sha": "514faadd94662bfa5b4d684aa296f1d944ce33f9",
+  "at": "2026-09-20T17:26:00Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "report-names-a-red-check-and-writes-nothing.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "report-never-waits.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "report-walks-an-item-and-names-whose-move-it-is.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "the-report-has-its-contract-and-its-tests.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "206",
+  "product_version": "v0.26.0",
+  "product_pin": "v0.26.0"
+}
