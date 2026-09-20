@@ -1,0 +1,24 @@
+{
+  "sha": "44c2575dad8327dc57872dc0c263113ea50b73b4",
+  "spec_sha": "44c2575dad8327dc57872dc0c263113ea50b73b4",
+  "at": "2026-09-20T20:08:58Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "verify-records-a-stub-ratio-and-drops-two-fields.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "the-pre-release-fixes-have-their-tests.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "208",
+  "product_version": "v0.26.0",
+  "product_pin": "v0.26.0"
+}
