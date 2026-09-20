@@ -1,0 +1,29 @@
+{
+  "sha": "cfd3b9cbbf464c045f1ff37b1a6da040a229a7d9",
+  "spec_sha": "cfd3b9cbbf464c045f1ff37b1a6da040a229a7d9",
+  "at": "2026-09-20T16:34:46Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "doctor-fails-a-subsecond-disagreement.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "doctor-fails-every-field-that-is-not-its-records.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "the-whole-accounting-has-its-tests.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "204",
+  "product_version": "v0.26.0",
+  "product_pin": "v0.26.0"
+}

@@ -1,0 +1,780 @@
+from __future__ import annotations
+
+import fnmatch
+import json
+import os
+import re
+import subprocess
+from pathlib import Path
+from typing import Any
+
+from attavo.attest import check_attest_chain, item_time_and_cost
+from attavo.common import (
+    MANIFEST,
+    Proof,
+    STAGES,
+    fixture_item_id,
+    git,
+    product_version,
+    read_manifest,
+)
+from attavo.records import RECORD_RE, load_records, parse_attempts
+from attavo.stops import STOP_CLASSES, STOP_PROVENANCES, STOP_STAGES, gate_stop
+
+# --- doctor's three proofs ---
+
+def proof_every_gate_rejects(root: Path, m: dict[str, Any] | None) -> Proof:
+    p = Proof("every-gate-rejects", "every gate rejects its fixture")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; no gate is registered")
+    gates = m.get("gates") or {}
+    if not gates:
+        return p.fail("[gates] is empty; a gate that has rejected nothing does not exist")
+    fixtures = root / m.get("paths", {}).get("rejections", "")
+    # Proposal, not yet ruled on (issue #54): a gate that retires nothing
+    # only adds, so proof one reports it here rather than waiting on the
+    # schema alone -- read_manifest never validates against the manifest
+    # schema at runtime, so a schema requirement is not an enforced one.
+    no_retires = [name for name, gate in sorted(gates.items()) if not gate.get("retires")]
+    missing, accepted = [], []
+    for name, gate in sorted(gates.items()):
+        fixture = fixtures / name
+        if not fixture.is_dir():
+            missing.append(name)
+            continue
+        env = dict(os.environ)
+        item = fixture_item_id(fixture)
+        if item is not None:
+            env["ATTAVO_ITEM"] = item
+        run = subprocess.run(gate["command"], shell=True, cwd=str(fixture),
+                             capture_output=True, text=True, check=False, env=env)
+        if run.returncode == 0:
+            accepted.append(name)
+    if missing:
+        return p.fail(f"gate(s) with no rejection fixture: {', '.join(missing)}")
+    if accepted:
+        return p.fail(f"gate(s) that accepted their rejection fixture: {', '.join(accepted)}")
+    if no_retires:
+        return p.fail(f"gate(s) with no retires: {', '.join(no_retires)}")
+    return p.hold(f"{len(gates)} gate(s) rejected their fixture")
+
+
+def _merges_reachable(root: Path) -> tuple[list[dict[str, Any]], str | None]:
+    """(merges, refusal): every merge commit on the default branch's own
+    first-parent line -- sha, parents, and its own first-parent diff --
+    read by one process rather than the git log plus one git diff per
+    merge merge_introducing_records used to pay walking toward the one
+    it wants (issue #153). refs/remotes/origin/HEAD names the default
+    branch without hard-coding "main", the same primitive
+    diff_since_approval already uses (issue #52); walking from it rather
+    than from HEAD is what keeps a transport merge on an item branch, a
+    pull_request checkout's own synthetic test merge, and a merge_group's
+    temporary merge from ever being mistaken for an item's merge (issue
+    #169) -- none of those is reachable from the default branch's first-
+    parent line by definition. When refs/remotes/origin/HEAD is not set,
+    this refuses by name rather than guess, exactly as diff_since_approval
+    does.
+
+    The walk starts at HEAD itself when the current checkout is literally
+    on the branch refs/remotes/origin/HEAD names (an ordinary checkout of
+    the default branch, on push or on a developer's own machine) and at
+    the remote-tracking ref's own value otherwise (any other branch, or
+    the detached HEAD a pull_request or merge_group checkout leaves
+    behind) -- HEAD only ever *is* the default branch's first-parent line
+    in the former case; in the latter, only the remote-tracking ref names
+    it. --diff-merges=first-parent gives each merge's diff against its
+    first parent in the same pass git log --merges already makes to list
+    them, in the same order, newest first."""
+    symref = subprocess.run(
+        ["git", "-C", str(root), "symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
+        capture_output=True, text=True, check=False)
+    if symref.returncode != 0:
+        return [], "refs/remotes/origin/HEAD is not set; run `git remote set-head origin -a`"
+    default_remote_ref = symref.stdout.strip()
+    default_branch = default_remote_ref.rsplit("/", 1)[-1]
+    current_branch = subprocess.run(
+        ["git", "-C", str(root), "symbolic-ref", "-q", "--short", "HEAD"],
+        capture_output=True, text=True, check=False)
+    default_ref = ("HEAD" if current_branch.returncode == 0
+                   and current_branch.stdout.strip() == default_branch
+                   else default_remote_ref)
+    try:
+        out = git(root, "log", default_ref, "--first-parent", "--merges",
+                 "--diff-merges=first-parent", "--name-only",
+                 "--format=\x01%H\x1f%P")
+    except RuntimeError:
+        return [], None
+    merges = []
+    for block in out.split("\x01")[1:]:
+        header, _, rest = block.partition("\n")
+        sha, parents = header.split("\x1f")
+        merges.append({"sha": sha, "parents": parents.split(),
+                       "touched": [line for line in rest.splitlines() if line.strip()]})
+    return merges, None
+
+
+def merge_introducing_records(root: Path, records_rel: str, item: str,
+                              stages: tuple[str, ...],
+                              merges: list[dict[str, Any]] | None = None) -> tuple[str | None, str | None]:
+    """(merge_sha, refusal): the merge commit on the default branch's own
+    first-parent line whose first-parent diff introduces a record for
+    every one of stages, under records_rel/item/ -- the same derivation
+    attest itself uses (derive_attest_items), read here so proof two
+    requires an item's stage records to have arrived by an actual merge
+    on the default branch, not merely to sit in the tree, and not by a
+    transport merge, a pull_request checkout's synthetic test merge, or a
+    merge_group's temporary merge (issue #69 acceptance row 4; issue
+    #169). merge_sha is None with no refusal when no such merge exists
+    yet -- the item is not merged, not that the walk failed.
+
+    merges, when given, is _merges_reachable's own result -- ledger's
+    cmd_ledger computes it once and passes it to every item rather than
+    walking the default branch's merges again for each (issue #153); a
+    caller that already has merges has also already handled
+    _merges_reachable's refusal, so this never re-derives one. Left
+    None, a caller with just the one item to ask (doctor's proof two)
+    gets merges computed here, refusal and all."""
+    if merges is None:
+        merges, refusal = _merges_reachable(root)
+        if refusal:
+            return None, refusal
+    prefix = f"{records_rel.rstrip('/')}/{item}/"
+    for merge in merges:
+        found: set[str] = set()
+        for p in merge["touched"]:
+            if p.startswith(prefix):
+                m = RECORD_RE.match(Path(p).name)
+                if m:
+                    found.add(m.group(1))
+        if all(s in found for s in stages):
+            return merge["sha"], None
+    return None, None
+
+
+INVOCATION_MARKER_SUFFIX = ".started"
+
+
+def invocation_marker_path(records_dir: Path, stage: str, nn: int) -> Path:
+    return records_dir / f"{stage}-{nn:02d}{INVOCATION_MARKER_SUFFIX}"
+
+
+def write_invocation_marker(root: Path, records_dir: Path, stage: str, nn: int) -> Path:
+    """The fact that an invocation began, written before it does: at,
+    host, pid, the sha it starts on, and the product that started it.
+    Its record's arrival is what retires it; a marker with no record is
+    an invocation that died or hangs, and proof five names it."""
+    import os
+    import socket
+    from datetime import datetime, timezone
+    records_dir.mkdir(parents=True, exist_ok=True)
+    path = invocation_marker_path(records_dir, stage, nn)
+    sha = git(root, "rev-parse", "HEAD").strip()
+    info = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "host": socket.gethostname(), "pid": os.getpid(), "sha": sha,
+            "product_version": product_version()}
+    path.write_text(json.dumps(info, indent=2) + "\n")
+    return path
+
+
+def invocation_alive(info: dict[str, Any]) -> bool:
+    """Whether the marker's pid is a live process on this host. Another
+    host's pid is unknowable from here and reads as not alive: a drive
+    that ran elsewhere and wrote no record is died by absence."""
+    import os
+    import socket
+    if info.get("host") != socket.gethostname():
+        return False
+    pid = info.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def invocation_age_s(info: dict[str, Any]) -> float | None:
+    """Seconds since the marker's own `at` timestamp -- how long ago the
+    invocation it names began, whatever host wrote it. None when `at` is
+    missing or does not parse."""
+    from datetime import datetime, timezone
+    at = info.get("at")
+    if not isinstance(at, str):
+        return None
+    try:
+        stamp = datetime.strptime(at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return (datetime.now(timezone.utc) - stamp).total_seconds()
+
+
+def invocations_without_record(item_records_dir: Path) -> list[tuple[Path, dict[str, Any]]]:
+    """Every <stage>-NN.started under one item whose <stage>-NN.json has
+    not arrived, with the marker's own dict ({} when unreadable)."""
+    out: list[tuple[Path, dict[str, Any]]] = []
+    if not item_records_dir.is_dir():
+        return out
+    for marker in sorted(item_records_dir.glob(f"*{INVOCATION_MARKER_SUFFIX}")):
+        if (item_records_dir / f"{marker.stem}.json").is_file():
+            continue
+        try:
+            with marker.open() as fh:
+                info = json.load(fh)
+        except (OSError, ValueError):
+            info = {}
+        out.append((marker, info if isinstance(info, dict) else {}))
+    return out
+
+
+def stall_bound_s(m: dict[str, Any]) -> int | None:
+    """[drive].stall_after_s: the tenant's own bound past which a live
+    invocation with no new event is hung. A bound the tenant did not
+    write is a forecast, so there is no default."""
+    bound = (m.get("drive") or {}).get("stall_after_s")
+    if isinstance(bound, bool) or not isinstance(bound, (int, float)) or bound <= 0:
+        return None
+    return int(bound)
+
+
+def proof_no_invocation_lacks_record(root: Path, m: dict[str, Any] | None) -> Proof:
+    import socket
+    p = Proof("no-invocation-lacks-record", "no invocation lacks its record")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
+    records_rel = m.get("paths", {}).get("records", "")
+    records_dir = root / records_rel
+    if not records_dir.is_dir():
+        return p.fail(f"no records directory under {records_dir}")
+    bound = stall_bound_s(m)
+    if bound is None:
+        return p.fail("no [drive].stall_after_s in the manifest; a hung invocation cannot be "
+                      "told from a running one")
+    this_host = socket.gethostname()
+    recorded = 0
+    running: list[str] = []
+    in_flight: list[str] = []
+    problems: list[str] = []
+    for item_dir in sorted(d for d in records_dir.iterdir() if d.is_dir()):
+        for marker in item_dir.glob(f"*{INVOCATION_MARKER_SUFFIX}"):
+            if (item_dir / f"{marker.stem}.json").is_file():
+                recorded += 1
+        for marker, info in invocations_without_record(item_dir):
+            name = f"item {item_dir.name} {marker.stem}"
+            if invocation_alive(info):
+                running.append(f"{name} (pid {info.get('pid')} since {info.get('at')})")
+                continue
+            # A marker from another host is not alive by invocation_alive's
+            # own reckoning (its pid is unknowable from here) but is not
+            # yet a failure either: an invocation younger than the tenant's
+            # own stall bound may simply be running elsewhere, still
+            # writing toward its own record.
+            if info.get("host") != this_host:
+                age = invocation_age_s(info)
+                if age is not None and age < bound:
+                    in_flight.append(f"{name} (host {info.get('host')} since {info.get('at')})")
+                    continue
+            problems.append(f"{name} started {info.get('at')} on {info.get('host')} "
+                            f"pid {info.get('pid')} and never wrote its record")
+    if problems:
+        return p.fail("; ".join(problems), unrecorded_invocations=len(problems),
+                      running_invocations=running, in_flight=in_flight)
+    return p.hold(f"{recorded} invocation(s) recorded, {len(running)} running, "
+                  f"{len(in_flight)} in flight elsewhere",
+                  unrecorded_invocations=0, running_invocations=running, in_flight=in_flight)
+
+
+def proof_one_item_every_stage(root: Path, m: dict[str, Any] | None) -> Proof:
+    p = Proof("one-item-every-stage", "one item has traversed every stage")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
+    records_rel = m.get("paths", {}).get("records", "")
+    records_dir = root / records_rel
+    items = load_records(records_dir)
+    if not items:
+        return p.fail(f"no work item under {records_dir.relative_to(root)}")
+    complete = [item for item, stages in items.items() if all(s in stages for s in STAGES)]
+    if not complete:
+        best = max(items.items(), key=lambda kv: len(kv[1]))
+        lacking = [s for s in STAGES if s not in best[1]]
+        return p.fail(f"no item carries every stage; item {best[0]} lacks {', '.join(lacking)}")
+
+    # issue #74: a complete item is counted only when its chain holds --
+    # attavo attest refuses a build re-approved after the fact or a
+    # verify whose build went stale, and the coherence gate refuses the
+    # merge group on exactly that; a proof that never asked would call a
+    # traversal the gate itself would not let through. The refusal text
+    # is check_attest_chain's own, never re-typed here.
+    refused, held, unmerged = [], [], []
+    for item in complete:
+        chain, message = check_attest_chain(records_dir / item, item)
+        if chain is None:
+            refused.append(f"item {item}: {message}")
+            continue
+        merge_sha, merge_refusal = merge_introducing_records(root, records_rel, item, STAGES)
+        if merge_refusal:
+            return p.fail(merge_refusal)
+        if merge_sha:
+            held.append((item, merge_sha))
+        else:
+            unmerged.append(item)
+
+    if held:
+        names = ", ".join(item for item, _ in held)
+        shas = ", ".join(sha[:12] for _, sha in held)
+        return p.hold(f"item(s) {names} carry {', '.join(STAGES)} with the chain held, "
+                      f"merged at {shas}")
+    if refused:
+        return p.fail("; ".join(refused))
+    return p.fail(f"item(s) {', '.join(unmerged)} carry every stage with the chain held but no "
+                  f"merge commit's first-parent diff introduces all of them")
+
+
+def commit_subject(root: Path, sha: str) -> str:
+    return git(root, "log", "-1", "--format=%s", sha).strip()
+
+
+def touches_boundary(root: Path, sha: str, boundary_paths: list[str]) -> bool:
+    """Whether sha's first-parent diff touches a path [spec.boundary].paths
+    declares governed -- an ordinary merge that does is a boundary
+    evasion (issue #72): the tenant carried a governed change around the
+    path the manifest itself names."""
+    diff = git(root, "diff", "--name-only", f"{sha}^1", sha).splitlines()
+    return any(fnmatch.fnmatch(path, pattern) for path in diff for pattern in boundary_paths)
+
+
+class WindowRefused(Exception):
+    """The window start cannot be computed; str(exc) is the refusal."""
+
+
+def proof_window_start(root: Path, m: dict[str, Any]) -> tuple[str, str, list[str]]:
+    """(install commit, window start, first-parent chain after the install
+    commit): where proofs three and six start reading. The start is
+    [doctor].from if the tenant set it, otherwise the commit that
+    introduced the manifest (issue #192: proof six reads this too, so the
+    two proofs cannot disagree)."""
+    try:
+        install = git(root, "log", "--diff-filter=A", "--format=%H",
+                      "--reverse", "--", MANIFEST).split()
+    except RuntimeError as exc:
+        raise WindowRefused(f"git: {exc}") from exc
+    if not install:
+        raise WindowRefused(f"{MANIFEST} is not committed; the tenant has no record boundary")
+    install_sha = install[0]
+    full_chain = git(root, "rev-list", f"{install_sha}..HEAD", "--first-parent").split()
+
+    # issue #74: [doctor] from lets a tenant declare the doctor's read to
+    # start at a later commit on main's first-parent line -- the point
+    # after which every push arrived through the queue -- rather than the
+    # install commit, which on a repository that adopted the product
+    # after its history began is a boundary the doctor cannot otherwise
+    # see. Any spelling git resolves is accepted (a short sha, a tag, a
+    # ref) -- resolved with rev-parse --verify before the first-parent
+    # check runs, so the two failure modes stay distinct: a spelling that
+    # names no commit at all, and a commit that names one off the line.
+    # Checked, not trusted: neither is silently forgiven back to install.
+    declared_from = (m.get("doctor") or {}).get("from")
+    window_start = install_sha
+    if declared_from is not None:
+        try:
+            resolved_from = git(root, "rev-parse", "--verify", f"{declared_from}^{{commit}}").strip()
+        except RuntimeError:
+            raise WindowRefused(f"[doctor] from {declared_from} does not resolve to a commit") from None
+        if resolved_from != install_sha and resolved_from not in full_chain:
+            raise WindowRefused(f"[doctor] from {declared_from} is not on main's first-parent "
+                                f"line after the install commit {install_sha[:12]}")
+        window_start = resolved_from
+    return install_sha, window_start, full_chain
+
+
+def proof_no_commit_lacks_record(root: Path, m: dict[str, Any] | None) -> Proof:
+    p = Proof("no-commit-lacks-record", "no commit lacks a record")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; the tenant has no record boundary")
+    try:
+        install_sha, window_start, full_chain = proof_window_start(root, m)
+    except WindowRefused as exc:
+        return p.fail(str(exc))
+    if not full_chain:
+        return p.fail(f"no commit after the install commit {install_sha[:12]}; nothing has been recorded")
+
+    if window_start == install_sha:
+        window_spec = f"{install_sha}..HEAD"
+        commits = full_chain
+    else:
+        window_spec = f"{window_start}^..HEAD"
+        commits = git(root, "rev-list", window_spec, "--first-parent").split()
+    before_window = len(full_chain) - len(commits)
+
+    records_rel = m.get("paths", {}).get("records", "")
+    records_dir = root / records_rel
+    named: set[str] = set()
+    for stages in load_records(records_dir).values():
+        for rec in stages.values():
+            sha = rec.get("sha")
+            if isinstance(sha, str):
+                named.add(sha)
+            for c in rec.get("commits", []) or []:
+                if isinstance(c, str):
+                    named.add(c)
+    record_commits = set(git(root, "rev-list", window_spec, "--first-parent",
+                             "--", records_rel).split()) if records_rel else set()
+    merges = set(git(root, "rev-list", window_spec, "--first-parent", "--merges").split())
+    boundary_paths = ((m.get("spec") or {}).get("boundary") or {}).get("paths") or []
+
+    # Every first-parent commit in the window is exactly one of three
+    # (issue #72): recorded (a record names it, or its diff touches
+    # paths.records), ordinary (a merge that doesn't), or unrecorded
+    # (anything else -- on a protected main with a queue, a non-merge
+    # commit is the only way a change arrives without the forge).
+    recorded, ordinary, unrecorded = [], [], []
+    ordinary_commits, unrecorded_commits = [], []
+    boundary_evasions = 0
+    for c in commits:
+        if c in named or c in record_commits:
+            recorded.append(c)
+        elif c in merges:
+            ordinary.append(c)
+            evasion = bool(boundary_paths and touches_boundary(root, c, boundary_paths))
+            if evasion:
+                boundary_evasions += 1
+            ordinary_commits.append({"sha": c, "subject": commit_subject(root, c),
+                                     "boundary_evasion": evasion})
+        else:
+            unrecorded.append(c)
+            unrecorded_commits.append({"sha": c, "subject": commit_subject(root, c)})
+
+    counts = f"{len(recorded)} recorded, {len(ordinary)} ordinary, {len(unrecorded)} unrecorded"
+    evasions = boundary_evasions if boundary_paths else "n/a"
+    extra = {"recorded": len(recorded), "ordinary": len(ordinary),
+             "unrecorded": len(unrecorded), "boundary_evasions": evasions,
+             "before_window": before_window,
+             "ordinary_commits": ordinary_commits, "unrecorded_commits": unrecorded_commits}
+    if unrecorded:
+        return p.fail(f"{unrecorded[-1][:12]} lacks a record; {counts}; boundary evasions: "
+                      f"{evasions}; before the window: {before_window}", **extra)
+    return p.hold(f"{counts}; boundary evasions: {evasions}; before the window: {before_window}",
+                  **extra)
+
+
+ADAPTER_EXIT_RE = re.compile(r"^\[adapter exited \d+\]$")
+
+_JSON_LINE_PARSE_FAILED = object()
+
+
+def _parse_json_line(text: str) -> Any:
+    """A line's own parsed JSON value, or the sentinel
+    _JSON_LINE_PARSE_FAILED when it does not parse -- the one call site
+    in this file for a defensive, line-at-a-time JSON parse, shared by
+    proof four's own tool-error check below (any valid JSON satisfies
+    it) and an events line's own `at` read (issue #151, which further
+    requires a dict). A dedicated sentinel, not None: a line that is
+    the literal JSON value null parses successfully and must read as
+    such, not as a failure."""
+    try:
+        return json.loads(text)
+    except ValueError:
+        return _JSON_LINE_PARSE_FAILED
+
+
+def _log_owes_tool_error(log: str | None) -> bool:
+    """True when a log's last non-empty line is exactly an adapter-exit
+    marker and every line before it parses as JSON -- an adapter's own
+    event stream, never a tool's own words (issue #94's own specimen,
+    tenant zero's attest/records/659/verify-01.log: codex's
+    "thread.started" event, then nothing but "[adapter exited 1]" -- the
+    tool's real error line dropped before this reached the log, issue
+    #86's own bug in split_adapter_stdout). A log that is only the exit
+    marker, nothing before it at all, still owes the same line. An
+    `error` event with a non-empty string `message` is the tool's own
+    error delivered as an event (issue #200: "Selected model is at
+    capacity"), so it owes nothing."""
+    if not log:
+        return False
+    lines = [l for l in log.splitlines() if l.strip()]
+    if not lines or not ADAPTER_EXIT_RE.match(lines[-1]):
+        return False
+    for l in lines[:-1]:
+        parsed = _parse_json_line(l)
+        if parsed is _JSON_LINE_PARSE_FAILED:
+            return False
+        if isinstance(parsed, dict) and parsed.get("type") == "error":
+            message = parsed.get("message")
+            if isinstance(message, str) and message:
+                return False
+    return True
+
+
+def proof_no_stop_lacks_cause(root: Path, m: dict[str, Any] | None) -> Proof:
+    p = Proof("no-stop-lacks-cause", "no stop lacks its cause")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
+    records_rel = m.get("paths", {}).get("records", "")
+    records_dir = root / records_rel
+    if not records_dir.is_dir():
+        return p.fail(f"no records directory under {records_dir}")
+
+    # issue #89's own window lesson, proof three's already: a record
+    # before record_version 3 has no stop by construction (schema
+    # versions 1 and 2 predate it) -- counted here, never refused.
+    older = 0
+    checked = 0
+    problems: list[str] = []
+    for item_dir in sorted(d for d in records_dir.iterdir() if d.is_dir()):
+        for stage in STOP_STAGES:
+            for n, rec in sorted(parse_attempts(item_dir, stage).items()):
+                if rec.get("record_version", 1) < 3:
+                    older += 1
+                    continue
+                if rec.get("status") == "pass":
+                    continue
+                checked += 1
+                name = f"{stage}-{n:02d}"
+                stop = rec.get("stop")
+                if not stop:
+                    problems.append(f"item {item_dir.name} {name} carries no stop")
+                    continue
+                cls, provenance = stop.get("class"), stop.get("provenance")
+                if cls not in STOP_CLASSES:
+                    problems.append(f"item {item_dir.name} {name} stop.class {cls!r} names "
+                                    f"no enumerated class")
+                    continue
+                if provenance not in STOP_PROVENANCES:
+                    problems.append(f"item {item_dir.name} {name} stop.provenance "
+                                    f"{provenance!r} names no enumerated provenance")
+                    continue
+                if cls == "unclassed" and not stop.get("detail"):
+                    problems.append(f"item {item_dir.name} {name} is unclassed with no detail")
+                    continue
+                log_path = item_dir / f"{name}.log"
+                log = log_path.read_text() if log_path.is_file() else None
+                # Issue #89, rejection test 1's own specimen (tenant
+                # zero's #659 build-01): a failed build that actually ran
+                # the gates -- selected_tests is set only once cmd_build
+                # reaches them -- owes their heading in the log, whatever
+                # else stop already says.
+                if (stage == "build" and rec.get("status") == "failed"
+                        and rec.get("selected_tests") is not None
+                        and "--- attavo gates, iteration" not in (log or "")):
+                    problems.append(f"item {item_dir.name} {name} failed after the gates ran "
+                                    f"but its log carries no gates heading")
+                    continue
+                if _log_owes_tool_error(log):
+                    problems.append(f"item {item_dir.name} {name}'s log ends in an adapter "
+                                    f"exit with nothing before it but event lines; the tool's "
+                                    f"own error line is owed")
+
+        # issue #137: a refused spec-gate record is a stop too, class
+        # "gate" -- synthesized the same way item_stops and
+        # cmd_file_stops already read it, since cmd_spec_gate itself
+        # carries no stop field to check for one. No record_version
+        # gate here: unlike build/verify's own stop field, gate is never
+        # persisted, so there is no older shape that predates it.
+        for n, rec in sorted(parse_attempts(item_dir, "spec").items()):
+            if rec.get("status") != "refused":
+                continue
+            checked += 1
+            name = f"spec-{n:02d}"
+            stop = gate_stop(rec.get("refusal"))
+            cls, provenance = stop["class"], stop["provenance"]
+            if cls not in STOP_CLASSES:
+                problems.append(f"item {item_dir.name} {name} stop.class {cls!r} names "
+                                f"no enumerated class")
+                continue
+            if provenance not in STOP_PROVENANCES:
+                problems.append(f"item {item_dir.name} {name} stop.provenance "
+                                f"{provenance!r} names no enumerated provenance")
+                continue
+            if not stop.get("detail"):
+                problems.append(f"item {item_dir.name} {name} is a gate stop with no cause")
+
+    older_note = f"{older} record(s) before stop was recorded"
+    if problems:
+        return p.fail("; ".join(problems), older_records=older)
+    return p.hold(f"{checked} checked ({older_note})" if checked == 0
+                 else f"{checked} non-pass record(s) carry stop with a cause ({older_note})",
+                 older_records=older)
+
+
+def attestation_command(m: dict[str, Any]) -> str | None:
+    """[forge].attestation_command: the tenant's own read of the store,
+    given a merge sha on stdin, printing the statement as JSON on exit 0
+    and nothing on a non-zero exit. Absent is not passing (issue #158:
+    the doctor said done while #106, #148, #153 had no statement in the
+    store at all -- there was no key to read one through)."""
+    cmd = (m.get("forge") or {}).get("attestation_command")
+    return cmd if isinstance(cmd, str) and cmd.strip() else None
+
+
+def statement_for(root: Path, cmd: str, merge_sha: str) -> tuple[dict[str, Any] | None, int]:
+    """The statement the forge holds for merge_sha and the command's exit
+    code. The statement is None when the command exits non-zero or prints
+    anything but a JSON object -- exit 2 means the store itself could not
+    be read (issue #158, amended after build-05: distinct from exit 1,
+    the store read fine and simply held no statement)."""
+    run = subprocess.run(cmd, shell=True, cwd=str(root), input=merge_sha + "\n",
+                         capture_output=True, text=True, check=False)
+    if run.returncode != 0:
+        return None, run.returncode
+    try:
+        parsed = json.loads(run.stdout)
+    except ValueError:
+        return None, run.returncode
+    return (parsed if isinstance(parsed, dict) else None), run.returncode
+
+
+def _is_ancestor(root: Path, earlier: str, later: str) -> bool:
+    run = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", earlier, later],
+                         capture_output=True, check=False)
+    return run.returncode == 0
+
+
+def _same(stated: Any, summed: Any) -> bool:
+    """Equal as the accounting means it: a number equals a number of the
+    same value (a store may print 40.0 as 40), a bool equals only a bool,
+    and a list or an object is equal member by member. No tolerance: both
+    sides are the same function's rounding of the same records."""
+    if isinstance(stated, bool) or isinstance(summed, bool):
+        return isinstance(stated, bool) and isinstance(summed, bool) and stated == summed
+    if isinstance(stated, (int, float)) and isinstance(summed, (int, float)):
+        return float(stated) == float(summed)
+    if isinstance(stated, dict) and isinstance(summed, dict):
+        return stated.keys() == summed.keys() and all(_same(stated[k], summed[k]) for k in stated)
+    if isinstance(stated, list) and isinstance(summed, list):
+        return len(stated) == len(summed) and all(_same(a, b) for a, b in zip(stated, summed))
+    return type(stated) is type(summed) and bool(stated == summed)
+
+
+def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_sha: str,
+                          statement: dict[str, Any]) -> str | None:
+    """A sealed statement that carries `time` and `cost` says what its
+    records sum to, field by field -- the same function attest summed them
+    with, over the same records (none is written after a merge), sealed at
+    the same commit (the statement is computed at the merge, so lead_s and
+    waiting_s are recomputed from its committer time, not excepted). Every
+    key either block carries is compared; a key the statement carries that
+    the function does not produce disagrees, and a key a later release adds
+    is not demanded of a statement sealed before it. Exact: #202 retired
+    the one-second tolerance. A statement sealed before `time` existed
+    carries neither block and is not checked. No new read of the store."""
+    inner = statement.get("predicate")
+    predicate = inner if isinstance(inner, dict) else statement
+    stated_time, stated_cost = predicate.get("time"), predicate.get("cost")
+    if stated_time is None and stated_cost is None:
+        return None
+    where = f"item {item} merged at {merge_sha[:12]}"
+    if not isinstance(stated_time, dict) or not isinstance(stated_cost, dict):
+        return f"{where}: the statement carries one of time and cost without the other"
+    try:
+        sealed_at: int | None = int(subprocess.run(
+            ["git", "-C", str(root), "show", "-s", "--format=%ct", merge_sha],
+            capture_output=True, text=True, check=True).stdout.strip())
+    except (subprocess.CalledProcessError, ValueError):
+        sealed_at = None
+    summed_time, summed_cost = item_time_and_cost(item_records_dir, sealed_at)
+    differing: list[str] = []
+    for block, stated, summed in (("time", stated_time, dict(summed_time)),
+                                  ("cost", stated_cost, dict(summed_cost))):
+        for key in sorted(stated):
+            if key not in summed:
+                differing.append(f"{block}.{key} {stated[key]!r} is not a field its records sum to")
+            elif not _same(stated[key], summed[key]):
+                differing.append(f"{block}.{key} {stated[key]!r} is not its records' {summed[key]!r}")
+    if differing:
+        return f"{where}: the statement's " + "; ".join(differing)
+    return None
+
+
+def proof_every_attested_item_is_sealed(root: Path, m: dict[str, Any] | None) -> Proof:
+    p = Proof("every-attested-item-is-sealed", "every attested item has its statement in the store")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
+    cmd = attestation_command(m)
+    if cmd is None:
+        return p.fail("no [forge].attestation_command in the manifest; the store cannot be read")
+    records_rel = m.get("paths", {}).get("records", "")
+    records_dir = root / records_rel
+    if not records_dir.is_dir():
+        return p.fail(f"no records directory under {records_dir}")
+    items = load_records(records_dir)
+    complete = [item for item, stages in sorted(items.items()) if all(s in stages for s in STAGES)]
+
+    # [forge].sealed_since: merges at or before this commit are before the
+    # window -- the tenant could not seal them (no queue, no signing
+    # workflow, or a store that held nothing yet). They are named, never
+    # failed. Absent, the window starts where proof three's does: the
+    # install commit, or [doctor].from (issue #192).
+    since = (m.get("forge") or {}).get("sealed_since")
+    if not (isinstance(since, str) and since.strip()):
+        try:
+            since = proof_window_start(root, m)[1]
+        except WindowRefused as exc:
+            return p.fail(str(exc))
+    merges, refusal = _merges_reachable(root)
+    if refusal:
+        return p.fail(refusal)
+    sealed: list[str] = []
+    before_window: list[str] = []
+    unsealed: list[str] = []
+    not_merged: list[str] = []
+    not_read: list[str] = []
+    reasons: list[str] = []
+    for item in complete:
+        merge_sha, _ = merge_introducing_records(root, records_rel, item, STAGES, merges=merges)
+        if merge_sha is None:
+            not_merged.append(item)
+            continue
+        if _is_ancestor(root, merge_sha, since):
+            before_window.append(item)
+            continue
+        statement, exit_code = statement_for(root, cmd, merge_sha)
+        if statement is not None:
+            sealed.append(item)
+            disagreement = _accounting_disagrees(root, records_dir / item, item, merge_sha,
+                                                 statement)
+            if disagreement:
+                reasons.append(disagreement)
+        elif exit_code == 2:
+            not_read.append(item)
+            reasons.append(f"item {item} merged at {merge_sha[:12]}: not read -- "
+                           f"the store could not be read; {cmd!r} exited 2")
+        else:
+            unsealed.append(item)
+            reasons.append(f"item {item} merged at {merge_sha[:12]} has no statement in the store")
+    if reasons:
+        return p.fail("; ".join(reasons), sealed=sealed, before_window=before_window,
+                      unsealed=unsealed, not_merged=not_merged, not_read=not_read)
+    window = f" at {since[:12]}" if before_window else ""
+    return p.hold(f"{len(sealed)} sealed, {len(before_window)} before the window{window}, "
+                 f"{len(not_merged)} not merged",
+                 sealed=sealed, before_window=before_window, unsealed=unsealed,
+                 not_merged=not_merged, not_read=not_read)
+
+
+def doctor(root: Path) -> list[Proof]:
+    m = read_manifest(root)
+    return [proof_every_gate_rejects(root, m),
+            proof_one_item_every_stage(root, m),
+            proof_no_commit_lacks_record(root, m),
+            proof_no_stop_lacks_cause(root, m),
+            proof_no_invocation_lacks_record(root, m),
+            proof_every_attested_item_is_sealed(root, m)]
+
+
+def cmd_doctor(argv: list[str]) -> int:
+    as_json = "--json" in argv
+    args = [a for a in argv if a != "--json"]
+    root = Path(args[0] if args else ".").resolve()
+    proofs = doctor(root)
+    if as_json:
+        print(json.dumps({"root": str(root), "done": all(p.holds for p in proofs),
+                          "proofs": [p.as_dict() for p in proofs]}, indent=2))
+    else:
+        for i, p in enumerate(proofs, 1):
+            print(f"proof {i} {p.key}: {'HOLDS' if p.holds else 'FAILS'}: {p.reason}")
+        print("doctor: done" if all(p.holds for p in proofs)
+              else f"doctor: not done ({sum(not p.holds for p in proofs)} of "
+                   f"{len(proofs)} proofs fail)")
+    return 0 if all(p.holds for p in proofs) else 1

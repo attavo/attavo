@@ -1,0 +1,62 @@
+{
+  "sha": "b862f4f30f432b56a72b6475f664f885d95a1af6",
+  "start_sha": "f55ce0c5b327818b6da44a8780e8db19a07e5f25",
+  "spec_sha": "cfd3b9cbbf464c045f1ff37b1a6da040a229a7d9",
+  "approval_sha": "e5cfa1c42c7bcc1433d1085330d95b4cc3769ebc",
+  "at": "2026-09-20T16:52:49Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.278 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "doctor-fails-a-subsecond-disagreement.sh",
+      "exit": 0
+    },
+    {
+      "name": "doctor-fails-every-field-that-is-not-its-records.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-whole-accounting-has-its-tests.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "count": 0,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m pytest tests -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 535789,
+    "output": 7397
+  },
+  "cost_usd": 0.3601088,
+  "wall_clock_s": 956.255,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "stop": null,
+  "record_version": 7,
+  "item": "204",
+  "product_version": "v0.26.0-34-g9b3e2c7",
+  "product_pin": "v0.26.0"
+}

@@ -162,7 +162,87 @@ def test_doctor_proof_six_fails_a_statement_whose_time_is_not_its_records(tmp_pa
     assert failed["holds"] is False, failed
     assert "item 1" in failed["reason"] and "time.invocation_s" in failed["reason"], failed
 
-    # a statement sealed before `time` existed carries none and is not checked
+    # a statement sealed before `time` and `cost` existed carries neither
+    # and is not checked; one without the other is a disagreement (#203)
     del statement["time"]
+    del statement["cost"]
     (store / f"{merge}.json").write_text(json.dumps(envelope))
     assert proof_six(root)["holds"] is True
+
+
+def seal(root: Path, merge: str, statement: dict[str, Any]) -> None:
+    store = root / "statements"
+    store.mkdir(exist_ok=True)
+    envelope = {"_type": "https://in-toto.io/Statement/v1", "predicate": statement}
+    (store / f"{merge}.json").write_text(json.dumps(envelope))
+
+
+def test_doctor_rejects_a_subsecond_time_invocation_mismatch(tmp_path: Path) -> None:
+    """#202: the check allowed one second either way, so a statement could
+    say 398.75 of records that sum to 398.25 and hold."""
+    root, merge = make_item(tmp_path, INVOCATIONS)
+    statement = attest(root)
+    assert statement["time"]["invocation_s"] == 398.25
+    statement["time"]["invocation_s"] = 398.75
+    seal(root, merge, statement)
+    failed = proof_six(root)
+    assert failed["holds"] is False, failed
+    assert "item 1" in failed["reason"] and "time.invocation_s" in failed["reason"], failed
+
+
+def test_doctor_rejects_statement_whose_time_or_cost_breakdown_disagrees_with_records(
+        tmp_path: Path) -> None:
+    """#203: only time.invocation_s was compared, so every other field of
+    the accounting could say anything. Each case leaves invocation_s true."""
+    root, merge = make_item(tmp_path, INVOCATIONS)
+    true_statement = attest(root)
+    seal(root, merge, true_statement)
+    assert proof_six(root)["holds"] is True
+
+    def forged(path: tuple[str, ...], value: Any) -> dict[str, Any]:
+        copy: dict[str, Any] = json.loads(json.dumps(true_statement))
+        node = copy
+        for key in path[:-1]:
+            node = node[key]
+        node[path[-1]] = value
+        return copy
+
+    cases: list[tuple[tuple[str, ...], Any, str]] = [
+        (("time", "build", "invocation_s"), 1.0, "time.build"),
+        (("time", "build", "attempts"), 1, "time.build"),
+        (("time", "lead_s"), 1.0, "time.lead_s"),
+        (("time", "waiting_s"), 1.0, "time.waiting_s"),
+        (("time", "partial"), True, "time.partial"),
+        (("time", "not_read"), ["build-02"], "time.not_read"),
+        (("cost", "usd"), 0.5, "cost.usd"),
+        (("cost", "by_stage_usd"), {"build": 0.5}, "cost.by_stage_usd"),
+        (("cost", "by_adapter_usd"), {"alpha": 0.5}, "cost.by_adapter_usd"),
+        (("cost", "partial"), False, "cost.partial"),
+        (("cost", "not_read"), [], "cost.not_read"),
+        (("cost", "rate_usd"), 1.0, "cost.rate_usd"),
+    ]
+    for path, value, named in cases:
+        seal(root, merge, forged(path, value))
+        failed = proof_six(root)
+        assert failed["holds"] is False, (path, failed)
+        assert "item 1" in failed["reason"] and named in failed["reason"], (path, failed)
+
+    one_block: dict[str, Any] = json.loads(json.dumps(true_statement))
+    del one_block["cost"]
+    seal(root, merge, one_block)
+    assert proof_six(root)["holds"] is False
+
+
+def test_doctor_holds_a_true_statement_however_its_store_prints_it(tmp_path: Path) -> None:
+    """The rule that keeps a sealed statement from wedging the doctor: a
+    store may print 40.0 as 40, and a release after the seal may add a
+    field the sealed statement never carried. Neither is a disagreement."""
+    root, merge = make_item(tmp_path, INVOCATIONS)
+    statement = attest(root)
+    assert statement["time"]["verify"]["invocation_s"] == 40.0
+    statement["time"]["verify"]["invocation_s"] = 40
+    del statement["time"]["counsel"]
+    del statement["time"]["build"]["partial"]
+    seal(root, merge, statement)
+    held = proof_six(root)
+    assert held["holds"] is True and held["sealed"] == ["1"], held
