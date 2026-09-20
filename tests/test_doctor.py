@@ -745,6 +745,44 @@ def test_doctor_proof_four_fails_when_a_log_ends_in_an_adapter_exit_after_only_e
     assert "tool's own error line is owed" in p["reason"]
 
 
+def test_proof_four_reads_an_error_event_as_the_tools_own_words(tmp_path: Path) -> None:
+    """Issue #200: a review the vendor refused ("Selected model is at
+    capacity") logs the tool's own error as an `error` event, then the
+    exit marker. The cause is in the log, in the tool's words, so proof
+    four does not owe a line. An `error` event with an empty or missing
+    message says nothing and still owes it."""
+    event_lines = ('{"type":"thread.started","thread_id":"x"}\n'
+                   '{"type":"turn.started"}\n')
+    exit_line = "[adapter exited 1]"
+    verify = {
+        "status": "failed", "record_version": 3,
+        "stop": {"class": "unclassed", "provenance": "product", "detail": exit_line},
+    }
+    cases = {
+        "with_message": (
+            '{"type":"error","message":"Selected model is at capacity. '
+            'Please try a different model."}\n', True),
+        "empty_message": ('{"type":"error","message":""}\n', False),
+        "missing_message": ('{"type":"error"}\n', False),
+    }
+    for name, (error_line, holds) in cases.items():
+        root = tmp_path / name
+        root.mkdir()
+        (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+        init_repo(root, "install")
+
+        records = root / "records" / "1"
+        records.mkdir(parents=True)
+        (records / "verify-01.json").write_text(json.dumps(verify))
+        (records / "verify-01.log").write_text(event_lines + error_line + exit_line)
+        commit_all(root, f"a failed verify whose log has an error event: {name}")
+
+        p = run_doctor(root)["no-stop-lacks-cause"]
+        assert p["holds"] is holds, (name, p["reason"])
+        if not holds:
+            assert "tool's own error line is owed" in p["reason"], name
+
+
 def test_doctor_proof_four_fails_on_an_unclassed_stop_with_no_detail(tmp_path: Path) -> None:
     """An unclassed stop's whole contract is its detail (issue #89):
     with none, the record is exactly as unexplained as no stop at all."""
