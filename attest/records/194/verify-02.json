@@ -1,0 +1,107 @@
+{
+  "sha": "2e6d4725c6c3467986c43ce160df5cb404b0781a",
+  "build_sha": "aa9c02ba125d391f264f1d2facf0da3fa4d87d4e",
+  "build_record": "build-01",
+  "approval_sha": "2c4754587314e481152730e456003a8124d18656",
+  "at": "2026-09-20T00:24:46Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "2e6d4725c6c3467986c43ce160df5cb404b0781a",
+    "conclusions": [
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "Proof six accepts an incorrect invocation total when the discrepancy is one second or less",
+      "specimen": "attavo/doctor.py::_time_disagrees",
+      "retires": "The assumption that the large 20-second fixture mismatch proves exact agreement between a statement and its records.",
+      "rejection_test": "test_doctor_rejects_a_subsecond_time_invocation_mismatch",
+      "severity": "Blocking whenever abs(statement.time.invocation_s - records_sum) is greater than 0 but less than or equal to 1.0; harmless only when the rounded values are equal."
+    },
+    {
+      "title": "Proof six authenticates only time.invocation_s, leaving the rest of the new accounting forgeable",
+      "specimen": "attavo/doctor.py::_time_disagrees",
+      "retires": "The assumption that a sealed statement carrying time and cost is held to its records merely because its aggregate invocation duration was checked.",
+      "rejection_test": "test_doctor_rejects_statement_whose_time_or_cost_breakdown_disagrees_with_records",
+      "severity": "Blocking when any sealed time field other than invocation_s, or any cost total/subtotal/partial/not_read field, disagrees with the records while invocation_s remains correct; harmless while every unchecked field is truthful."
+    }
+  ],
+  "tests_named": [
+    "test_doctor_rejects_a_subsecond_time_invocation_mismatch",
+    "test_doctor_rejects_statement_whose_time_or_cost_breakdown_disagrees_with_records"
+  ],
+  "commits": [],
+  "mutation": null,
+  "weak_stub": false,
+  "stub_ratio": null,
+  "tokens": {
+    "input": 141970,
+    "output": 2557
+  },
+  "cost_usd": null,
+  "wall_clock_s": 154.819,
+  "status": "pass",
+  "stop": null,
+  "record_version": 5,
+  "item": "194",
+  "product_version": "v0.26.0-19-g950812a",
+  "product_pin": "v0.26.0"
+}
