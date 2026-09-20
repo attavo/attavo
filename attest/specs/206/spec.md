@@ -6,6 +6,8 @@ This is R1 of the reconciler (`claude/reconciler-brief-2026-09-20.md`, rulings A
 
 The stub under `stub/` is thin on purpose (the operator's ruling, 2026-09-20): it guesses the state from which files exist, satisfies the criteria, and fails eight of the thirteen tests in `tests/test_report.py`, which cover what it ignores (an expired approval, a record bound to an earlier approval or build, a live invocation inside and past the bound, counsel, a merged item). The build writes the report from the product's own functions; shipping the stub's `report.py` is not a build.
 
+The build's own gate (`[checks].command`) does not run the type check that CI requires, so a build can pass here and leave the head red: `build-01` did, on one `return-value` error at `attavo/report.py` line 57 (`_counsel_of` returns a `CounselRecord` where its annotation says `dict[str, Any]`). `python3 -m mypy` exits 0 on the built tree, with no `type: ignore`; the builder runs it before it finishes.
+
 A new reader must not wedge on a record that already exists (#194's `verify-01`): the report returns a state for every item this repository's records directory carries.
 
 Retires: #171 (a refusal is the report's current level, recomputed on every read, so there is nothing to record); any view's own derivation of what an item is waiting on (deleted by a screen item filed against this one once a release carries it).
