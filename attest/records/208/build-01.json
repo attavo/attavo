@@ -1,0 +1,58 @@
+{
+  "sha": "2d86a88d26aebecc0aefa0fad221f9b73dd870d6",
+  "start_sha": "83dad55a633ef8a59280df4d41b23f68f70de44d",
+  "spec_sha": "44c2575dad8327dc57872dc0c263113ea50b73b4",
+  "approval_sha": "791185631b22aac9159c9923e9c22ed77db04cfa",
+  "at": "2026-09-20T21:50:00Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.278 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "verify-records-a-stub-ratio-and-drops-two-fields.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-pre-release-fixes-have-their-tests.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "count": 4,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m pytest tests -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 696958,
+    "output": 9247
+  },
+  "cost_usd": 0.4313276,
+  "wall_clock_s": 950.922,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "stop": null,
+  "record_version": 7,
+  "item": "208",
+  "product_version": "v0.26.0-60-gb71c678",
+  "product_pin": "v0.26.0"
+}
