@@ -246,3 +246,36 @@ def test_doctor_holds_a_true_statement_however_its_store_prints_it(tmp_path: Pat
     seal(root, merge, statement)
     held = proof_six(root)
     assert held["holds"] is True and held["sealed"] == ["1"], held
+
+
+def test_doctor_rejects_null_time_without_cost(tmp_path: Path) -> None:
+    """#204's review: `"time": null` with no cost read as a statement sealed
+    before the accounting existed, and was not checked at all."""
+    root, merge = make_item(tmp_path, INVOCATIONS)
+    statement = attest(root)
+    statement["time"] = None
+    del statement["cost"]
+    seal(root, merge, statement)
+    failed = proof_six(root)
+    assert failed["holds"] is False, failed
+    assert "item 1" in failed["reason"] and "time" in failed["reason"], failed
+
+    statement["cost"] = None
+    seal(root, merge, statement)
+    assert proof_six(root)["holds"] is False, "both blocks null is carried, not absent"
+
+
+def test_doctor_rejects_large_integer_that_rounds_to_summed_float(tmp_path: Path) -> None:
+    """#204's review: both sides were converted to float, so an integer one
+    past 2**53 equalled the float beside it."""
+    big = 9007199254740992.0
+    root, merge = make_item(tmp_path, [("build", 1, big, 0.25, "alpha"), ("verify", 1, 0.0, None, "beta")])
+    statement = attest(root)
+    assert statement["time"]["build"]["invocation_s"] == big
+    seal(root, merge, statement)
+    assert proof_six(root)["holds"] is True
+    statement["time"]["build"]["invocation_s"] = 9007199254740993
+    seal(root, merge, statement)
+    failed = proof_six(root)
+    assert failed["holds"] is False, failed
+    assert "item 1" in failed["reason"] and "time.build" in failed["reason"], failed

@@ -86,6 +86,43 @@ def diff_since_approval(root: Path, approval_sha: str | None) -> tuple[str, str 
     return git(root, "diff", diff_base, "HEAD"), None
 
 
+def stub_ratio(diff_text: str, stub_dir: Path, excluded: tuple[str, ...]) -> float | None:
+    """The share of the lines diff_text adds that are a line of the stub's
+    file at the same path: near 1 the build shipped the spec author's stub,
+    near 0 the builder wrote the change. Lines under the excluded
+    directories (the specs and records, where the stub itself and the
+    item's records are committed) and blank lines are not counted. None
+    when there is no stub or the diff adds no counted line -- nothing was
+    measured, which is not 0.0."""
+    if not stub_dir.is_dir():
+        return None
+    skipped = tuple(e.strip("/") for e in excluded)
+    stub_lines: dict[str, set[str]] = {}
+    path: str | None = None
+    in_hunk = False
+    added = shipped = 0
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            path, in_hunk = None, False
+        elif in_hunk:
+            if line.startswith("+") and line[1:].strip() and path is not None:
+                added += 1
+                shipped += line[1:].rstrip() in stub_lines[path]
+        elif line.startswith("+++ "):
+            name = line[4:].split("\t")[0]
+            path = name[2:] if name.startswith("b/") else None
+            if path is not None and any(path == e or path.startswith(e + "/") for e in skipped):
+                path = None
+            if path is not None and path not in stub_lines:
+                stub_file = stub_dir / path
+                stub_lines[path] = (
+                    {text.rstrip() for text in stub_file.read_text(errors="replace").splitlines()}
+                    if stub_file.is_file() else set())
+        elif line.startswith("@@"):
+            in_hunk = True
+    return shipped / added if added else None
+
+
 def cmd_verify(argv: list[str]) -> int:
     root = Path(".").resolve()
     item_id = argv[0] if argv else derive_item_id(root)
@@ -147,7 +184,7 @@ def cmd_verify(argv: list[str]) -> int:
             "findings": None,
             "tests_named": [],
             "commits": [],
-            "mutation": None, "weak_stub": False, "stub_ratio": None,
+            "stub_ratio": None,
             "tokens": {"input": 0, "output": 0}, "cost_usd": None,
             "wall_clock_s": round(time.monotonic() - started, 3),
             "status": "returned",
@@ -254,7 +291,7 @@ def cmd_verify(argv: list[str]) -> int:
         "findings": findings,
         "tests_named": tests_named,
         "commits": commits,
-        "mutation": None, "weak_stub": False, "stub_ratio": None,
+        "stub_ratio": stub_ratio(diff_text, spec_dir / "stub", (specs_rel, records_rel)),
         "tokens": tokens,
         "cost_usd": cost_usd,
         "wall_clock_s": round(time.monotonic() - started, 3),

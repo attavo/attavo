@@ -102,8 +102,6 @@ class VerifyRecord(TypedDict):
     findings: list[dict[str, Any]] | None
     tests_named: list[str]
     commits: list[str]
-    mutation: dict[str, Any] | None
-    weak_stub: bool
     stub_ratio: float | None
     tokens: dict[str, int]
     cost_usd: float | None

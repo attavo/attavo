@@ -237,8 +237,8 @@ def spec_sections() -> list[str]:
 def stub_note() -> str | None:
     """None when ATTAVO_SPEC_DIR carries no stub/; else the sentence
     naming what a stub is (issue #90, closed by #93). The stub is
-    evidence -- a criterion it satisfies trivially is weak, and
-    weak_stub is read from exactly that -- but twice the judge reported
+    evidence -- a criterion it satisfies trivially is weak -- but twice
+    the judge reported
     a built tree as failing to match its stub as if the stub were the
     intended change (tenant zero #664, #644): one sentence of vocabulary
     was missing, not a smarter judge or a dropped stub."""
