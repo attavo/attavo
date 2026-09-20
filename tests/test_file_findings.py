@@ -45,7 +45,7 @@ def write_verify_record(root: Path, item: str, findings: list[Any]) -> None:
         "model": "fixture", "model_version": None,
         "forge_checks": {"command": "true", "sha": "0" * 40, "conclusions": []},
         "findings": findings, "tests_named": [],
-        "mutation": None, "weak_stub": False, "stub_ratio": None,
+        "stub_ratio": None,
         "tokens": {"input": 0, "output": 0}, "cost_usd": None,
         "wall_clock_s": 0.1, "status": "pass",
     }

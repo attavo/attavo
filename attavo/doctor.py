@@ -639,12 +639,13 @@ DATA_KEYED = ("by_stage_usd", "by_adapter_usd")
 def _same(stated: Any, summed: Any) -> bool:
     """Equal as the accounting means it: a number equals a number of the
     same value (a store may print 40.0 as 40), a bool equals only a bool,
-    and a list is equal member by member. No tolerance: both sides are the
-    same function's rounding of the same records."""
+    and a list is equal member by member. No tolerance and no conversion:
+    both sides are the same function's rounding of the same records, and an
+    int one past 2**53 is not the float beside it."""
     if isinstance(stated, bool) or isinstance(summed, bool):
         return isinstance(stated, bool) and isinstance(summed, bool) and stated == summed
     if isinstance(stated, (int, float)) and isinstance(summed, (int, float)):
-        return float(stated) == float(summed)
+        return bool(stated == summed)
     if isinstance(stated, list) and isinstance(summed, list):
         return len(stated) == len(summed) and all(_same(a, b) for a, b in zip(stated, summed))
     return type(stated) is type(summed) and bool(stated == summed)
@@ -670,6 +671,10 @@ def _differences(path: str, stated: Any, summed: Any, keyed_by_data: bool = Fals
     return found
 
 
+def _carried(predicate: dict[str, Any], key: str) -> str:
+    return repr(predicate[key]) if key in predicate else "absent"
+
+
 def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_sha: str,
                           statement: dict[str, Any]) -> str | None:
     """A sealed statement that carries `time` and `cost` says what its
@@ -678,16 +683,18 @@ def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_s
     the same commit (the statement is computed at the merge, so lead_s and
     waiting_s are recomputed from its committer time, not excepted). Exact:
     #202 retired the one-second tolerance. A statement sealed before `time`
-    existed carries neither block and is not checked; one block without the
-    other is a disagreement. No new read of the store."""
+    existed carries neither key and is not checked; a key that is present
+    holds a block, so a null one, or one block without the other, is a
+    disagreement. No new read of the store."""
     inner = statement.get("predicate")
     predicate = inner if isinstance(inner, dict) else statement
-    stated_time, stated_cost = predicate.get("time"), predicate.get("cost")
-    if stated_time is None and stated_cost is None:
+    if "time" not in predicate and "cost" not in predicate:
         return None
+    stated_time, stated_cost = predicate.get("time"), predicate.get("cost")
     where = f"item {item} merged at {merge_sha[:12]}"
     if not isinstance(stated_time, dict) or not isinstance(stated_cost, dict):
-        return f"{where}: the statement carries one of time and cost without the other"
+        return (f"{where}: the statement's time and cost are not both blocks "
+                f"(time is {_carried(predicate, 'time')}, cost is {_carried(predicate, 'cost')})")
     try:
         sealed_at: int | None = int(git(root, "show", "-s", "--format=%ct", merge_sha).strip())
     except (RuntimeError, ValueError):

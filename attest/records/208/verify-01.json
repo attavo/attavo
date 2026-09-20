@@ -1,0 +1,79 @@
+{
+  "sha": "2d002470cd775887a2eba3f7d1ebdc4f88336958",
+  "build_sha": "2d86a88d26aebecc0aefa0fad221f9b73dd870d6",
+  "build_record": "build-01",
+  "approval_sha": "791185631b22aac9159c9923e9c22ed77db04cfa",
+  "at": "2026-09-20T21:54:02Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "2d002470cd775887a2eba3f7d1ebdc4f88336958",
+    "conclusions": [
+      {
+        "name": "doctor",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "Returned verify records still use stub_ratio as a constant null",
+      "specimen": "attavo/verify.py",
+      "retires": "stub_ratio as a constant at the forge-returned write site",
+      "rejection_test": "test_verify_records_stub_ratio_when_forge_checks_are_not_green",
+      "severity": "Blocking when forge checks are not green and the item has a stub plus at least one counted added line; that state currently records null instead of the required ratio."
+    },
+    {
+      "title": "The required final mypy check did not exit 0",
+      "specimen": "attest/records/208/build-01.json",
+      "retires": "the unsupported claim that build-01 satisfied the approved type-check requirement",
+      "rejection_test": "test_build_208_finishes_with_successful_mypy",
+      "severity": "Blocking now: the build transcript records `python3 -m mypy` exiting 1 because mypy was unavailable, followed by the build commit and a passing build record."
+    }
+  ],
+  "tests_named": [
+    "test_verify_records_stub_ratio_when_forge_checks_are_not_green",
+    "test_build_208_finishes_with_successful_mypy"
+  ],
+  "commits": [],
+  "mutation": null,
+  "weak_stub": false,
+  "stub_ratio": null,
+  "tokens": {
+    "input": 150855,
+    "output": 1869
+  },
+  "cost_usd": null,
+  "wall_clock_s": 134.042,
+  "status": "pass",
+  "stop": null,
+  "record_version": 5,
+  "item": "208",
+  "product_version": "v0.26.0-60-gb71c678",
+  "product_pin": "v0.26.0"
+}
