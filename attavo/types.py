@@ -203,3 +203,22 @@ class AttestRecord(TypedDict):
 # What counsel reads a stop from: a build or verify record, or a refused
 # spec-gate record (issue #133).
 StageRecord = SpecRecord | BuildRecord | VerifyRecord
+
+
+class DriveReport(TypedDict):
+    """What `attavo drive N --report` prints (schema/drive-report.schema.json):
+    the item's level, read from its records, its markers, and the forge."""
+    item: str
+    state: str
+    kind: str
+    says: str
+    stage: str | None
+    attempt: int | None
+    record: str | None
+    stop_class: str | None
+    counsel: str | None
+    filed: str | None
+    head: str | None
+    checks: list[dict[str, str]] | None
+    since: str | None
+    last_event_age_s: int | None
