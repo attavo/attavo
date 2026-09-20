@@ -631,23 +631,72 @@ def _is_ancestor(root: Path, earlier: str, later: str) -> bool:
     return run.returncode == 0
 
 
-def _time_disagrees(item_records_dir: Path, item: str, merge_sha: str,
-                    statement: dict[str, Any]) -> str | None:
-    """A sealed statement that carries `time` says the invocation_s its
-    records sum to -- the same function attest summed them with, over the
-    same records (no record is written after a merge). A statement sealed
-    before `time` existed carries none and is not checked. No new read of
-    the store: the statement is the one proof six already holds."""
+# Maps whose keys are the records' data (a stage or an adapter that cost
+# something), not a release's fields: a key missing from one is a difference.
+DATA_KEYED = ("by_stage_usd", "by_adapter_usd")
+
+
+def _same(stated: Any, summed: Any) -> bool:
+    """Equal as the accounting means it: a number equals a number of the
+    same value (a store may print 40.0 as 40), a bool equals only a bool,
+    and a list is equal member by member. No tolerance: both sides are the
+    same function's rounding of the same records."""
+    if isinstance(stated, bool) or isinstance(summed, bool):
+        return isinstance(stated, bool) and isinstance(summed, bool) and stated == summed
+    if isinstance(stated, (int, float)) and isinstance(summed, (int, float)):
+        return float(stated) == float(summed)
+    if isinstance(stated, list) and isinstance(summed, list):
+        return len(stated) == len(summed) and all(_same(a, b) for a, b in zip(stated, summed))
+    return type(stated) is type(summed) and bool(stated == summed)
+
+
+def _differences(path: str, stated: Any, summed: Any, keyed_by_data: bool = False) -> list[str]:
+    """Every field of `stated` that is not what its records sum to, named by
+    its path. Only the keys the statement carries are compared, at every
+    depth, so a field a later release adds is not demanded of a statement
+    sealed before it; a key it carries that the function does not produce
+    is a difference."""
+    if not (isinstance(stated, dict) and isinstance(summed, dict)):
+        return [] if _same(stated, summed) else [f"{path} {stated!r} is not its records' {summed!r}"]
+    found: list[str] = []
+    for key in sorted(stated):
+        if key not in summed:
+            found.append(f"{path}.{key} {stated[key]!r} is not a field its records sum to")
+        else:
+            found += _differences(f"{path}.{key}", stated[key], summed[key], key in DATA_KEYED)
+    if keyed_by_data:
+        found += [f"{path}.{key} is absent; its records sum to {summed[key]!r}"
+                  for key in sorted(summed.keys() - stated.keys())]
+    return found
+
+
+def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_sha: str,
+                          statement: dict[str, Any]) -> str | None:
+    """A sealed statement that carries `time` and `cost` says what its
+    records sum to, field by field -- the same function attest summed them
+    with, over the same records (none is written after a merge), sealed at
+    the same commit (the statement is computed at the merge, so lead_s and
+    waiting_s are recomputed from its committer time, not excepted). Exact:
+    #202 retired the one-second tolerance. A statement sealed before `time`
+    existed carries neither block and is not checked; one block without the
+    other is a disagreement. No new read of the store."""
     inner = statement.get("predicate")
     predicate = inner if isinstance(inner, dict) else statement
-    stated_time = predicate.get("time")
-    if not isinstance(stated_time, dict):
+    stated_time, stated_cost = predicate.get("time"), predicate.get("cost")
+    if stated_time is None and stated_cost is None:
         return None
-    summed = item_time_and_cost(item_records_dir, None)[0]["invocation_s"]
-    stated = stated_time.get("invocation_s")
-    if isinstance(stated, bool) or not isinstance(stated, (int, float)) or abs(stated - summed) > 1.0:
-        return (f"item {item} merged at {merge_sha[:12]}: the statement's time.invocation_s "
-                f"{stated} is not its records' {summed}")
+    where = f"item {item} merged at {merge_sha[:12]}"
+    if not isinstance(stated_time, dict) or not isinstance(stated_cost, dict):
+        return f"{where}: the statement carries one of time and cost without the other"
+    try:
+        sealed_at: int | None = int(git(root, "show", "-s", "--format=%ct", merge_sha).strip())
+    except (RuntimeError, ValueError):
+        sealed_at = None
+    summed_time, summed_cost = item_time_and_cost(item_records_dir, sealed_at)
+    differing = (_differences("time", stated_time, dict(summed_time))
+                 + _differences("cost", stated_cost, dict(summed_cost)))
+    if differing:
+        return f"{where}: the statement's " + "; ".join(differing)
     return None
 
 
@@ -696,7 +745,8 @@ def proof_every_attested_item_is_sealed(root: Path, m: dict[str, Any] | None) ->
         statement, exit_code = statement_for(root, cmd, merge_sha)
         if statement is not None:
             sealed.append(item)
-            disagreement = _time_disagrees(records_dir / item, item, merge_sha, statement)
+            disagreement = _accounting_disagrees(root, records_dir / item, item, merge_sha,
+                                                 statement)
             if disagreement:
                 reasons.append(disagreement)
         elif exit_code == 2:

@@ -54,7 +54,8 @@ def item_time_and_cost(records_dir: Path, sealed_at_epoch: int | None) -> tuple[
     `at` to sealed_at_epoch (the committer time of the commit the statement
     is computed at); both it and waiting_s are None when either end cannot
     be read. doctor's sixth proof calls this same function over the same
-    records and fails a sealed statement whose invocation_s disagrees."""
+    records, sealed at the same commit, and fails a sealed statement any
+    field of whose time or cost is not what this returns."""
     stages: dict[str, StageTime] = {}
     time_not_read: list[str] = []
     cost_not_read: list[str] = []
