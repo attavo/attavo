@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
 from helpers import commit_all, git, make_tenant
 from test_attest_time import INVOCATIONS, make_item
 from test_drive import (
@@ -230,6 +231,7 @@ def test_report_reads_a_merged_item_as_merged(tmp_path: Path) -> None:
     assert merge[:7] in out["says"], out
 
 
+@pytest.mark.own_records
 def test_report_reads_every_item_this_repository_carries(tmp_path: Path) -> None:
     """A new reader must not wedge on a record that already exists (#194's
     verify-01). Every item under this repository's own records directory

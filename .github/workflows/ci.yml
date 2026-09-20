@@ -1,26 +1,56 @@
 name: CI
 
+# issue #210: push runs on main only. An item's branch always has an open
+# pull request, so every branch push was a second run of what pull_request
+# already ran. A branch with no pull request gets no CI.
 on:
   push:
+    branches: [main]
   pull_request:
   merge_group:
 
 jobs:
+  # issue #210: on a pull request, a head whose commits since a green run
+  # touch only the records directory inherits that run's `test` instead of
+  # running the suite again; the tests that read the repository's own
+  # records (@pytest.mark.own_records) still run. scripts/ci_inherit.py
+  # decides, and every doubt (no concluded success to inherit, an API read
+  # that fails, a shallow clone, a merge commit) is run-in-full. merge_group
+  # never reaches the script: the queue's run is the law and is never
+  # inherited. The inherit step's output is 'true' only when the script
+  # says so; anything else, including the step not running, runs the suite.
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: inherit test from a records-only head
+        id: inherit
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/ci_inherit.py test
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: pip install pytest jsonschema
+      - name: pytest, only the tests that read this repository's own records
+        if: steps.inherit.outputs.inherit == 'true'
+        run: python3 -m pytest tests -q -m own_records
       # issue #181: the suite's own clock is bounded. --durations=5 puts the
       # five slowest tests on every run's log; the last step fails the job
       # when the pytest step took more than 180 s (the suite's baseline is
       # about 65 s), naming the elapsed seconds.
       - name: pytest start
+        if: steps.inherit.outputs.inherit != 'true'
         run: echo "PYTEST_START=$(date +%s)" >> "$GITHUB_ENV"
-      - run: >
+      - name: pytest
+        if: steps.inherit.outputs.inherit != 'true'
+        run: >
           python3 -m pytest tests -q --durations=5
           --deselect tests/test_doctor.py::test_every_gate_rejects
           --deselect tests/test_doctor.py::test_one_item_traversed_every_stage
@@ -28,8 +58,10 @@ jobs:
           --deselect tests/test_doctor.py::test_no_stop_lacks_cause
           --deselect tests/test_doctor.py::test_every_attested_item_is_sealed
       - name: pytest end
+        if: steps.inherit.outputs.inherit != 'true'
         run: echo "PYTEST_END=$(date +%s)" >> "$GITHUB_ENV"
       - name: the suite's wall clock is at most 180 s
+        if: steps.inherit.outputs.inherit != 'true'
         run: |
           elapsed=$((PYTEST_END - PYTEST_START))
           echo "pytest step took ${elapsed} s"
@@ -44,15 +76,33 @@ jobs:
   # same python_version that table names; tests/test_typecheck_pin.py fails
   # when the two disagree. mypy itself is pinned so a new release's checks
   # never turn a required context red on a commit that did not change.
+  # issue #210: the type check reads attavo/, bin/attavo, and tests/, never
+  # the records directory, so a records-only pull request head inherits a
+  # concluded success of it the way `test` does (see the note above `test`).
   typecheck:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install mypy==2.3.1 pytest jsonschema types-jsonschema==4.26.0.20260518
-      - run: python3 -m mypy
+      - name: inherit typecheck from a records-only head
+        id: inherit
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/ci_inherit.py typecheck
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: install mypy and the tests' own imports
+        if: steps.inherit.outputs.inherit != 'true'
+        run: pip install mypy==2.3.1 pytest jsonschema types-jsonschema==4.26.0.20260518
+      - name: mypy
+        if: steps.inherit.outputs.inherit != 'true'
+        run: python3 -m mypy
 
   # Since #103, this repository is Attavo's own second tenant (attavo.toml
   # at the root) and the doctor's five proofs run for real, not under
