@@ -1,0 +1,107 @@
+{
+  "sha": "5ac0174b0d4173f87a427c0de686a633d4df3be0",
+  "build_sha": "b862f4f30f432b56a72b6475f664f885d95a1af6",
+  "build_record": "build-01",
+  "approval_sha": "e5cfa1c42c7bcc1433d1085330d95b4cc3769ebc",
+  "at": "2026-09-20T16:57:11Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "5ac0174b0d4173f87a427c0de686a633d4df3be0",
+    "conclusions": [
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "Explicit null accounting blocks are mistaken for absent legacy blocks",
+      "specimen": "attavo/doctor.py:685",
+      "retires": "The build\u2019s claimed closure of #203\u2019s requirement that one of time and cost without the other is a disagreement.",
+      "rejection_test": "test_doctor_rejects_null_time_without_cost: seal a statement carrying \"time\": null and no cost; proof six must fail and name item 1 and time.",
+      "severity": "Blocking when a sealed statement carries either accounting key with null: proof six incorrectly holds instead of rejecting the carried invalid accounting."
+    },
+    {
+      "title": "Float coercion makes distinct large numbers compare equal",
+      "specimen": "attavo/doctor.py:646",
+      "retires": "The build\u2019s claim that accounting numbers are compared exactly, with no tolerance.",
+      "rejection_test": "test_doctor_rejects_large_integer_that_rounds_to_summed_float: records sum to 9007199254740992.0, while the sealed statement says 9007199254740993; proof six must fail and name the field.",
+      "severity": "Blocking once an accounting value reaches the IEEE-754 integer precision boundary: a one-unit disagreement can satisfy proof six."
+    }
+  ],
+  "tests_named": [
+    "test_doctor_rejects_null_time_without_cost",
+    "test_doctor_rejects_large_integer_that_rounds_to_summed_float"
+  ],
+  "commits": [],
+  "mutation": null,
+  "weak_stub": false,
+  "stub_ratio": null,
+  "tokens": {
+    "input": 273272,
+    "output": 2809
+  },
+  "cost_usd": null,
+  "wall_clock_s": 154.197,
+  "status": "pass",
+  "stop": null,
+  "record_version": 5,
+  "item": "204",
+  "product_version": "v0.26.0-34-g9b3e2c7",
+  "product_pin": "v0.26.0"
+}
