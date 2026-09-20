@@ -1,0 +1,66 @@
+{
+  "sha": "10c1264b27123fadc3a7b69fb92c0211af09d2d7",
+  "start_sha": "25ae21cf86c540da538dac07496b905287e7693e",
+  "spec_sha": "514faadd94662bfa5b4d684aa296f1d944ce33f9",
+  "approval_sha": "f0d13ef7f030c8290887ca6b47f5f68f8c46c41e",
+  "at": "2026-09-20T17:48:07Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.278 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "report-names-a-red-check-and-writes-nothing.sh",
+      "exit": 0
+    },
+    {
+      "name": "report-never-waits.sh",
+      "exit": 0
+    },
+    {
+      "name": "report-walks-an-item-and-names-whose-move-it-is.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-report-has-its-contract-and-its-tests.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "count": 2,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m pytest tests -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 1654109,
+    "output": 24576
+  },
+  "cost_usd": 0.8999987999999999,
+  "wall_clock_s": 1156.603,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "stop": null,
+  "record_version": 7,
+  "item": "206",
+  "product_version": "v0.26.0-43-g1cb8af3",
+  "product_pin": "v0.26.0"
+}
