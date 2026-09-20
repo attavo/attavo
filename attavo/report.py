@@ -7,7 +7,7 @@ from attavo.common import STAGES, ShallowCheckoutError, git
 from attavo.doctor import invocations_without_record, merge_introducing_records, stall_bound_s
 from attavo.drive import InvocationReading, drive_state, read_invocation
 from attavo.records import next_attempt_number, parse_attempts
-from attavo.types import DriveReport
+from attavo.types import CounselRecord, DriveReport
 from attavo.verify import FORGE_OK_CONCLUSIONS, FORGE_UNCONCLUDED_STATUSES, read_forge_checks
 
 # --- drive --report (reconciler R1, rulings A and G): what one item is
@@ -49,7 +49,7 @@ def _filed(records_dir: Path, stem: str) -> str | None:
     return text or None
 
 
-def _counsel_of(records_dir: Path, stem: str) -> tuple[str, dict[str, Any]] | None:
+def _counsel_of(records_dir: Path, stem: str) -> tuple[str, CounselRecord] | None:
     """The latest counsel record that read the stop named stem."""
     attempts = parse_attempts(records_dir, "counsel")
     for nn in sorted(attempts, reverse=True):
