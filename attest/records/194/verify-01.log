@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a0ba3a-3490-7dc2-b2d9-0e0c6c68d60f"}
+{"type":"turn.started"}
+{"type":"error","message":"Selected model is at capacity. Please try a different model."}
+[adapter exited 1]

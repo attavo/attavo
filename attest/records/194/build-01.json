@@ -1,0 +1,70 @@
+{
+  "sha": "aa9c02ba125d391f264f1d2facf0da3fa4d87d4e",
+  "start_sha": "4096f8cf673e9d957cf7fbf9ce53824aae536933",
+  "spec_sha": "70d2bc920419432f9f1d66c87e8e2fb4f59d0669",
+  "approval_sha": "2c4754587314e481152730e456003a8124d18656",
+  "at": "2026-09-19T15:09:18Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.278 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "attest-sums-every-invocation.sh",
+      "exit": 0
+    },
+    {
+      "name": "attest-names-a-record-without-wall-clock.sh",
+      "exit": 0
+    },
+    {
+      "name": "attest-sums-cost-across-executors.sh",
+      "exit": 0
+    },
+    {
+      "name": "doctor-fails-a-statement-whose-time-is-not-its-records.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-accounting-has-its-tests.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "count": 2,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m pytest tests -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 1550007,
+    "output": 7734
+  },
+  "cost_usd": 0.6962502,
+  "wall_clock_s": 1302.344,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "stop": null,
+  "record_version": 7,
+  "item": "194",
+  "product_version": "v0.26.0-13-g1d2257b",
+  "product_pin": "v0.26.0"
+}

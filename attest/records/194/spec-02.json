@@ -1,0 +1,39 @@
+{
+  "sha": "70d2bc920419432f9f1d66c87e8e2fb4f59d0669",
+  "spec_sha": "70d2bc920419432f9f1d66c87e8e2fb4f59d0669",
+  "at": "2026-09-19T14:46:55Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "attest-sums-every-invocation.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "attest-names-a-record-without-wall-clock.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "attest-sums-cost-across-executors.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "doctor-fails-a-statement-whose-time-is-not-its-records.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "the-accounting-has-its-tests.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "194",
+  "product_version": "v0.26.0",
+  "product_pin": "v0.26.0"
+}

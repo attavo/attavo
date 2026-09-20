@@ -1,0 +1,93 @@
+{
+  "sha": "0ef9df110a325e26c701dac4d77af15f759e9b49",
+  "build_sha": "aa9c02ba125d391f264f1d2facf0da3fa4d87d4e",
+  "build_record": "build-01",
+  "approval_sha": "2c4754587314e481152730e456003a8124d18656",
+  "at": "2026-09-19T15:12:54Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": null,
+  "model": null,
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "0ef9df110a325e26c701dac4d77af15f759e9b49",
+    "conclusions": [
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": null,
+  "tests_named": [],
+  "commits": [],
+  "mutation": null,
+  "weak_stub": false,
+  "stub_ratio": null,
+  "tokens": {
+    "input": 0,
+    "output": 0
+  },
+  "cost_usd": null,
+  "wall_clock_s": 109.204,
+  "status": "failed",
+  "stop": {
+    "class": "unclassed",
+    "provenance": "product",
+    "detail": "[adapter exited 1]"
+  },
+  "record_version": 5,
+  "item": "194",
+  "product_version": "v0.26.0-13-g1d2257b",
+  "product_pin": "v0.26.0"
+}

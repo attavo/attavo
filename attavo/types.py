@@ -142,6 +142,39 @@ CounselRecord = TypedDict("CounselRecord", {
 })
 
 
+class StageTime(TypedDict):
+    """One stage's invocations summed (the statement's `time` block)."""
+    attempts: int
+    invocation_s: float
+    partial: bool
+
+
+class ItemTime(TypedDict):
+    """Every invocation's wall_clock_s, per stage and for the item, beside
+    the item's lead time -- summed from the records by `attavo attest`, so
+    a view renders it and never derives it."""
+    build: StageTime
+    verify: StageTime
+    counsel: StageTime
+    invocation_s: float
+    lead_s: float | None
+    waiting_s: float | None
+    partial: bool
+    not_read: list[str]
+
+
+class ItemCost(TypedDict):
+    """Every record's cost_usd summed: the item's total across stages and
+    executors, with a subtotal per stage and per adapter. A record with no
+    cost_usd is named in not_read and makes every sum it belongs to
+    partial -- absent is never zero."""
+    usd: float
+    by_stage_usd: dict[str, float]
+    by_adapter_usd: dict[str, float]
+    partial: bool
+    not_read: list[str]
+
+
 class AttestRecord(TypedDict):
     """The statement `attavo attest` prints (schema/attestation.schema.json)."""
     sha: str
@@ -161,6 +194,8 @@ class AttestRecord(TypedDict):
     tokens_by_stage: dict[str, dict[str, Any] | None]
     cost_by_stage_usd: dict[str, float | None]
     wall_clock_by_stage_s: dict[str, float | None]
+    time: ItemTime
+    cost: ItemCost
     product_version: str
     product_pin: str | None
 
