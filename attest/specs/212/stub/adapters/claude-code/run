@@ -1,0 +1,1065 @@
+#!/usr/bin/env python3
+"""adapters/claude-code/run -- see README.md (this directory) for the four
+configuration keys, and ../README.md for the shared adapter contract.
+
+A live `claude` invocation is not exercised by the test suite (judgment
+is measured, not tested); its argument construction is checked by
+ATTAVO_ADAPTER_DRY_RUN=1, which prints the `claude` command line as a
+JSON array instead of running it, its response handling is checked by
+ATTAVO_ADAPTER_RESPONSE_FILE, which reads a canned final report object
+from a file instead of invoking `claude`, and (issue #26) its
+`--output-format stream-json --verbose` mapping -- the event stream
+this adapter maps to ATTAVO_EVENTS, and the terminal "result" line it
+reads the report object from -- is checked by ATTAVO_ADAPTER_STREAM_FILE,
+which feeds a recorded transcript instead.
+
+The whole result is printed to stdout before this adapter's own final
+line, so build-NN.log carries it as the transcript -- a halt otherwise
+cannot be explained after the fact. is_error or an absent
+structured_output exit 1 on either stage; a build status "question"
+whose question is missing or under MIN_QUESTION_CHARS characters also
+exits 1 (build records the attempt as failed) rather than a halt
+someone must rule on.
+
+ATTAVO_STAGE=verify branches to a different objective, schema, and
+report shape (issue #46): the instruction states the verify objective
+(see verify_instruction) instead of the build one, --json-schema is
+VERIFY_SCHEMA instead of STATUS_SCHEMA, and the final line carries
+findings and tests_named instead of status and question.
+
+Issue #78: the boundary is the tool's own sandbox, not a curated
+allowed_tools list judged per sub-command -- confirmed live (recorded on
+the issue, 2026-09-10) against `claude 2.1.268`: `--settings` carrying
+`{"sandbox": {"enabled": true, "allowUnsandboxedCommands": false}}` under
+`-p` refuses a write outside the working directory ("operation not
+permitted") and, with `network.allowedDomains: []`, refuses an outbound
+connection ("deny network-outbound ..."), both before `--allowedTools`
+is ever consulted. build's `--settings` therefore enables the sandbox and
+forbids the unsandboxed fallback; verify's additionally sets
+`filesystem.denyWrite` on the working directory itself (confirmed live:
+`denyWrite` takes a list of paths, not a bare boolean -- `true` alone did
+not stop a write inside the directory). `--allowedTools` shrinks to the
+tool names each stage may use at all -- `Read,Edit,Write,Bash` for build,
+`Read,Bash` for verify -- since Edit and Write are not Bash and the
+sandbox does not govern them. `allowed_tools` is retired as a manifest
+key: a config that still declares it is refused by name rather than
+silently accepted.
+
+Issue #88 (class A: a report is not a question). `--json-schema`
+constrains the tool's structured_output to "done"/"question", but
+nothing stops "question" from carrying a status report rather than an
+actual question -- confirmed against tenant zero's own corpus, five
+specimens with no "?" anywhere in the text. A "question" whose text
+clears MIN_QUESTION_CHARS but contains no "?" is a report, not a
+question: this adapter re-invokes the executor once, appending
+REINSTRUCTION to the same instruction, before ever reporting a halt to
+a person. A second report in a row still halts (someone must look), but
+its report line carries "class": "non-question" and both raw results
+reached stdout above it -- an extra field bin/attavo's own record schema
+does not know about and never has to: it reads "status"/"question" off
+this line exactly as before, so a "question" halt still halts. Read via
+ATTAVO_ADAPTER_RESPONSE_FILE, a JSON array is a queue -- one canned
+result per invocation this adapter makes, its last element repeating
+once exhausted -- while a single object still repeats for every call,
+unchanged.
+
+Issue #88 (class B: work that outlives the invocation). Confirmed live,
+this machine, `claude 2.1.269`: with both "Agent" and "Task" allowed, a
+prompt asking for a subagent produced `subagent_stats.spawned: 1`, `"Agent"`
+alone in `--disallowedTools` (Task is not a distinct tool in this build)
+brought it back to 0 -- the tool's own reply named "Workflow" as the
+other path to background work, so both are named here. `--allowedTools`
+is an allow-list a background spawn does not consult (tenant zero's
+specimen: `--allowedTools` without "Agent" or "Workflow" in it at all did
+not stop three of them), so this adapter also disallows them by name on
+both stages and, after the run, refuses by name -- exit 1, not a
+halt -- any response whose subagent_stats.spawned is not zero, with the
+counts in the message. A tool that reports no subagent_stats at all
+(spawned absent or 0) is unaffected; this is a refusal on evidence, not a
+guess from the flag.
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+# the helper beside adapters/, imported without leaving a __pycache__ there
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from executor_env import executor_env  # noqa: E402
+
+STATUS_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["status", "question"],
+    "properties": {
+        "status": {"type": "string", "enum": ["done", "question"]},
+        "question": {"type": ["string", "null"]},
+    },
+}
+
+# The verify objective (issue #46): a verifier reports findings, not a
+# commit. additionalProperties: False means the tool cannot hand back a
+# structured_output shaped like STATUS_SCHEMA's status/question by
+# accident -- an absent findings key is what cmd_verify treats as
+# failed, not a lenient default here.
+VERIFY_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["findings", "tests_named"],
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["title", "specimen", "retires", "rejection_test", "severity"],
+                "properties": {
+                    "title": {"type": "string", "minLength": 1},
+                    "specimen": {"type": "string", "minLength": 1},
+                    "retires": {"type": "string", "minLength": 1},
+                    "rejection_test": {"type": "string", "minLength": 1},
+                    "severity": {"type": "string", "minLength": 1},
+                },
+            },
+        },
+        "tests_named": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    },
+}
+
+# The counsel objective (issue #100): a stop is read inside the product
+# first, before a person. additionalProperties: False for the same reason
+# as VERIFY_SCHEMA's own -- the tool cannot hand back a differently-shaped
+# structured_output by accident.
+COUNSEL_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["class", "verdict", "citations", "proposal"],
+    "properties": {
+        "class": {"type": "string"},
+        "verdict": {"type": "string", "enum": ["answer", "patch", "person"]},
+        "citations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["kind", "path", "symbol", "ruling_id"],
+                "properties": {
+                    "kind": {"type": "string", "enum": ["instruction", "mechanism", "guard"]},
+                    "path": {"type": ["string", "null"]},
+                    "symbol": {"type": ["string", "null"]},
+                    "ruling_id": {"type": ["string", "null"]},
+                },
+            },
+        },
+        "proposal": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["ruling_text", "patch", "question", "issue"],
+            "properties": {
+                "ruling_text": {"type": ["string", "null"]},
+                "patch": {
+                    "type": ["object", "null"],
+                    "additionalProperties": False,
+                    "required": ["file", "symbol", "rejection_test", "diff"],
+                    "properties": {
+                        "file": {"type": "string", "minLength": 1},
+                        "symbol": {"type": "string", "minLength": 1},
+                        "rejection_test": {"type": "string", "minLength": 1},
+                        "diff": {"type": "string", "minLength": 1},
+                    },
+                },
+                "question": {"type": ["string", "null"]},
+                # issue #175: the fourth proposal shape, for a "patch" or
+                # "person" verdict whose remedy is better filed as an item
+                # than shipped as a diff or asked as a bare question.
+                "issue": {
+                    "type": ["object", "null"],
+                    "additionalProperties": False,
+                    "required": ["title", "body"],
+                    "properties": {
+                        "title": {"type": "string", "minLength": 1},
+                        "body": {"type": "string", "minLength": 1},
+                    },
+                },
+            },
+        },
+    },
+}
+
+
+def read_text(path_env: str) -> str:
+    path = os.environ.get(path_env)
+    if not path:
+        return ""
+    p = Path(path)
+    return p.read_text() if p.is_file() else ""
+
+
+def describe_file(path: str, text: str, diff_like: bool) -> str:
+    """Path, byte count, line count, and (for a diff) files touched --
+    named in the instruction instead of inlining the file's own text, so
+    the instruction stays a small fixed size whatever the file's size
+    (issue #86: a 27,367-line deletion diff inlined whole exceeded a
+    judge's input ceiling -- codex's, on the specimen that surfaced it).
+    Files touched counts unified-diff file headers (`diff --git a/...
+    b/...`), the shape `git diff` produces."""
+    size = Path(path).stat().st_size
+    lines = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
+    if not diff_like:
+        return f"`{path}` ({size} bytes, {lines} lines)"
+    files = sum(1 for l in text.splitlines() if l.startswith("diff --git "))
+    return f"`{path}` ({size} bytes, {lines} lines, {files} files touched)"
+
+
+def spec_sections() -> list[str]:
+    """The spec's Problem, Claims, and Criteria sections verbatim -- what
+    both build and verify need to see, in the shape the spec contract
+    (not this adapter) already gives them."""
+    spec_dir = Path(os.environ["ATTAVO_SPEC_DIR"])
+    lines = (spec_dir / "spec.md").read_text().splitlines()
+    idx = [i for i, l in enumerate(lines) if l.startswith("## ")]
+    headings = {lines[i].strip(): i for i in idx}
+    bounds = sorted(idx) + [len(lines)]
+
+    def section(heading: str) -> str:
+        start = headings[heading]
+        end = bounds[bounds.index(start) + 1] if start in bounds else len(lines)
+        return "\n".join(lines[start:end]).strip()
+
+    return [section("## Problem"), section("## Claims"), section("## Criteria")]
+
+
+def stub_note() -> str | None:
+    """None when ATTAVO_SPEC_DIR carries no stub/; else the sentence
+    naming what a stub is (issue #90, closed by #93). The stub is
+    evidence -- a criterion it satisfies trivially is weak -- but twice
+    the judge reported
+    a built tree as failing to match its stub as if the stub were the
+    intended change (tenant zero #664, #644): one sentence of vocabulary
+    was missing, not a smarter judge or a dropped stub."""
+    stub_dir = Path(os.environ["ATTAVO_SPEC_DIR"]) / "stub"
+    if not stub_dir.is_dir():
+        return None
+    return (
+        f"## The stub at `{stub_dir}`\n\n"
+        "The stub is the fixture the acceptance criteria were shown to "
+        "pass against; it is not the intended change. A difference "
+        "between the built tree and the stub is not a finding: a "
+        "criterion the stub satisfies trivially is.")
+
+
+def build_instruction() -> str:
+    parts = list(spec_sections())
+
+    rulings = read_text("ATTAVO_RULINGS")
+    if rulings.strip():
+        parts.append("## Rulings\n\n" + rulings.strip())
+
+    feedback_path = os.environ.get("ATTAVO_FEEDBACK")
+    feedback = read_text("ATTAVO_FEEDBACK")
+    if feedback.strip():
+        parts.append(
+            "## Feedback from the previous attempt\n\n"
+            f"The feedback is at {describe_file(feedback_path, feedback, diff_like=False)}. "
+            "It is not inlined here: read it yourself with your own tools "
+            "before continuing.")
+
+    parts.append(
+        "commit your work on the current branch; if you cannot proceed "
+        "without a decision that changes the criteria, do not guess: "
+        "answer with status question")
+
+    test_command = os.environ.get("ATTAVO_TEST_COMMAND")
+    if test_command:
+        bound = os.environ.get("ATTAVO_TEST_TIMEOUT_S")
+        parts.append(
+            f"to run tests while you work, run `{test_command}`: it runs the tests "
+            "selected for the files you have changed"
+            + (f" and stops at {bound} s" if bound else "")
+            + ". Do not run the whole test suite or any whole-tree check yourself: "
+            "after you commit, the gates are run for you and any failure is "
+            "returned to you on the next iteration")
+
+    return "\n\n".join(parts)
+
+
+def verify_instruction() -> str:
+    parts = list(spec_sections())
+
+    note = stub_note()
+    if note:
+        parts.append(note)
+
+    diff_path = os.environ.get("ATTAVO_DIFF")
+    diff = read_text("ATTAVO_DIFF")
+    if diff.strip():
+        parts.append(
+            "## Diff since the approved spec\n\n"
+            f"The diff is at {describe_file(diff_path, diff, diff_like=True)}. "
+            "It is not inlined here: read it yourself with your own tools "
+            "before judging it.")
+    else:
+        parts.append("## Diff since the approved spec\n\n(the diff is empty)")
+
+    build_record_path = os.environ.get("ATTAVO_BUILD_RECORD")
+    build_record = read_text("ATTAVO_BUILD_RECORD")
+    if build_record.strip():
+        parts.append(
+            "## The build record\n\n"
+            f"The build record is at {describe_file(build_record_path, build_record, diff_like=False)}. "
+            "Read it yourself with your own tools.")
+
+    parts.append(
+        "you are verifying a completed build, not building: make no edits, "
+        "write no files, commit nothing. Read the diff named above against "
+        "the criteria and name what the criteria do not assert but the diff "
+        "should still be judged on, and name the tests that would assert "
+        "it if they existed. A spec whose approval commit does not "
+        "describe the working tree the build produced is itself a "
+        "finding: the diff is judged against what was approved, and a "
+        "divergence between them is reportable rather than assumed "
+        "away. Report each as a finding: title, specimen (the file or "
+        "commit the finding is about), retires (what having this "
+        "finding on record replaces or closes -- every finding must "
+        "carry one, or it is refused unfiled), rejection_test (the test "
+        "that would catch a regression of it), and severity. Severity "
+        "is derived rather than judged: the version, counter, "
+        "condition, or state change that flips a finding from harmless "
+        "to blocking; an adjective is not a severity. An empty "
+        "findings list means you looked and found nothing to report, not "
+        "that you did not look.")
+    return "\n\n".join(parts)
+
+
+def counsel_instruction() -> str:
+    """Issue #100 (extended by issue #175): a stop is read inside the
+    product first, before a person. The record, its log, the diff, the
+    forge's checks, the item's graph, the tenant manifest, and this
+    product's own root are all handed by path -- named in the instruction
+    instead of inlined, the same discipline verify_instruction already
+    applies to the diff (issue #86), so this instruction's own size stays
+    fixed whatever the record, log, diff, checks, or graph's size."""
+    parts = list(spec_sections())
+
+    rulings = read_text("ATTAVO_RULINGS")
+    if rulings.strip():
+        parts.append("## Rulings\n\n" + rulings.strip())
+
+    note = stub_note()
+    if note:
+        parts.append(note)
+
+    record_path = os.environ.get("ATTAVO_COUNSEL_RECORD")
+    record_text = read_text("ATTAVO_COUNSEL_RECORD")
+    if record_text.strip():
+        parts.append(
+            "## The stage record\n\n"
+            f"The record is at {describe_file(record_path, record_text, diff_like=False)}. "
+            "Read it yourself with your own tools.")
+
+    log_path = os.environ.get("ATTAVO_COUNSEL_LOG")
+    log_text = read_text("ATTAVO_COUNSEL_LOG")
+    if log_text.strip():
+        parts.append(
+            "## The record's log\n\n"
+            f"The log is at {describe_file(log_path, log_text, diff_like=False)}. "
+            "Read it yourself with your own tools.")
+
+    diff_path = os.environ.get("ATTAVO_COUNSEL_DIFF")
+    diff_text = read_text("ATTAVO_COUNSEL_DIFF")
+    if diff_text.strip():
+        parts.append(
+            "## The item's diff since approval\n\n"
+            f"The diff is at {describe_file(diff_path, diff_text, diff_like=True)}. "
+            "Read it yourself with your own tools.")
+
+    # issue #175: the forge in the evidence set. ATTAVO_COUNSEL_CHECKS is
+    # always written, a JSON {read, reason, checks} envelope -- read false
+    # names the missing manifest key rather than leaving the section out,
+    # since an unread forge must never be mistaken for a green one.
+    checks_path = os.environ.get("ATTAVO_COUNSEL_CHECKS")
+    checks_text = read_text("ATTAVO_COUNSEL_CHECKS")
+    if checks_text.strip():
+        parts.append(
+            "## The forge's checks on this stop's sha\n\n"
+            f"The checks are at {describe_file(checks_path, checks_text, diff_like=False)}: "
+            "a JSON object -- read: false means the forge was not read at "
+            "all (reason names the missing manifest key; treat this as "
+            "unknown, never as green) -- read: true carries one entry per "
+            "check, each naming, for a check that did not succeed, the "
+            "path of its own failed-step log. Read the failing check's "
+            "log before answering about the forge; a remedy that depends "
+            "on the forge's state cites the check and its log line.")
+
+    # issue #175: the graph in the evidence set -- the default branch's
+    # own log since this item's branch point, this branch's own commits,
+    # the markers and records present at the stop's sha, and the check
+    # runs on the last three shas, so "the checks are on the record
+    # commit, not the code commit" is readable without a terminal.
+    graph_path = os.environ.get("ATTAVO_COUNSEL_GRAPH")
+    graph_text = read_text("ATTAVO_COUNSEL_GRAPH")
+    if graph_text.strip():
+        parts.append(
+            "## The item's graph\n\n"
+            f"The graph is at {describe_file(graph_path, graph_text, diff_like=False)}. "
+            "Read it yourself with your own tools.")
+
+    manifest_path = os.environ.get("ATTAVO_MANIFEST", "")
+    parts.append(f"## The tenant manifest\n\nThe manifest is at `{manifest_path}`. "
+                 "Read it yourself with your own tools.")
+
+    product_root = os.environ.get("ATTAVO_PRODUCT_ROOT", "")
+    parts.append(
+        "## The product's own root\n\n"
+        f"The product that ran this stage is at `{product_root}` "
+        "(`bin/attavo`, `adapters/`, `schema/`, `templates/`). A stop "
+        "whose cause is the product's own mechanism, not the tenant's, "
+        "is read here.")
+
+    # issue #175: attavo counsel N --ask hands the operator's own text as
+    # the question to answer, over the same evidence set, rather than
+    # diagnosing a stop -- the record above is context, not necessarily a
+    # failure.
+    question = os.environ.get("ATTAVO_COUNSEL_QUESTION", "")
+    if question.strip():
+        parts.append(
+            "## The operator's question\n\n" + question.strip() +
+            "\n\nAnswer this question using the evidence above; the "
+            "record named above is context, not necessarily a failure.")
+
+    parts.append(
+        "you are counseling a stop, read-only: make no edits, write no "
+        "files, commit nothing. Read the record, its log, the spec, the "
+        "rulings, the diff, the forge's checks, the item's graph, the "
+        "tenant manifest, and the product's own root named above with "
+        "your own tools, then answer with exactly one class (the stop's "
+        "class, or \"unclassed\"), one verdict -- \"answer\" (the stop is "
+        "answerable inside the rules: a ruling text, in "
+        "proposal.ruling_text, with three citations -- instruction, "
+        "mechanism, guard, each a path and symbol or a ruling id), "
+        "\"patch\" (the stop is a product defect: the mechanism's file "
+        "and symbol, a rejection test, and a unified diff, in "
+        "proposal.patch -- or, when the remedy is better filed as an "
+        "item than shipped as a diff, a title and a body in this "
+        "repository's own issue format -- a Severity/Provenance line, "
+        "then Problem, Retires, Change, and Acceptance sections -- in "
+        "proposal.issue), or \"person\" (the answer would touch the "
+        "definition of done and no rule covers it: the question restated "
+        "in one line, in proposal.question -- or, when the remedy is "
+        "better filed as an item than asked as a bare question, a title "
+        "and a body in the same issue format, in proposal.issue) -- and "
+        "citations for whichever verdict you gave. You propose; you do "
+        "not act.")
+    return "\n\n".join(parts)
+
+
+BUILD_ALLOWED_TOOLS = ["Read", "Edit", "Write", "Bash"]
+VERIFY_ALLOWED_TOOLS = ["Read", "Bash"]
+
+# Issue #88 (class B): both tools the tool's own reply named as a way to
+# spawn work that outlives this invocation -- confirmed live against
+# `claude 2.1.269` (see module docstring). Named on both stages: verify's
+# own allowed tools never included either, and did not stop the
+# specimen either.
+SUBAGENT_TOOLS = ["Agent", "Workflow"]
+
+
+def load_config() -> dict:
+    raw = os.environ.get("ATTAVO_ADAPTER_CONFIG")
+    return json.loads(raw) if raw else {}
+
+
+def refused_config_key(config: dict) -> str | None:
+    """None if config carries no retired key; else the refusal message.
+    allowed_tools (issue #78) is retired, not ignored: the sandbox is the
+    boundary now, a curated Bash(...) prefix list is not, and a manifest
+    still naming it must be refused rather than silently accepted."""
+    if "allowed_tools" in config:
+        return ("[executor.claude-code].allowed_tools is retired (issue "
+                "#78) -- the sandbox is the boundary now, not a curated "
+                "Bash(...) prefix list")
+    return None
+
+
+# Issue #93: claude code publishes no numeric input-size ceiling
+# anywhere in its own surface (--help, docs, or any config file,
+# confirmed against claude 2.1.269) -- unlike codex's documented
+# input_too_large. This adapter asserts its own instruction stays under
+# a fixed bound instead of a tool-documented one, so an undeclared tool
+# still cannot be handed an unbounded prompt.
+FIXED_BOUND_CHARS = 65_536
+
+
+def input_limit_chars() -> int:
+    """The bound this adapter enforces in place of a declared ceiling.
+    Overridable only for tests via ATTAVO_ADAPTER_INPUT_LIMIT_CHARS --
+    never a tenant knob: the ceiling is a fact about the tool, not
+    something [executor.claude-code] can set."""
+    override = os.environ.get("ATTAVO_ADAPTER_INPUT_LIMIT_CHARS")
+    return int(override) if override else FIXED_BOUND_CHARS
+
+
+def ceiling_refusal(instruction: str) -> str | None:
+    """None if instruction stays at or under the fixed bound; else the
+    refusal naming both numbers, checked before claude is ever invoked."""
+    limit = input_limit_chars()
+    size = len(instruction)
+    if size <= limit:
+        return None
+    return (f"ceiling exceeded -- instruction is {size} chars, over "
+           f"the fixed bound of {limit} chars (claude code declares no "
+           f"input limit of its own)")
+
+
+READ_ONLY_STAGES = ("verify", "counsel")
+
+
+def sandbox_settings(stage: str, working_directory: Path) -> dict:
+    """Every Bash command and its children stay confined to
+    working_directory (writes) and the network stays closed for every
+    stage (issue #78) -- confirmed live, not assumed. verify and counsel
+    (issue #100) additionally deny writes to working_directory itself,
+    making "make no edits, write no files" mechanical rather than merely
+    instructed -- counsel is a read-only invocation, the same sandbox
+    verify runs under.
+    """
+    sandbox = {
+        "enabled": True,
+        "allowUnsandboxedCommands": False,
+        "network": {"allowedDomains": []},
+    }
+    if stage in READ_ONLY_STAGES:
+        sandbox["filesystem"] = {"denyWrite": [str(working_directory)]}
+    return {"sandbox": sandbox}
+
+
+def build_command(instruction: str, config: dict, schema: dict, stage: str) -> list[str]:
+    auth = config.get("auth", "api")
+    allowed_tools = VERIFY_ALLOWED_TOOLS if stage in READ_ONLY_STAGES else BUILD_ALLOWED_TOOLS
+    permission_mode = config.get("permission_mode", "acceptEdits")
+
+    cmd = ["claude"]
+    if auth == "subscription":
+        # no --bare: this is the tenant's own login, not a bare API key, so
+        # the tenant's project hooks and MCP servers must not load -- only
+        # --setting-sources (CLAUDE.md still loads) and --strict-mcp-config
+        # keep them out, the same isolation --bare gives in api mode.
+        setting_sources = config.get("setting_sources", "user")
+        cmd += ["--setting-sources", setting_sources, "--strict-mcp-config"]
+    else:
+        cmd += ["--bare"]
+    cmd += ["--settings", json.dumps(sandbox_settings(stage, Path.cwd()))]
+    cmd += ["-p", instruction,
+           "--output-format", "stream-json", "--verbose",
+           "--json-schema", json.dumps(schema),
+           "--permission-mode", permission_mode,
+           "--allowedTools", ",".join(allowed_tools),
+           "--disallowedTools", ",".join(SUBAGENT_TOOLS)]
+    model = config.get("model")
+    if model:
+        cmd += ["--model", model]
+    return cmd
+
+
+def derive_model(response: dict, requested_model: str | None) -> tuple[str | None, str | None]:
+    """(model, model_version). --output-format json carries no top-level
+    "model" field; modelUsage is the per-model cost/usage breakdown, keyed
+    by a dated id (e.g. "claude-haiku-4-5-20251001") whose own
+    "canonicalModel" entry is the short name (e.g. "claude-haiku-4-5").
+
+    When a model was requested (issue #77), it is trusted verbatim as
+    model rather than picked out of modelUsage: a lightweight helper
+    model's few thousand uncached tokens must not outrank a primary
+    model whose real weight is almost entirely cached reads, which a
+    token-count comparison cannot tell apart from a model that barely
+    ran. model_version is the modelUsage key whose canonicalModel matches
+    the requested model -- the dated id the tool actually ran -- or None
+    when no key matches.
+
+    When no model was requested, the modelUsage key with the largest
+    total of inputTokens + cacheReadInputTokens + cacheCreationInputTokens
+    + outputTokens is the model that did the work; cache tokens count
+    here for the same reason they must not be left out of a requested
+    model's tokens.input (below).
+    """
+    model_usage = response.get("modelUsage") or {}
+
+    if requested_model:
+        model_version = next(
+            (key for key, entry in model_usage.items()
+             if entry.get("canonicalModel") == requested_model),
+            None)
+        return requested_model, model_version
+
+    if not model_usage:
+        return None, None
+
+    def total_tokens(key: str) -> int:
+        entry = model_usage[key]
+        return ((entry.get("inputTokens", 0) or 0)
+                + (entry.get("cacheReadInputTokens", 0) or 0)
+                + (entry.get("cacheCreationInputTokens", 0) or 0)
+                + (entry.get("outputTokens", 0) or 0))
+
+    winner = max(model_usage, key=total_tokens)
+    return winner, model_usage[winner].get("canonicalModel")
+
+
+def adapter_version() -> str:
+    try:
+        out = subprocess.run(["claude", "--version"], capture_output=True,
+                             text=True, check=False)
+    except OSError:
+        return ""
+    return out.stdout.strip()
+
+
+MIN_QUESTION_CHARS = 40
+
+REINSTRUCTION = (
+    "your last answer was a report, not a question; either continue to "
+    "done, or ask one question ending in a question mark that names the "
+    "spec line or guard you cannot resolve")
+
+
+def question_class(status: str, question: str | None) -> str:
+    """"done" (no halt at all), "fail" (a question too short or absent to
+    be worth a person's judgment -- MIN_QUESTION_CHARS, unchanged since
+    v0.15.0), "report" (long enough but carries no "?" -- issue #88's
+    class A, a status update in the question channel), or "question" (a
+    real question)."""
+    if status != "question":
+        return "done"
+    if not question or len(question) < MIN_QUESTION_CHARS:
+        # An absent or too-short question is a report with nothing in
+        # it: a status update in the question channel (issue #150, three
+        # specimens on 2026-09-17), never an exit with no report line.
+        return "report"
+    if "?" not in question:
+        return "report"
+    return "question"
+
+
+def subagent_refusal(response: dict) -> str | None:
+    """None if response carries no spawned background work; else the
+    refusal naming the counts (issue #88, class B). Checked on the
+    response itself, not the flag that was supposed to forbid it --
+    tenant zero's specimen spawned three with the tool absent from
+    --allowedTools entirely, so the flag alone is not the mechanism."""
+    stats = response.get("subagent_stats") or {}
+    spawned = stats.get("spawned") or 0
+    if not spawned:
+        return None
+    killed = stats.get("killed") or {}
+    killed_total = sum(v or 0 for v in killed.values())
+    return (
+        f"adapters/claude-code/run: refused: subagent_stats.spawned={spawned} "
+        f"-- the {' or '.join(SUBAGENT_TOOLS)} tool spawned work that can "
+        f"outlive this invocation (completed={stats.get('completed', 0)}, "
+        f"killed={killed_total}, "
+        f"started_in_background={stats.get('started_in_background', 0)})")
+
+
+def load_canned_responses() -> list[dict] | None:
+    """None when ATTAVO_ADAPTER_RESPONSE_FILE is unset. Otherwise the
+    queue this run answers from: a single object repeats for every
+    invocation this adapter makes (unchanged since v0.3.0 -- most tests
+    make exactly one), a JSON array is consumed in order, one response
+    per invocation, its last element repeating once exhausted (issue
+    #88: the non-question retry is a second invocation inside the same
+    adapter run, and a canned test needs to hand it a different answer
+    than the first). Distinct from ATTAVO_ADAPTER_STREAM_FILE below: a
+    canned response here is the final report object itself, the shape
+    the model-derivation and report-field tests exercise, never a stream
+    to map -- unaffected by --output-format actually being stream-json
+    on a real invocation."""
+    response_file = os.environ.get("ATTAVO_ADAPTER_RESPONSE_FILE")
+    if not response_file:
+        return None
+    raw = json.loads(Path(response_file).read_text())
+    return raw if isinstance(raw, list) else [raw]
+
+
+def load_canned_stream() -> list[str] | None:
+    """None when ATTAVO_ADAPTER_STREAM_FILE is unset. Otherwise a
+    recorded `claude --output-format stream-json --verbose` transcript,
+    one JSONL line per list entry (issue #26, acceptance row 3) -- fed
+    through the same line-by-line mapping and terminal "result" read a
+    real invocation gets, so the mapping is exercised without a live
+    `claude` process."""
+    stream_file = os.environ.get("ATTAVO_ADAPTER_STREAM_FILE")
+    if not stream_file:
+        return None
+    return Path(stream_file).read_text().splitlines()
+
+
+def parse_stream_line(line: str) -> dict | None:
+    """One parsed JSONL line, or None when it is blank or not JSON -- a
+    tracing line on the same stream is not an error, just not an event
+    (codex's own parse_events does the same)."""
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        return json.loads(line)
+    except ValueError:
+        return None
+
+
+def first_string_arg(tool_input: dict | None) -> str:
+    """The first string-valued argument of a tool_use block's input, in
+    declaration order -- a file path or a command, the one value worth a
+    feed line; a tool whose arguments are all non-string (booleans,
+    numbers) reports "" rather than guess which one matters."""
+    for value in (tool_input or {}).values():
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+def tool_result_content_text(content) -> str:
+    """A tool_result block's own text, whichever of claude code's two
+    content shapes it carries: a bare string, or a list of {"type":
+    "text", "text": ...} blocks (an image or other non-text block
+    contributes nothing -- there is no line of text to render)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(b.get("text", "") for b in content
+                         if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
+
+def stream_line_events(obj: dict) -> list[tuple[str, str]]:
+    """[(kind, text), ...] for one parsed stream-json line -- zero, one,
+    or several (one assistant turn can carry a text block and a tool_use
+    block together, each its own event). An assistant message's text
+    block maps to "message", its tool_use blocks to "tool_call" (the
+    tool's name and its first string argument); a user message carrying
+    a tool_result block maps to "tool_result" (the result's own first
+    line). Everything else on the stream -- system, and "result" itself,
+    read separately for the report fields rather than rendered as a feed
+    line -- maps to nothing."""
+    events: list[tuple[str, str]] = []
+    # The stream is the executor's; its shapes are not the adapter's to
+    # assume. A line whose message is not an object (a diagnostic with a
+    # string message, attavo/attavo#151 build-02) maps to nothing and
+    # stays transcript; nothing here raises on a shape it did not expect.
+    message = obj.get("message")
+    if not isinstance(message, dict):
+        return events
+    content = message.get("content") or []
+    if not isinstance(content, list):
+        return events
+    if obj.get("type") == "assistant":
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and block.get("text"):
+                events.append(("message", block["text"]))
+            elif block.get("type") == "tool_use":
+                name = block.get("name") or ""
+                arg = first_string_arg(block.get("input"))
+                events.append(("tool_call", f"{name} {arg}".strip()))
+    elif obj.get("type") == "user":
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                text = tool_result_content_text(block.get("content"))
+                first_line = text.splitlines()[0] if text.splitlines() else ""
+                events.append(("tool_result", first_line))
+    return events
+
+
+EVENT_TEXT_MAX_CHARS = 400
+
+
+def append_event(events_path: str, kind: str, text: str) -> None:
+    """One {at, kind, text} JSON line appended to events_path and
+    flushed at once -- the same shape and the same open-write-close
+    discipline bin/attavo's own append_event uses for its iteration and
+    gate events, kept independently here since an adapter is a separate
+    process with no import path into the product."""
+    line = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "kind": kind, "text": " ".join(text.split())[:EVENT_TEXT_MAX_CHARS]}
+    with open(events_path, "a") as fh:
+        fh.write(json.dumps(line) + "\n")
+
+
+def invoke_stream(cmd: list[str], events_path: str | None, canned_lines: list[str] | None
+                  ) -> tuple[str, dict | None, int]:
+    """(raw transcript text, the terminal "result" object or None, exit
+    code) -- from canned_lines (ATTAVO_ADAPTER_STREAM_FILE) when given,
+    else a real `claude --output-format stream-json --verbose`
+    invocation, read line by line as it runs (not buffered until the
+    process exits) so each mapped event reaches events_path while the
+    stage is still in progress. Every raw line reaches the returned
+    transcript, mapped or not -- issue #34's guarantee: the evidence is
+    what build-NN.log saves, not just what this adapter went on to use.
+    """
+    raw_lines: list[str] = []
+    result: dict | None = None
+
+    def handle(line: str) -> None:
+        nonlocal result
+        if not line.strip():
+            return
+        raw_lines.append(line)
+        obj = parse_stream_line(line)
+        if obj is None:
+            return
+        if obj.get("type") == "result":
+            result = obj
+            return
+        if events_path:
+            for kind, text in stream_line_events(obj):
+                append_event(events_path, kind, text)
+
+    if canned_lines is not None:
+        for line in canned_lines:
+            handle(line)
+        return "\n".join(raw_lines), result, 0
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            env=executor_env())
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        handle(line.rstrip("\n"))
+    proc.wait()
+    stderr = proc.stderr.read() if proc.stderr else ""
+    if stderr.strip():
+        raw_lines.append(stderr.rstrip("\n"))
+    return "\n".join(raw_lines), result, proc.returncode
+
+
+def invoke_once(cmd: list[str], responses: list[dict] | None, call_index: int,
+                events_path: str | None
+                ) -> tuple[int | None, dict | None]:
+    """(None, response) for a result this adapter goes on to evaluate;
+    (exit_code, None) when the call itself must end the adapter right
+    away (the underlying tool's own non-zero exit, or a 0 exit whose
+    stream carried no terminal "result" line at all). Always prints this
+    call's raw transcript to stdout first -- issue #34's guarantee holds
+    across a retry too: every raw line the tool produced, not just the
+    result this adapter finally reports on, reaches build-NN.log.
+    """
+    if responses is not None:
+        response = responses[min(call_index, len(responses) - 1)]
+        print(json.dumps(response))
+        return None, response
+
+    raw, result, returncode = invoke_stream(cmd, events_path, load_canned_stream())
+    if raw.strip():
+        print(raw)
+    if returncode != 0:
+        return returncode, None
+    if result is None:
+        return 1, None
+    return None, result
+
+
+def usage_fields(response: dict) -> tuple[int, int, float | None]:
+    """(tokens.input, tokens.output, cost_usd) for one response, pulled
+    straight off usage/total_cost_usd -- independent of model derivation,
+    so a retry's first, discarded call still counts (issue #88: a
+    non-question costs two executor turns, and a report line built from
+    the second call alone undercounts by exactly the first one)."""
+    usage = response.get("usage") or {}
+    tokens_input = ((usage.get("input_tokens", 0) or 0)
+                    + (usage.get("cache_read_input_tokens", 0) or 0)
+                    + (usage.get("cache_creation_input_tokens", 0) or 0))
+    tokens_output = usage.get("output_tokens", 0) or 0
+    return tokens_input, tokens_output, response.get("total_cost_usd")
+
+
+def add_cost(a: float | None, b: float | None) -> float | None:
+    """None when neither call reported a cost; otherwise the sum,
+    treating an absent figure as 0 -- mirrors bin/attavo's own
+    cost_usd accumulation across build iterations."""
+    if a is None and b is None:
+        return None
+    return (a or 0) + (b or 0)
+
+
+def report_fields(response: dict, requested_model: str | None) -> dict | None:
+    """The fields common to every final report line, derived from one
+    tool response; None when no model id can be derived at all (the
+    caller must fail loudly rather than emit a report with no identity
+    behind it)."""
+    model, model_version = derive_model(response, requested_model)
+    if not model:
+        sys.stderr.write(
+            "adapters/claude-code/run: could not derive a model id -- the "
+            "response carried no requested model and an empty "
+            "'modelUsage'\n")
+        return None
+    if requested_model and response.get("modelUsage") and not model_version:
+        sys.stderr.write(
+            f"adapters/claude-code/run: requested model {requested_model!r} "
+            "matches no modelUsage canonicalModel -- model_version left "
+            "null\n")
+
+    tokens_input, tokens_output, cost = usage_fields(response)
+    return {
+        "model": model,
+        "model_version": model_version,
+        "adapter_version": adapter_version(),
+        "tokens": {"input": tokens_input, "output": tokens_output},
+        "cost_usd": cost,
+    }
+
+
+def main() -> int:
+    config = load_config()
+    refusal = refused_config_key(config)
+    if refusal:
+        sys.stderr.write(f"adapters/claude-code/run: refused: {refusal}\n")
+        return 1
+
+    stage = os.environ.get("ATTAVO_STAGE") or "build"
+    if stage not in ("build", "verify", "counsel"):
+        stage = "build"
+    verifying = stage == "verify"
+    counseling = stage == "counsel"
+    if verifying:
+        instruction, schema = verify_instruction(), VERIFY_SCHEMA
+    elif counseling:
+        instruction, schema = counsel_instruction(), COUNSEL_SCHEMA
+    else:
+        instruction, schema = build_instruction(), STATUS_SCHEMA
+    cmd = build_command(instruction, config, schema, stage)
+
+    ceiling = ceiling_refusal(instruction)
+    if ceiling:
+        sys.stderr.write(f"adapters/claude-code/run: refused: {ceiling}\n")
+        return 1
+
+    if os.environ.get("ATTAVO_ADAPTER_DRY_RUN"):
+        # {"argv", "instruction", "schema"}, not a bare argv list: the
+        # instruction lives in argv's own "-p" value here, but a second
+        # adapter (issue #41) can deliver it on stdin instead, where
+        # argv carries no instruction at all -- the envelope is what
+        # stays adapter-agnostic for tests/test_executor_conformance.py.
+        print(json.dumps({"argv": cmd, "instruction": instruction, "schema": schema}))
+        return 0
+
+    responses = load_canned_responses()
+    events_path = os.environ.get("ATTAVO_EVENTS")
+
+    exit_code, response = invoke_once(cmd, responses, 0, events_path)
+    if exit_code is not None:
+        return exit_code
+
+    # An error dressed as a question still costs a ruling act. Treat both
+    # the same way build already treats a non-zero adapter exit: failed,
+    # not a halt someone must rule on. Stage-independent: a tool error or
+    # an absent report is a failure whether this is a build or a verify.
+    if response.get("is_error") or not response.get("structured_output"):
+        return 1
+
+    refusal = subagent_refusal(response)
+    if refusal:
+        sys.stderr.write(refusal + "\n")
+        return 1
+
+    structured = response.get("structured_output") or {}
+
+    if verifying:
+        common = report_fields(response, config.get("model"))
+        if common is None:
+            return 1
+        # .get(), not "or []": an absent findings key must reach
+        # cmd_verify as None, distinct from an explicit empty list --
+        # that distinction is the whole fix for issue #46.
+        line = {**common,
+               "findings": structured.get("findings"),
+               "tests_named": structured.get("tests_named")}
+        print(json.dumps(line))
+        return 0
+
+    if counseling:
+        common = report_fields(response, config.get("model"))
+        if common is None:
+            return 1
+        line = {**common,
+               "class": structured.get("class"),
+               "verdict": structured.get("verdict"),
+               "citations": structured.get("citations"),
+               "proposal": structured.get("proposal")}
+        print(json.dumps(line))
+        return 0
+
+    status = structured.get("status", "done")
+    question = structured.get("question")
+    cls = question_class(status, question)
+
+    if cls == "fail":
+        return 1
+
+    if cls == "report":
+        # Issue #88, class A: a report in the question channel is
+        # re-instructed once, in this same invocation, before it ever
+        # reaches a person.
+        reinstruction = instruction + "\n\n" + REINSTRUCTION
+        cmd2 = build_command(reinstruction, config, schema, stage)
+        exit_code2, response2 = invoke_once(cmd2, responses, 1, events_path)
+        if exit_code2 is not None:
+            return exit_code2
+        if response2.get("is_error") or not response2.get("structured_output"):
+            return 1
+        refusal2 = subagent_refusal(response2)
+        if refusal2:
+            sys.stderr.write(refusal2 + "\n")
+            return 1
+
+        structured2 = response2.get("structured_output") or {}
+        status2 = structured2.get("status", "done")
+        question2 = structured2.get("question")
+        cls2 = question_class(status2, question2)
+        if cls2 == "fail":
+            return 1
+
+        common2 = report_fields(response2, config.get("model"))
+        if common2 is None:
+            return 1
+        # A non-question costs two executor turns, not one: sum both
+        # calls' tokens and cost into the one report line this
+        # invocation gets, whatever the retry's own outcome -- only
+        # adapter_version/model/model_version stay the second call's.
+        tokens1_input, tokens1_output, cost1 = usage_fields(response)
+        common2["tokens"]["input"] += tokens1_input
+        common2["tokens"]["output"] += tokens1_output
+        common2["cost_usd"] = add_cost(common2["cost_usd"], cost1)
+
+        if cls2 == "report":
+            # Two reports in a row: still a halt (someone must look),
+            # but the transcript above already carries both raw
+            # results, and this report line names the class so a
+            # reader -- or a future record field, not this one -- can
+            # tell it apart from a genuine question.
+            print("adapters/claude-code/run: halted: class non-question "
+                  "-- the executor reported instead of asking, twice in "
+                  "a row")
+            line = {**common2, "status": "question", "question": question2,
+                   "class": "non-question"}
+            print(json.dumps(line))
+            return 0
+
+        line = {**common2, "status": status2, "question": question2}
+        print(json.dumps(line))
+        return 0
+
+    common = report_fields(response, config.get("model"))
+    if common is None:
+        return 1
+    line = {**common, "status": status, "question": question}
+    print(json.dumps(line))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

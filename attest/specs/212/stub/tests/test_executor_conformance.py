@@ -1,0 +1,628 @@
+"""The executor conformance suite (issue #40): the entrance exam a second
+adapter passes before it is pointed at a tenant. Every situation here is a
+claude-code specimen from the last week of Lane 2, stated as contract
+against the adapter's own two test hooks -- ATTAVO_ADAPTER_DRY_RUN and
+ATTAVO_ADAPTER_RESPONSE_FILE -- rather than against claude-code's own
+module path, so a second adapter inherits it by declaring a
+conformance.json, not by copying a test file.
+
+Each adapter under adapters/ (except NOT_AN_EXECUTOR) declares its own
+conformance.json: {"dry_run_env": "<VAR>", "response_env": "<VAR>",
+"tool_binary": "<name>", "success_script": "<shell text>",
+"reports": ["<field>", ...], "situations": {"<name>": <canned response>}}.
+dry_run_env and response_env are the two hooks tests/test_adapters.py
+already exercised for claude-code (issues #24, #30, #34); tool_binary is
+the name of the executable the adapter shells out to when neither hook
+is set, needed to fake a non-zero exit from it (situation 5) without a
+model in the loop. success_script and reports are issue #41's, once a
+second adapter (codex) proved the first two claude-code-shaped: a
+canned "done" response's shape and a fake tool's own successful output
+are each adapter's private contract, not this file's assumption.
+
+dry_run()'s own envelope -- {"argv", "instruction", "schema"} -- is
+issue #41's too. argv alone was claude-code's shape: its instruction
+lives in argv's own "-p" value, but codex delivers its instruction on
+stdin, where argv carries none at all, so the suite reads "instruction"
+and "schema" directly rather than parsing either out of argv.
+
+Situation 8: a commit the adapter makes carries the identity attavo build
+exports (issue #33) -- checked by faking the adapter's own tool_binary on
+PATH, the same technique situation 5 uses, so the fake tool can commit
+for real inside a throwaway repo without a model in the loop. Its own
+canned "success_script" (above) is what lets this generalize past
+claude-code's single-JSON-blob response shape.
+
+Situation 12: vendor independence (2026-09-09 ruling) -- an adapter's
+declared "reports" fields must actually be non-null on a "done" run, so
+a silent measurement gap fails the suite instead of writing one.
+
+Situations 20 and 21: the executor sees none of the adapter's contract
+(issue #198) -- no ATTAVO_* name reaches the process an adapter launches,
+so nothing the executor runs can read the item's live events file, let
+alone append to it.
+
+Run: python3 -m pytest tests/test_executor_conformance.py -q
+"""
+import json
+import os
+import subprocess
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
+
+from helpers import FIXTURES
+
+ROOT = Path(__file__).resolve().parent.parent
+ADAPTERS_DIR = ROOT / "adapters"
+
+# Not an executor: adapters/fixture/run exists for the tests and the
+# doctor, has no canned-response hook, and is never pointed at a tenant.
+NOT_AN_EXECUTOR = {"fixture"}
+
+MIN_QUESTION_CHARS = 40
+
+
+def find_adapters_without_conformance(adapters_dir: Path) -> list[str]:
+    """Every directory under adapters_dir, other than NOT_AN_EXECUTOR,
+    that carries no conformance.json -- named, so a second adapter cannot
+    join by declaring nothing."""
+    missing: list[str] = []
+    if not adapters_dir.is_dir():
+        return missing
+    for d in sorted(p for p in adapters_dir.iterdir() if p.is_dir()):
+        if d.name in NOT_AN_EXECUTOR:
+            continue
+        if not (d / "conformance.json").is_file():
+            missing.append(d.name)
+    return missing
+
+
+def load_conformance() -> dict[str, dict[str, Any]]:
+    manifests = {}
+    for name in sorted(p.name for p in ADAPTERS_DIR.iterdir() if p.is_dir()):
+        if name in NOT_AN_EXECUTOR:
+            continue
+        manifest_path = ADAPTERS_DIR / name / "conformance.json"
+        if manifest_path.is_file():
+            manifests[name] = json.loads(manifest_path.read_text())
+    return manifests
+
+
+CONFORMANCE = load_conformance()
+ADAPTER_NAMES = sorted(CONFORMANCE)
+
+
+def base_env(tmp_path: Path) -> dict[str, Any]:
+    spec_dir = FIXTURES / "build_valid" / "specs" / "1"
+    env = dict(os.environ)
+    env.pop("ATTAVO_CHECKS_COMMAND", None)
+    env.pop("ATTAVO_TEST_COMMAND", None)
+    env.pop("ATTAVO_TEST_TIMEOUT_S", None)
+    # codex's own auth guard (issue #41) refuses "subscription" (the
+    # default) when this is set -- absent here regardless of what the
+    # ambient shell running these tests happens to carry, so the suite
+    # never depends on the operator's own environment.
+    env.pop("OPENAI_API_KEY", None)
+    env.update({
+        "ATTAVO_SPEC_DIR": str(spec_dir),
+        "ATTAVO_RECORDS_DIR": str(tmp_path / "records"),
+        "ATTAVO_RULINGS": str(tmp_path / "rulings.md"),
+        "ATTAVO_BRANCH": "attavo/1-example",
+        "ATTAVO_ITERATION": "1",
+        "ATTAVO_FEEDBACK": str(tmp_path / "feedback.txt"),
+        # codex requires [executor.codex].model (issue #41); harmless
+        # for claude-code, which treats every key here as optional.
+        "ATTAVO_ADAPTER_CONFIG": json.dumps({"model": "test-model"}),
+    })
+    return env
+
+
+def run_adapter(adapter_name: str, env: dict[str, Any], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    run_path = ADAPTERS_DIR / adapter_name / "run"
+    return subprocess.run([str(run_path)], capture_output=True, text=True,
+                          check=False, env=env, cwd=str(cwd) if cwd else None)
+
+
+def dry_run(adapter_name: str, tmp_path: Path, extra_env: dict[str, Any] | None = None) -> dict[str, Any]:
+    """{"argv", "instruction", "schema"}: the instruction and the schema
+    named separately from argv, because a second adapter (issue #41)
+    delivers the instruction on stdin, where argv itself carries none."""
+    manifest = CONFORMANCE[adapter_name]
+    env = base_env(tmp_path)
+    env[manifest["dry_run_env"]] = "1"
+    if extra_env:
+        env.update(extra_env)
+    run = run_adapter(adapter_name, env)
+    assert run.returncode == 0, run.stderr
+    return cast(dict[str, Any], json.loads(run.stdout))
+
+
+def run_situation(adapter_name: str, situation: str, tmp_path: Path,
+                  extra_env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
+    manifest = CONFORMANCE[adapter_name]
+    response = manifest["situations"][situation]
+    response_file = tmp_path / "response.json"
+    response_file.write_text(json.dumps(response))
+    env = base_env(tmp_path)
+    env[manifest["response_env"]] = str(response_file)
+    if extra_env:
+        env.update(extra_env)
+    return run_adapter(adapter_name, env)
+
+
+def test_every_executor_adapter_declares_conformance() -> None:
+    """Acceptance 3 (real check, against this repository's own adapters/)."""
+    missing = find_adapters_without_conformance(ADAPTERS_DIR)
+    assert not missing, f"adapter(s) with no conformance.json: {', '.join(missing)}"
+
+
+def test_find_adapters_without_conformance_names_the_directory(tmp_path: Path) -> None:
+    """Acceptance 3 (fixture): a directory with no conformance.json is
+    named, without touching the real adapters/ tree."""
+    adapters_dir = tmp_path / "adapters"
+    declared = adapters_dir / "declared"
+    declared.mkdir(parents=True)
+    (declared / "run").write_text("#!/bin/sh\n")
+    (declared / "conformance.json").write_text("{}")
+
+    undeclared = adapters_dir / "undeclared"
+    undeclared.mkdir(parents=True)
+    (undeclared / "run").write_text("#!/bin/sh\n")
+
+    assert find_adapters_without_conformance(adapters_dir) == ["undeclared"]
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_1_report_line_is_last_and_has_a_model(adapter_name: str, tmp_path: Path) -> None:
+    run = run_situation(adapter_name, "done", tmp_path)
+    assert run.returncode == 0, run.stderr
+    lines = [l for l in run.stdout.splitlines() if l.strip()]
+    report = json.loads(lines[-1])
+    assert report.get("model")
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_2_tool_error_fails_and_prints_the_result(adapter_name: str, tmp_path: Path) -> None:
+    run = run_situation(adapter_name, "is_error", tmp_path)
+    assert run.returncode != 0
+    assert run.stdout.strip(), "the raw result must still reach stdout"
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_3_no_structured_output_fails(adapter_name: str, tmp_path: Path) -> None:
+    run = run_situation(adapter_name, "no_structured_output", tmp_path)
+    assert run.returncode != 0
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_4_question_quality_gates_the_halt(adapter_name: str, tmp_path: Path) -> None:
+    # An absent, empty, or short question is a report in the question
+    # channel (issue #150): the adapter re-invokes once and, when the
+    # retry yields nothing better, reports class non-question with the
+    # tokens of both turns kept -- never an exit with no report line.
+    for situation in ("question_null", "question_empty", "question_short"):
+        run = run_situation(adapter_name, situation, tmp_path)
+        assert run.returncode == 0, f"{situation}: {run.stderr}"
+        report = json.loads(run.stdout.splitlines()[-1])
+        assert report["status"] == "question", (situation, report)
+        assert report["class"] == "non-question", (situation, report)
+
+    run = run_situation(adapter_name, "question_long", tmp_path)
+    assert run.returncode == 0, run.stderr
+    report = json.loads(run.stdout.splitlines()[-1])
+    assert report["status"] == "question"
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_5_underlying_tool_nonzero_exit_passes_through(adapter_name: str, tmp_path: Path) -> None:
+    """A fake <tool_binary> on PATH that writes to both of its streams and
+    exits 3: the adapter exits 3, and its own stdout -- the only stream
+    build-NN.log is built from -- carries both of the tool's streams.
+    """
+    manifest = CONFORMANCE[adapter_name]
+    tool_binary = manifest["tool_binary"]
+
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    fake_tool = fake_bin / tool_binary
+    fake_tool.write_text(
+        "#!/bin/sh\n"
+        "echo 'tool stdout: ran out of budget'\n"
+        "echo 'tool stderr: overloaded_error' >&2\n"
+        "exit 3\n")
+    fake_tool.chmod(0o755)
+
+    env = base_env(tmp_path)
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+
+    run = run_adapter(adapter_name, env)
+    assert run.returncode == 3
+    assert "tool stdout: ran out of budget" in run.stdout
+    assert "tool stderr: overloaded_error" in run.stdout
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_6_transcript_non_empty_on_every_path(adapter_name: str, tmp_path: Path) -> None:
+    for situation in ("done", "is_error", "no_structured_output", "question_short"):
+        run = run_situation(adapter_name, situation, tmp_path)
+        assert run.stdout.strip(), f"{situation} produced no transcript at all"
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_7_the_one_test_command_in_the_invocation(adapter_name: str, tmp_path: Path) -> None:
+    """The executor is given one test command and no whole-tree command.
+    Naming the tenant's checks in the instruction made the executor their
+    runner however the sentence was worded (tenant zero build-10; #194's
+    590 s wait; #204 and #206, where the whole suite was run twice inside
+    one build), so the checks command is not in the instruction at all."""
+    command = "python3 /product/bin/attavo test 7"
+    checks = "python3 bin/factory-lane check --base origin/main"
+    given = dry_run(adapter_name, tmp_path, extra_env={
+        "ATTAVO_TEST_COMMAND": command, "ATTAVO_TEST_TIMEOUT_S": "240",
+        "ATTAVO_CHECKS_COMMAND": checks})
+    assert command in given["instruction"]
+    assert "240 s" in given["instruction"]
+    assert checks not in given["instruction"]
+
+    without = dry_run(adapter_name, tmp_path)
+    assert command not in without["instruction"]
+    assert "attavo test" not in without["instruction"]
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_8_commits_carry_the_attavo_build_identity(adapter_name: str, tmp_path: Path) -> None:
+    """Issue #33. attavo build exports the executor identity -- set by the
+    product, never the tenant's git config -- as GIT_AUTHOR_NAME/EMAIL and
+    GIT_COMMITTER_NAME/EMAIL before invoking the adapter; the adapter must
+    pass it through rather than setting its own explicit environment for
+    the underlying tool. The fake tool_binary here commits for real, so
+    this checks the adapter's own subprocess call, not just the harness.
+    Regression: the specimen is attavo/code-factory@e22fa85, an executor
+    commit indistinguishable in git log from the operator's own, because
+    no identity was exported for it to carry.
+    """
+    manifest = CONFORMANCE[adapter_name]
+    tool_binary = manifest["tool_binary"]
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=str(repo), check=True)
+    subprocess.run(["git", "config", "user.name", "a tenant operator"], cwd=str(repo), check=True)
+    subprocess.run(["git", "config", "user.email", "operator@example.com"], cwd=str(repo), check=True)
+    (repo / "README.md").write_text("seed\n")
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=str(repo), check=True)
+
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    fake_tool = fake_bin / tool_binary
+    # A successful invocation's own shape is per-adapter (claude-code's
+    # single JSON blob vs. codex's JSONL-plus-output-file), so each
+    # adapter declares its own script rather than this file assuming
+    # one -- assuming claude-code's shape here was itself the
+    # claude-code-ism issue #41 found building a second adapter.
+    fake_tool.write_text(manifest["success_script"])
+    fake_tool.chmod(0o755)
+
+    identity_name = f"attavo executor ({adapter_name})"
+    identity_email = f"executor+{adapter_name}@attavo.invalid"
+    env = base_env(tmp_path)
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+    env["GIT_AUTHOR_NAME"] = identity_name
+    env["GIT_AUTHOR_EMAIL"] = identity_email
+    env["GIT_COMMITTER_NAME"] = identity_name
+    env["GIT_COMMITTER_EMAIL"] = identity_email
+
+    run = run_adapter(adapter_name, env, cwd=repo)
+    assert run.returncode == 0, run.stderr
+
+    log = subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%an/%ae"],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    assert log == f"{identity_name}/{identity_email}"
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_9_verify_stage_uses_a_findings_schema(adapter_name: str, tmp_path: Path) -> None:
+    """Issue #46, rejection test 3. With ATTAVO_STAGE=verify, the
+    invocation names a response shape carrying findings and tests_named
+    -- not build's status/question. Red at 699f56d for claude-code,
+    where ATTAVO_STAGE was read nowhere and every invocation got the
+    build schema.
+    """
+    schema = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_STAGE": "verify"})["schema"]
+    assert "findings" in schema.get("properties", {})
+    assert "tests_named" in schema.get("properties", {})
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_10_verify_names_approval_commit_divergence_as_reportable(adapter_name: str, tmp_path: Path) -> None:
+    """Issue #48, rejection test 1. With ATTAVO_STAGE=verify, the
+    invocation's instruction names a spec whose approval commit does
+    not describe the working tree as itself a reportable finding --
+    issue #4's absorption, specified in issue #40's section 2, lost
+    between issue #40 and issue #46. Red at d04b484, where
+    verify_instruction() never said this.
+    """
+    instruction = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_STAGE": "verify"})["instruction"]
+    assert "approval commit" in instruction
+    assert "reportable" in instruction
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_11_verify_defines_severity_as_derived(adapter_name: str, tmp_path: Path) -> None:
+    """Issue #48, rejection test 2. With ATTAVO_STAGE=verify, the
+    invocation's instruction defines severity as derived rather than
+    judged. Red at d04b484, where severity was named once in the
+    finding fields and defined nowhere.
+    """
+    instruction = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_STAGE": "verify"})["instruction"]
+    assert "severity" in instruction
+    assert "derived rather than judged" in instruction
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_12_adapter_supplies_every_field_it_declares(adapter_name: str, tmp_path: Path) -> None:
+    """Vendor independence (2026-09-09 ruling). conformance.json's
+    "reports" names the fields this adapter can supply with a real
+    value -- an adapter claiming a field and returning null for it is a
+    silent measurement gap, not a legitimate absence, and this fails
+    the suite instead of writing one. Dollars are never summed across
+    executors; absent is null, never zero or blank -- this situation is
+    what makes an adapter's null trustworthy as "not reported by this
+    executor" rather than "forgot to report it".
+    """
+    manifest = CONFORMANCE[adapter_name]
+    reports = manifest.get("reports", [])
+    run = run_situation(adapter_name, "done", tmp_path)
+    assert run.returncode == 0, run.stderr
+    report = json.loads(run.stdout.splitlines()[-1])
+    for field in reports:
+        assert report.get(field) is not None, (
+            f"{adapter_name} declares {field!r} in its reports but a done "
+            f"run's own report line carries none")
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_13_subagent_guard_is_declared(adapter_name: str, tmp_path: Path) -> None:
+    """Issue #88, rejection test (class B, general across any adapter).
+    Every adapter's conformance.json names subagent_guard.supported: an
+    adapter naming neither a working check nor an admitted inability is
+    an undeclared blind spot, not a legitimate absence (mirrors
+    situation 12's vendor-independence ruling). A supported adapter's
+    named situation must refuse the run -- naming the tool's own counts
+    -- rather than reporting done on work that can outlive it; an
+    unsupported adapter must say why it cannot check at all.
+    """
+    manifest = CONFORMANCE[adapter_name]
+    guard = manifest.get("subagent_guard")
+    assert guard is not None, f"{adapter_name} declares no subagent_guard"
+    assert isinstance(guard.get("supported"), bool), (
+        f"{adapter_name}'s subagent_guard.supported must be true or false")
+
+    if guard["supported"]:
+        run = run_situation(adapter_name, guard["situation"], tmp_path)
+        assert run.returncode != 0, (
+            f"{adapter_name} accepted a run with spawned background work "
+            "as done")
+        transcript = run.stdout + run.stderr
+        assert "subagent" in transcript.lower()
+    else:
+        assert guard.get("reason"), (
+            f"{adapter_name} declares subagent_guard.supported: false "
+            "with no reason")
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_14_input_limit_is_declared(adapter_name: str, tmp_path: Path) -> None:
+    """Issue #93, rejection test 1. Every adapter's conformance.json
+    names input_limit: a unit and a number (as the tool documents it),
+    or a null value and a reason (mirrors situation 13's vendor-
+    independence pattern: an adapter naming neither is an undeclared
+    blind spot, not a legitimate absence)."""
+    manifest = CONFORMANCE[adapter_name]
+    limit = manifest.get("input_limit")
+    assert limit is not None, f"{adapter_name} declares no input_limit"
+
+    if limit.get("value") is not None:
+        assert limit.get("unit") in ("chars", "tokens"), (
+            f"{adapter_name}'s input_limit has a value but no chars/tokens unit")
+    else:
+        assert limit.get("reason"), (
+            f"{adapter_name}'s input_limit has no value and no reason")
+
+
+def counsel_extra_env(tmp_path: Path) -> dict[str, Any]:
+    """Issue #100: the record, its log, the diff, the tenant manifest,
+    and this product's own root, all handed by path -- the general
+    contract every adapter's counsel stage shares."""
+    record_path = tmp_path / "build-01.json"
+    record_path.write_text(json.dumps({"status": "halted"}))
+    log_path = tmp_path / "build-01.log"
+    log_path.write_text("adapter transcript\n")
+    diff_path = tmp_path / "diff.patch"
+    diff_path.write_text("diff --git a/x.py b/x.py\n")
+    manifest_path = tmp_path / "attavo.toml"
+    manifest_path.write_text("schema_version = 1\n")
+    return {
+        "ATTAVO_STAGE": "counsel",
+        "ATTAVO_COUNSEL_RECORD": str(record_path),
+        "ATTAVO_COUNSEL_LOG": str(log_path),
+        "ATTAVO_COUNSEL_DIFF": str(diff_path),
+        "ATTAVO_MANIFEST": str(manifest_path),
+        "ATTAVO_PRODUCT_ROOT": str(ROOT),
+    }
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_16_counsel_stage_is_declared(adapter_name: str) -> None:
+    """Issue #100, acceptance row 4. Every adapter's conformance.json
+    names "counsel" among its declared stages -- an adapter naming none
+    is not one this lane has pointed at the counsel stage."""
+    manifest = CONFORMANCE[adapter_name]
+    stages = manifest.get("stages")
+    assert stages is not None and "counsel" in stages, (
+        f"{adapter_name} declares no counsel stage")
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_17_counsel_names_the_product_root_and_the_record(adapter_name: str, tmp_path: Path) -> None:
+    """Issue #100, acceptance row 4. The counsel instruction names this
+    product's own root and the record path handed to it, and its schema
+    requires the structured answer (class, verdict, citations, proposal)."""
+    extra = counsel_extra_env(tmp_path)
+    result = dry_run(adapter_name, tmp_path, extra_env=extra)
+    instruction = result["instruction"]
+
+    assert str(ROOT) in instruction
+    assert extra["ATTAVO_COUNSEL_RECORD"] in instruction
+    schema_required = set(result["schema"].get("required", []))
+    assert schema_required == {"class", "verdict", "citations", "proposal"}
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_18_counsel_instruction_stays_under_the_bound_with_large_files(
+        adapter_name: str, tmp_path: Path) -> None:
+    """Issue #100, acceptance row 4. A 2 MB record log and diff both leave
+    the counsel instruction under the fixed bound -- the same guarantee
+    build and verify already carry (issue #86), so counsel does not
+    reintroduce the ceiling regression on its own new files."""
+    FIXED_BOUND_CHARS = 65536
+
+    extra = counsel_extra_env(tmp_path)
+    large_log = make_large_file(tmp_path / "build-01.log", diff_like=False)
+    large_diff = make_large_file(tmp_path / "diff.patch", diff_like=True)
+    extra["ATTAVO_COUNSEL_LOG"] = str(large_log)
+    extra["ATTAVO_COUNSEL_DIFF"] = str(large_diff)
+
+    result = dry_run(adapter_name, tmp_path, extra_env=extra)
+    assert len(result["instruction"].encode()) < FIXED_BOUND_CHARS
+
+
+def test_situation_19_codex_writes_events_when_attavo_events_is_set(tmp_path: Path) -> None:
+    """Issue #138, acceptance row 2. With ATTAVO_EVENTS set, the codex
+    adapter maps its own JSONL stream to the same {at, kind, text}
+    shape claude-code already writes -- checked through the
+    conformance suite's existing canned-response hook, since codex's
+    own invoke() parses the "events" list the same way whether canned
+    or live, and the "done" situation's own item.completed/
+    agent_message event (confirmed live, issue #41) is exactly such a
+    stream. Codex-only, not parametrized across ADAPTER_NAMES:
+    claude-code's own canned-response hook feeds the final report
+    object directly and never touches ATTAVO_EVENTS -- its mapping is
+    tests/test_adapter_claude_code.py's own module, through the
+    separate ATTAVO_ADAPTER_STREAM_FILE hook issue #26 added for it.
+    """
+    events_path = tmp_path / "events.jsonl"
+    run = run_situation("codex", "done", tmp_path,
+                        extra_env={"ATTAVO_EVENTS": str(events_path)})
+    assert run.returncode == 0, run.stderr
+
+    lines = [json.loads(l) for l in events_path.read_text().splitlines() if l.strip()]
+    assert lines, "no events written"
+    assert all(set(e) == {"at", "kind", "text"} for e in lines)
+    assert any(e["kind"] == "message" and e["text"] == "ok" for e in lines)
+
+
+def run_with_fake_executor(adapter_name: str, tmp_path: Path, script: str,
+                           extra_env: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+    """The adapter's real launch path: a fake <tool_binary> on PATH running
+    `script`, then exiting 3 -- the adapter passes a non-zero exit through
+    (situation 5) with the tool's stdout in its own, so the transcript is
+    what the executor's process printed. Runs in a throwaway cwd."""
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    fake_tool = fake_bin / CONFORMANCE[adapter_name]["tool_binary"]
+    fake_tool.write_text(f"#!/bin/sh\n{script}\nexit 3\n")
+    fake_tool.chmod(0o755)
+
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    env = base_env(tmp_path)
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+    env.update(extra_env)
+    return run_adapter(adapter_name, env, cwd=cwd)
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_20_the_executor_sees_no_attavo_variable(adapter_name: str, tmp_path: Path) -> None:
+    """Issue #198, acceptance row 1. A canned executor that prints its
+    environment shows no ATTAVO_ name -- the adapter's contract is the
+    adapter's alone -- while every other variable still reaches it.
+    Specimen: attavo/attavo#194 build-01, where the executor's own
+    test run inherited ATTAVO_EVENTS and 26 of 83 lines of the item's
+    events file were not the executor's. The way back in is any new
+    launch of the executor that does not go through the shared helper.
+    """
+    run = run_with_fake_executor(
+        adapter_name, tmp_path, "env",
+        {"ATTAVO_EVENTS": str(tmp_path / "events.jsonl"),
+         "ATTAVO_STAGE": "build",
+         "EXECUTOR_SENTINEL": "passes-through"})
+    assert run.returncode == 3, run.stderr
+
+    names = [l.split("=", 1)[0] for l in run.stdout.splitlines() if "=" in l]
+    assert "EXECUTOR_SENTINEL" in names and "PATH" in names, (
+        "the executor's own environment did not print", run.stdout)
+    leaked = sorted(n for n in names if n.startswith("ATTAVO_"))
+    assert not leaked, f"{adapter_name} launched its executor with {', '.join(leaked)}"
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_21_a_fixture_run_inside_the_executor_leaves_the_events_file_alone(
+        adapter_name: str, tmp_path: Path) -> None:
+    """Issue #198, acceptance row 2 -- the specimen itself. The executor
+    runs the repository's test suite, the suite runs adapters/fixture/run,
+    and the fixture appends to ATTAVO_EVENTS when it finds it set. Here
+    the executor's tool call is that nested fixture run: the outer
+    events file's line count is the same as with no nested run."""
+    events = tmp_path / "events.jsonl"
+    events.write_text('{"at": "2026-09-19T00:00:00Z", "kind": "message", "text": "outer"}\n')
+    before = events.read_text().splitlines()
+
+    fixture_run = ADAPTERS_DIR / "fixture" / "run"
+    run = run_with_fake_executor(
+        adapter_name, tmp_path, f'"{fixture_run}" >/dev/null',
+        {"ATTAVO_EVENTS": str(events)})
+    assert run.returncode == 3, run.stderr
+
+    assert events.read_text().splitlines() == before
+    assert (tmp_path / "cwd" / "built.txt").is_file(), (
+        "the nested fixture run did not happen, so nothing was checked")
+
+
+def make_large_file(path: Path, diff_like: bool) -> Path:
+    """A file over 2 MB: a diff-shaped one (3 files, unified-diff
+    headers) or a flat feedback-shaped one, the same shapes issue #86's
+    own rejection tests use."""
+    if diff_like:
+        chunks = []
+        for i in range(3):
+            chunks.append(f"diff --git a/file{i}.py b/file{i}.py\n")
+            chunks.append("+line of a large deletion diff\n" * 30000)
+        path.write_text("".join(chunks))
+    else:
+        path.write_text("a failing test line\n" * 120000)
+    return path
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_situation_15_instruction_stays_under_the_bound_with_large_files(adapter_name: str, tmp_path: Path) -> None:
+    """Issue #93, rejection test 3. A 2 MB diff and a 2 MB feedback file
+    both leave the dry-run instruction under the 64 KB fixed bound --
+    the guarantee issue #86 built (naming a file's path instead of
+    inlining it) staying in place, checked generally rather than per
+    adapter file, so a third adapter inlining a large file again is
+    caught here rather than only in judgment."""
+    FIXED_BOUND_CHARS = 65536
+
+    diff_path = make_large_file(tmp_path / "diff.patch", diff_like=True)
+    assert diff_path.stat().st_size > 2_000_000
+    verify = dry_run(adapter_name, tmp_path, extra_env={
+        "ATTAVO_STAGE": "verify", "ATTAVO_DIFF": str(diff_path)})
+    assert len(verify["instruction"].encode()) < FIXED_BOUND_CHARS
+
+    feedback_path = make_large_file(tmp_path / "feedback.txt", diff_like=False)
+    assert feedback_path.stat().st_size > 2_000_000
+    build = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_FEEDBACK": str(feedback_path)})
+    assert len(build["instruction"].encode()) < FIXED_BOUND_CHARS

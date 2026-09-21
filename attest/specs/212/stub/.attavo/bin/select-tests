@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""select-tests, AS A STUB: not the selector and not to be shipped. It knows
+one module and sends everything else that is not prose or this repository's
+own specs and records to the whole suite. The table of modules and their
+tests, a test file selecting itself, and the adapters, schema, and templates
+prefixes are the build's to write. tests/test_testtool.py fails on it."""
+from __future__ import annotations
+
+import sys
+
+
+def main() -> int:
+    out: list[str] = []
+    for path in (line.strip() for line in sys.stdin.read().splitlines() if line.strip()):
+        if path.startswith("attest/") or path.endswith(".md"):
+            continue
+        if path != "attavo/report.py":
+            print("tests")
+            return 0
+        out.append("tests/test_report.py")
+    for t in dict.fromkeys(out):
+        print(t)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
