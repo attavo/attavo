@@ -20,6 +20,17 @@ def test_help_lists_attest_and_record_only() -> None:
     assert "attavo attest" in run.stdout
 
 
+def test_help_and_the_unknown_subcommand_message_name_test() -> None:
+    """Issue #212: attavo test is the executor's one test command."""
+    run = subprocess.run([sys.executable, str(ATTAVO), "--help"],
+                         capture_output=True, text=True, check=False)
+    assert run.returncode == 0
+    assert "attavo test [N]" in run.stdout
+    unknown = subprocess.run([sys.executable, str(ATTAVO), "not-a-real-subcommand"],
+                             capture_output=True, text=True, check=False)
+    assert "stops, test exist" in unknown.stderr
+
+
 def test_help_names_all_four_doctor_proofs() -> None:
     """Issue #94, acceptance row 5: the doctor's own help text names all
     four proofs, no-stop-lacks-cause included -- a proof the help text

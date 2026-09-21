@@ -16,15 +16,18 @@ record.
 - `permission_mode` — default `"acceptEdits"`.
 - `allowed_tools` is retired (issue #78): a manifest that still declares `[executor.claude-code].allowed_tools` is refused by name rather than silently accepted or ignored. See below.
 
-## The tenant's checks
+## The tenant's tests
 
-`attavo build` already runs `[checks].command` after each commit and feeds
-a failure back on the next iteration — the executor is not the runner of
-the tenant's checks. When `ATTAVO_CHECKS_COMMAND` is set (`../README.md`),
-the instruction says so: "after you commit, the tenant's checks (`<command>`)
-are run for you and any failure is returned to you on the next iteration;
-run only what you need while editing." When it is unset, the instruction
-says nothing about checks.
+`attavo build` runs the tenant's gates after each commit and feeds a
+failure back on the next iteration — the executor is not the runner of the
+tenant's checks, and is not told what they are. When `ATTAVO_TEST_COMMAND`
+is set (`../README.md`), the instruction gives it: "to run tests while you
+work, run `<command>`: it runs the tests selected for the files you have
+changed and stops at `<N>` s. Do not run the whole test suite or any
+whole-tree check yourself: after you commit, the gates are run for you and
+any failure is returned to you on the next iteration." The "stops at" clause
+is present only when `ATTAVO_TEST_TIMEOUT_S` is set. When
+`ATTAVO_TEST_COMMAND` is unset, the instruction says nothing about tests.
 
 ## The sandbox is the boundary, not an allowed_tools list
 

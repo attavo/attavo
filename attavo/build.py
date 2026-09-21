@@ -25,6 +25,7 @@ from attavo.events import append_event, stage_events_dir
 from attavo.records import latest_record, next_attempt_number, write_record
 from attavo.spec import parse_spec, run_criterion
 from attavo.stops import _log_last_line, derive_stop
+from attavo.testtool import run_bounded, without_records
 
 # --- build: adapter, claims boundary, criteria, and the tenant's tests ---
 
@@ -78,9 +79,8 @@ def adapter_reports(adapter_path: Path) -> list[str]:
 def changed_paths(root: Path, start_sha: str, records_rel: str) -> list[str]:
     """Paths changed between start_sha and HEAD, other than paths.records --
     the records directory is where build itself writes, not a claim."""
-    out = git(root, "diff", "--name-only", start_sha, "HEAD").splitlines()
-    prefix = records_rel.rstrip("/") + "/"
-    return [p for p in out if p and p != records_rel and not p.startswith(prefix)]
+    return without_records(git(root, "diff", "--name-only", start_sha, "HEAD").splitlines(),
+                           records_rel)
 
 
 def matches_a_claim(path: str, claims: list[str]) -> bool:
@@ -224,6 +224,11 @@ def cmd_build(argv: list[str]) -> int:
               "([tests].select and [tests].run are both required)")
         return 1
 
+    if (m.get("checks") or {}).get("probe") and not (m.get("checks") or {}).get("probe_timeout_s"):
+        print("attavo build: refused: [checks].probe is declared without "
+              "[checks].probe_timeout_s (a probe with no bound is not asked)")
+        return 1
+
     try:
         status = approval_status(root, m, item_id)
     except ShallowCheckoutError as exc:
@@ -248,7 +253,10 @@ def cmd_build(argv: list[str]) -> int:
     claims = parsed["claims"] if parsed else []
     criteria_names = parsed["criteria"] if parsed else []
     adapter_config = merge_adapter_config(m, adapter_name, "build")
-    checks_command = (m.get("checks") or {}).get("command")
+    checks_cfg = m.get("checks") or {}
+    checks_command = checks_cfg.get("command")
+    probe = checks_cfg.get("probe")
+    probe_timeout_s = checks_cfg.get("probe_timeout_s")
     identity = executor_identity(adapter_name)
     reports = adapter_reports(adapter_path)
 
@@ -256,19 +264,37 @@ def cmd_build(argv: list[str]) -> int:
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
     started = time.monotonic()
 
-    # Issue #115: the tenant's whole-tree checks run once here, on the
-    # approved tree, before the adapter is ever invoked -- exit 2 means
-    # the command itself cannot run (e.g. a missing import at test
-    # collection, item #106's build-01), not a failing check, and no
-    # build could have passed against it. Exit 0 or 1 -- the checks run
-    # and pass or fail, the expected states before a build -- proceeds;
-    # the per-iteration checks below run (and are recorded) exactly as
-    # before.
+    events_path = stage_events_dir(root) / f"build-{next_attempt_number(item_records_dir, 'build'):02d}.events.jsonl"
+
+    # Issue #115, then issue #212: whether this machine can run the tenant's
+    # checks at all is asked once here, on the approved tree, before the
+    # adapter is ever invoked -- a missing import at test collection (item
+    # #106's build-01) is not a failing check, and no build could have
+    # passed against it. A tenant that declares [checks].probe is asked by
+    # the probe, inside [checks].probe_timeout_s: exit 0 yes, anything else
+    # or the bound no. A tenant that does not is asked the old way, by
+    # running [checks].command whole -- exit 2 no, exit 0 or 1 (the checks
+    # ran and passed or failed, the expected states before a build) yes --
+    # which is the run #194's build-01 spent 215 s on. Either way the feed
+    # says what is being asked and what the answer was.
     if checks_command:
-        preflight = subprocess.run(checks_command, shell=True, cwd=str(root),
-                                   capture_output=True, text=True, check=False)
-        if preflight.returncode == 2:
-            detail = _log_last_line(preflight.stdout + "\n" + preflight.stderr)
+        append_event(events_path, "gate", "checking this machine can run the checks")
+        asked = checks_command
+        if probe:
+            asked = probe
+            code, out, err, timed_out = run_bounded(probe, root, "", probe_timeout_s)
+            refusal_text = (f"[checks].probe did not finish within {probe_timeout_s} s" if timed_out
+                            else f"[checks].probe exited {code} on the approved tree"
+                            if code != 0 else None)
+        else:
+            preflight = subprocess.run(checks_command, shell=True, cwd=str(root),
+                                       capture_output=True, text=True, check=False)
+            code, out, err = preflight.returncode, preflight.stdout, preflight.stderr
+            refusal_text = ("[checks].command exited 2 on the approved tree" if code == 2 else None)
+        if refusal_text:
+            append_event(events_path, "gate", f"this machine cannot run the checks: {refusal_text}")
+            log = out + err
+            detail = _log_last_line(out + "\n" + err) or refusal_text
             record = {
                 "sha": start_sha,
                 "start_sha": start_sha,
@@ -285,19 +311,20 @@ def cmd_build(argv: list[str]) -> int:
                 "iterations": 1,
                 "criteria": [],
                 "selected_tests": None,
-                "checks": {"command": checks_command, "exit": preflight.returncode},
+                "checks": {"command": asked, "exit": code},
                 "tokens": {"input": 0, "output": 0},
                 "cost_usd": None,
                 "wall_clock_s": round(time.monotonic() - started, 3),
                 "status": "refused",
-                "refusal": "[checks].command exited 2 on the approved tree",
+                "refusal": refusal_text,
                 "halted": None,
                 "stop": {"class": "environment", "provenance": "tenant", "detail": detail},
             }
             record_path = write_record(item_records_dir, "build", record, m, item_id,
-                                       log=preflight.stdout + preflight.stderr)
+                                       log=log or refusal_text + "\n")
             print(f"attavo build: refused ({record_path.name})")
             return 1
+        append_event(events_path, "gate", "this machine can run the checks")
 
     adapter_version = model = model_version = None
     tokens = {"input": 0, "output": 0}
@@ -311,8 +338,6 @@ def cmd_build(argv: list[str]) -> int:
     refusal_provenance = None
     halted = None
     iterations_used = 0
-
-    events_path = stage_events_dir(root) / f"build-{next_attempt_number(item_records_dir, 'build'):02d}.events.jsonl"
 
     with tempfile.TemporaryDirectory() as tmp:
         feedback_path = Path(tmp) / "feedback.txt"
@@ -331,8 +356,11 @@ def cmd_build(argv: list[str]) -> int:
             env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(adapter_config)
             env["ATTAVO_STAGE"] = "build"
             env["ATTAVO_EVENTS"] = str(events_path)
-            if checks_command:
-                env["ATTAVO_CHECKS_COMMAND"] = checks_command
+            env["ATTAVO_TEST_COMMAND"] = f"python3 {PRODUCT_ROOT / 'bin' / 'attavo'} test {item_id}"
+            if tests_cfg.get("call_timeout_s"):
+                env["ATTAVO_TEST_TIMEOUT_S"] = str(tests_cfg["call_timeout_s"])
+            else:
+                env.pop("ATTAVO_TEST_TIMEOUT_S", None)
             env["GIT_AUTHOR_NAME"] = identity["name"]
             env["GIT_AUTHOR_EMAIL"] = identity["email"]
             env["GIT_COMMITTER_NAME"] = identity["name"]

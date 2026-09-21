@@ -14,6 +14,7 @@
     attavo drive [N] [--until-ready | --report]
     attavo ledger [N] [--json]
     attavo stops [N] [--json]
+    attavo test [N]
 
 The doctor is the definition of done. It asserts five proofs against a
 tenant root and exits 1 until every proof holds:
@@ -86,7 +87,14 @@ whole-tree check, from the tenant root. pass requires every criterion,
 the test run, and the tenant's checks (if declared) to exit 0; any
 non-zero exit iterates, with the failure as feedback, up to a fixed
 budget. [checks] is optional; a tenant that declares none is not
-refused. It writes the next build-NN.json under paths.records/N/, with
+refused. Before the adapter is invoked it asks whether this machine can
+run the checks -- of [checks].probe, run once inside [checks].probe_timeout_s
+(exit 0 yes; anything else, or the bound, an environment refusal), or,
+for a tenant that declares no probe, by running [checks].command whole
+(exit 2 no) -- and says both the question and the answer in the feed
+(issue #212). The adapter is given ATTAVO_TEST_COMMAND, `attavo test N`,
+and ATTAVO_TEST_TIMEOUT_S when [tests].call_timeout_s is declared; it
+is not given the tenant's checks. It writes the next build-NN.json under paths.records/N/, with
 the adapter's transcript -- each iteration's gate output (criteria
 exits, the selected tests' stdout, the tenant's checks' tail) appended
 under an "--- attavo gates, iteration N ---" heading, issue #89 -- beside
@@ -95,6 +103,15 @@ it as build-NN.log. Every record whose status is not pass carries stop:
 already on hand (issue #89); a pass record carries stop: null. See the
 build contract in the project's Phase 2 issue for the full rules it
 enforces.
+
+test [N] runs the tests [tests].select names for every path the item has
+changed since it left the default branch (refs/remotes/origin/HEAD),
+committed or not and untracked included, paths.records aside, through
+[tests].run. It prints how many were selected (or that none was, and runs
+nothing), exits as the run does, and, when [tests].call_timeout_s is
+declared and the run outlasts it, ends the run and everything it started
+and exits 124. It exits 2 when it cannot name the changes or the selector
+fails. It is the one test command an executor is given (issue #212).
 
 verify refuses (exit 1) unless the item's latest build record has
 status pass, and unless the manifest declares [forge].checks_command --
@@ -272,6 +289,7 @@ from attavo.ledger import cmd_ledger
 from attavo.record_only import cmd_record_only
 from attavo.spec import cmd_spec_gate
 from attavo.stops import cmd_stops
+from attavo.testtool import cmd_test
 from attavo.verify import cmd_verify
 
 
@@ -307,7 +325,9 @@ def main(argv: list[str]) -> int:
         return cmd_ledger(argv[1:])
     if argv[0] == "stops":
         return cmd_stops(argv[1:])
+    if argv[0] == "test":
+        return cmd_test(argv[1:])
     print(f"attavo: unknown subcommand {argv[0]!r}; only doctor, spec-gate, approve, "
           f"approval-status, build, verify, file-findings, file-stops, counsel, record-only, "
-          f"attest, drive, ledger, stops exist at this commit", file=sys.stderr)
+          f"attest, drive, ledger, stops, test exist at this commit", file=sys.stderr)
     return 2

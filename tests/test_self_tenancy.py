@@ -91,8 +91,14 @@ def test_checks_and_tests_run_deselect_the_four_dogfood_doctor_tests() -> None:
     then restored."""
     m = load_manifest()
     for flag in DESELECT_FLAGS:
-        assert flag in m["checks"]["command"], m["checks"]["command"]
         assert flag in m["tests"]["run"], m["tests"]["run"]
+    # Since the calibration item the gate's [checks].command runs the type
+    # check and no test at all; the whole suite is ci.yml's test job, which
+    # carries the same flags. A gate command that names pytest again must
+    # carry them too.
+    if "pytest" in m["checks"]["command"]:
+        for flag in DESELECT_FLAGS:
+            assert flag in m["checks"]["command"], m["checks"]["command"]
 
 
 def run_select_tests(stdin_text: str) -> list[str]:
@@ -106,15 +112,15 @@ def test_select_tests_maps_bin_attavo_to_the_whole_suite() -> None:
 
 
 def test_select_tests_maps_an_adapter_path_to_the_adapter_tests() -> None:
-    assert run_select_tests("adapters/example/run\n") == [
-        "tests/test_adapters.py", "tests/test_executor_conformance.py",
-    ]
+    selected = run_select_tests("adapters/example/run\n")
+    assert "tests/test_adapters.py" in selected and "tests/test_executor_conformance.py" in selected
+    assert "tests" not in selected, "an adapter path selected the whole suite"
 
 
 def test_select_tests_maps_a_schema_path_to_the_record_and_attest_tests() -> None:
-    assert run_select_tests("schema/records/build.schema.json\n") == [
-        "tests/test_record_schemas.py", "tests/test_attest.py",
-    ]
+    selected = run_select_tests("schema/records/build.schema.json\n")
+    assert "tests/test_record_schemas.py" in selected and "tests/test_attest.py" in selected
+    assert "tests" not in selected, "a schema path selected the whole suite"
 
 
 def test_select_tests_maps_an_unrelated_path_to_nothing() -> None:

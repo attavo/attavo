@@ -97,6 +97,8 @@ def base_env(tmp_path: Path) -> dict[str, Any]:
     spec_dir = FIXTURES / "build_valid" / "specs" / "1"
     env = dict(os.environ)
     env.pop("ATTAVO_CHECKS_COMMAND", None)
+    env.pop("ATTAVO_TEST_COMMAND", None)
+    env.pop("ATTAVO_TEST_TIMEOUT_S", None)
     # codex's own auth guard (issue #41) refuses "subscription" (the
     # default) when this is set -- absent here regardless of what the
     # ambient shell running these tests happens to carry, so the suite
@@ -248,13 +250,24 @@ def test_situation_6_transcript_non_empty_on_every_path(adapter_name: str, tmp_p
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
-def test_situation_7_checks_command_in_the_invocation(adapter_name: str, tmp_path: Path) -> None:
-    command = "python3 bin/factory-lane check --base origin/main"
-    with_checks = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_CHECKS_COMMAND": command})
-    assert command in with_checks["instruction"]
+def test_situation_7_the_one_test_command_in_the_invocation(adapter_name: str, tmp_path: Path) -> None:
+    """The executor is given one test command and no whole-tree command.
+    Naming the tenant's checks in the instruction made the executor their
+    runner however the sentence was worded (tenant zero build-10; #194's
+    590 s wait; #204 and #206, where the whole suite was run twice inside
+    one build), so the checks command is not in the instruction at all."""
+    command = "python3 /product/bin/attavo test 7"
+    checks = "python3 bin/factory-lane check --base origin/main"
+    given = dry_run(adapter_name, tmp_path, extra_env={
+        "ATTAVO_TEST_COMMAND": command, "ATTAVO_TEST_TIMEOUT_S": "240",
+        "ATTAVO_CHECKS_COMMAND": checks})
+    assert command in given["instruction"]
+    assert "240 s" in given["instruction"]
+    assert checks not in given["instruction"]
 
-    without_checks = dry_run(adapter_name, tmp_path)
-    assert command not in without_checks["instruction"]
+    without = dry_run(adapter_name, tmp_path)
+    assert command not in without["instruction"]
+    assert "attavo test" not in without["instruction"]
 
 
 @pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
