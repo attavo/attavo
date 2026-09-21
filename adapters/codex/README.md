@@ -47,6 +47,14 @@ live that this path does honor the schema.
   where `findings`/`tests_named` (verify) or `status`/`question` (build)
   come from.
 
+## The tenant's tests
+
+Like the claude-code adapter (`../claude-code/README.md`), the build
+instruction gives the executor `ATTAVO_TEST_COMMAND` when it is set, with
+its bound when `ATTAVO_TEST_TIMEOUT_S` is, and tells it not to run the whole
+test suite or any whole-tree check: the gates are run after every commit.
+It never names the tenant's checks command.
+
 ## Events (issue #138)
 
 With `ATTAVO_EVENTS` set, each `item.completed` line on the `--json`

@@ -1,0 +1,105 @@
+{
+  "sha": "54691d2aa5ff52a344aa50036f3cf39ce5627f68",
+  "build_sha": "22d65cf7f95ce91272d0453ea691699c03d69ef9",
+  "build_record": "build-01",
+  "approval_sha": "89426298f3ec6f7a726e689841a15f2a1c7e7667",
+  "at": "2026-09-21T02:00:46Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "54691d2aa5ff52a344aa50036f3cf39ce5627f68",
+    "conclusions": [
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "A deleted test file selects no tests, contrary to the approved fail-safe rule",
+      "specimen": ".attavo/bin/select-tests:94",
+      "retires": "Closes the assumption that every changed test path selects itself; the implementation silently exempts deleted test files.",
+      "rejection_test": "test_deleted_test_file_selects_itself",
+      "severity": "Blocking when an item deletes a test file: the selector returns an empty selection instead of the changed test path, so the selected-test gate can pass without detecting the deletion."
+    },
+    {
+      "title": "The retired checks command can leak into the executor environment",
+      "specimen": "attavo/build.py:349",
+      "retires": "Closes the claim that ATTAVO_CHECKS_COMMAND has left the executor contract, including when the parent process already defines it.",
+      "rejection_test": "test_build_removes_inherited_attavo_checks_command_from_executor_environment",
+      "severity": "Blocking when attavo build is launched with ATTAVO_CHECKS_COMMAND already exported: env inherits it and passes it to the adapter and underlying executor, restoring the retired command despite the new contract."
+    }
+  ],
+  "tests_named": [
+    "test_deleted_test_file_selects_itself",
+    "test_build_removes_inherited_attavo_checks_command_from_executor_environment"
+  ],
+  "commits": [],
+  "stub_ratio": 0.506993006993007,
+  "tokens": {
+    "input": 227132,
+    "output": 2778
+  },
+  "cost_usd": null,
+  "wall_clock_s": 187.209,
+  "status": "pass",
+  "stop": null,
+  "record_version": 6,
+  "item": "212",
+  "product_version": "v0.26.0-69-g7b3274b",
+  "product_pin": "v0.26.0"
+}

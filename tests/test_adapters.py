@@ -12,10 +12,11 @@ through as ATTAVO_ADAPTER_CONFIG and copied verbatim into build-NN.json as
 adapter_config. claude-code reads auth, model, setting_sources, and
 permission_mode from it; ATTAVO_MODEL is retired.
 
-Issue #30: the tenant's checks are part of done. build exports
-ATTAVO_CHECKS_COMMAND when the manifest declares [checks]; the
-instruction names it as part of done when set, and says nothing about
-checks when it is not. Retires the dead test-run-command environment
+Issue #30: the tenant's checks are part of done. Issue #212: the executor
+is not the runner of them and is not told what they are -- build exports
+ATTAVO_TEST_COMMAND, the one bounded test command, and the instruction
+gives it when set (and says nothing about tests when it is not) and says
+not to run the whole suite. Retires the dead test-run-command environment
 variable this adapter used to read (dead: bin/attavo never set it).
 
 Issue #34: the adapter keeps the evidence it is handed. The whole result
@@ -72,7 +73,7 @@ is what is genuinely Claude Code's: --bare, --setting-sources,
 --strict-mcp-config, and modelUsage parsing.
 test_claude_code_names_the_tenants_checks keeps only its
 English-specific half (the instruction must not tell the executor to
-run the check) -- the command's mere presence in the instruction is now
+run the whole suite) -- the command's mere presence in the instruction is now
 the conformance suite's situation 7.
 
 Run: python3 -m pytest tests -q
@@ -95,7 +96,8 @@ CLAUDE_CODE_RUN = ROOT / "adapters" / "claude-code" / "run"
 def base_env(tmp_path: Path) -> dict[str, Any]:
     spec_dir = FIXTURES / "build_valid" / "specs" / "1"
     env = dict(os.environ)
-    env.pop("ATTAVO_CHECKS_COMMAND", None)
+    env.pop("ATTAVO_TEST_COMMAND", None)
+    env.pop("ATTAVO_TEST_TIMEOUT_S", None)
     env.update({
         "ATTAVO_SPEC_DIR": str(spec_dir),
         "ATTAVO_RECORDS_DIR": str(tmp_path / "records"),
@@ -243,14 +245,15 @@ def test_claude_code_names_the_tenants_checks(tmp_path: Path) -> None:
     situation 7 -- general across any adapter. What stays here is the
     part that is an assertion about English and does not transfer.
     """
-    with_checks = dry_run(tmp_path, extra_env={
-        "ATTAVO_CHECKS_COMMAND": "python3 bin/factory-lane check --base origin/main"})
-    instruction = with_checks[with_checks.index("-p") + 1]
+    with_tool = dry_run(tmp_path, extra_env={
+        "ATTAVO_TEST_COMMAND": "python3 /product/bin/attavo test 7"})
+    instruction = with_tool[with_tool.index("-p") + 1]
     assert "are run for you" in instruction
     assert "before you commit" not in instruction
+    assert "Do not run the whole test suite" in instruction
 
-    without_checks = dry_run(tmp_path)
-    instruction_without = without_checks[without_checks.index("-p") + 1]
+    without_tool = dry_run(tmp_path)
+    instruction_without = without_tool[without_tool.index("-p") + 1]
     assert "are run for you" not in instruction_without
 
 

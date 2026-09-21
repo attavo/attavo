@@ -1,0 +1,66 @@
+{
+  "sha": "22d65cf7f95ce91272d0453ea691699c03d69ef9",
+  "start_sha": "5a5fd2418d3f13c4938e8a3147612c79f8855a74",
+  "spec_sha": "d723f616fa903bd37c2140cbb86651161f94c47b",
+  "approval_sha": "89426298f3ec6f7a726e689841a15f2a1c7e7667",
+  "at": "2026-09-21T01:55:50Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.278 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "build-asks-the-probe-and-not-the-whole-checks.sh",
+      "exit": 0
+    },
+    {
+      "name": "attavo-test-runs-the-selected-tests-inside-a-bound.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-selector-fails-safe-and-the-gate-drops-the-suite.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-executor-is-given-one-test-command.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "count": 10,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m pytest tests -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 2779973,
+    "output": 35877
+  },
+  "cost_usd": 1.3836894,
+  "wall_clock_s": 1134.096,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "stop": null,
+  "record_version": 7,
+  "item": "212",
+  "product_version": "v0.26.0-69-g7b3274b",
+  "product_pin": "v0.26.0"
+}

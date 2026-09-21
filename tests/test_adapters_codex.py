@@ -40,7 +40,8 @@ CODEX_RUN = ROOT / "adapters" / "codex" / "run"
 def base_env(tmp_path: Path, config: dict[str, Any] | None = None) -> dict[str, Any]:
     spec_dir = FIXTURES / "build_valid" / "specs" / "1"
     env = dict(os.environ)
-    env.pop("ATTAVO_CHECKS_COMMAND", None)
+    env.pop("ATTAVO_TEST_COMMAND", None)
+    env.pop("ATTAVO_TEST_TIMEOUT_S", None)
     env.pop("OPENAI_API_KEY", None)
     env.update({
         "ATTAVO_SPEC_DIR": str(spec_dir),

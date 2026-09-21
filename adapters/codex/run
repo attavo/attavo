@@ -269,12 +269,16 @@ def build_instruction() -> str:
         "without a decision that changes the criteria, do not guess: "
         "answer with status question")
 
-    checks_command = os.environ.get("ATTAVO_CHECKS_COMMAND")
-    if checks_command:
+    test_command = os.environ.get("ATTAVO_TEST_COMMAND")
+    if test_command:
+        bound = os.environ.get("ATTAVO_TEST_TIMEOUT_S")
         parts.append(
-            f"after you commit, the tenant's checks (`{checks_command}`) are run "
-            "for you and any failure is returned to you on the next iteration; "
-            "run only what you need while editing")
+            f"to run tests while you work, run `{test_command}`: it runs the tests "
+            "selected for the files you have changed"
+            + (f" and stops at {bound} s" if bound else "")
+            + ". Do not run the whole test suite or any whole-tree check yourself: "
+            "after you commit, the gates are run for you and any failure is "
+            "returned to you on the next iteration")
 
     return "\n\n".join(parts)
 
