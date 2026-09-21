@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
 from helpers import FIXTURES, commit_all, init_repo, make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -61,6 +62,7 @@ def test_no_stop_lacks_cause() -> None:
     assert p["holds"], p["reason"]
 
 
+@pytest.mark.own_records
 def test_no_invocation_lacks_record() -> None:
     """Proof 5, issue #151. Every <stage>-NN.started marker under
     paths.records has arrived at its own <stage>-NN.json, or is still a

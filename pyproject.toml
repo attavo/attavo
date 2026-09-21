@@ -2,3 +2,8 @@
 strict = true
 python_version = "3.11"
 files = ["attavo", "bin/attavo", "tests"]
+
+[tool.pytest.ini_options]
+markers = [
+    "own_records: reads this repository's own records directory; the only tests `test` runs when it inherits a records-only head (issue #210)",
+]
