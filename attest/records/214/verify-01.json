@@ -1,0 +1,77 @@
+{
+  "sha": "ed8b150e5c63f954b8a5d0d5c9c374ccb57e335f",
+  "build_sha": "65ddae864df683d1f2727359039100b58a92d726",
+  "build_record": "build-01",
+  "approval_sha": "d842f0c33c3b85a1e1c4399e7d7bb80a465c94bc",
+  "at": "2026-09-25T16:22:13Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "ed8b150e5c63f954b8a5d0d5c9c374ccb57e335f",
+    "conclusions": [
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "The selector does not run the returned-record regression test for changes to verify.py",
+      "specimen": ".attavo/bin/select-tests",
+      "retires": "The assumption that adding test_a_returned_review_carries_the_ratio_too makes verify.py-only builds exercise the regression",
+      "rejection_test": "test_verify_changes_select_stub_ratio_tests",
+      "severity": "Blocking when a change confined to attavo/verify.py regresses returned-record stub_ratio handling: the selected-test gate can pass without running tests/test_stub_ratio.py."
+    }
+  ],
+  "tests_named": [
+    "test_verify_changes_select_stub_ratio_tests"
+  ],
+  "commits": [],
+  "stub_ratio": 0.75,
+  "tokens": {
+    "input": 141109,
+    "output": 2280
+  },
+  "cost_usd": null,
+  "wall_clock_s": 120.26,
+  "status": "pass",
+  "stop": null,
+  "record_version": 6,
+  "item": "214",
+  "product_version": "v0.26.0-80-g629c2c4",
+  "product_pin": "v0.26.0"
+}
