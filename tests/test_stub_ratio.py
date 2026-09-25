@@ -10,8 +10,8 @@ import json
 from pathlib import Path
 
 from attavo.verify import stub_ratio
-from helpers import git, make_tenant
-from test_drive import GREEN_FORGE, add_bare_remote, add_forge, approve_item, latest_record, run_attavo
+from helpers import commit_all, git, make_tenant
+from test_drive import GREEN_FORGE, RED_FORGE, add_bare_remote, add_forge, approve_item, latest_record, run_attavo
 
 ROOT = Path(__file__).resolve().parent.parent
 EXCLUDED = ("specs", "records")
@@ -76,3 +76,23 @@ def test_verify_records_the_ratio_and_no_longer_carries_the_two_fields_nothing_c
     schema = json.loads((ROOT / "schema" / "records" / "verify.schema.json").read_text())
     assert schema["$id"].endswith("/verify/6"), schema["$id"]
     assert "weak_stub" not in schema["properties"] and "mutation" not in schema["properties"]
+
+
+def test_a_returned_review_carries_the_ratio_too(tmp_path: Path) -> None:
+    """#208's review: the forge-not-green write site recorded a constant
+    null, though the ratio depends on the diff and the stub, not the forge."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, RED_FORGE)
+    add_bare_remote(root, tmp_path)
+    git(root, "checkout", "-q", "-b", "attavo/1-x")
+    # the stub's one file says what the fixture executor will write, so the
+    # share is 1.0 and a constant 0.0 cannot pass for it
+    (root / "specs" / "1" / "stub" / "built.txt").write_text("built\n")
+    commit_all(root, "a stub that is the change")
+    approve_item(root)
+    assert run_attavo(root, "drive", "1").returncode == 0
+    run = run_attavo(root, "verify", "1")
+    assert run.returncode == 0 and "returned" in run.stdout, run.stdout + run.stderr
+    record = latest_record(root, "verify")
+    assert record["status"] == "returned", record["status"]
+    assert record["stub_ratio"] == 1.0, record["stub_ratio"]

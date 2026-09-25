@@ -176,6 +176,25 @@ def test_build_hands_the_executor_the_test_command_and_no_checks_command(tmp_pat
     assert "ATTAVO_CHECKS_COMMAND" not in seen, seen
 
 
+def test_build_removes_inherited_attavo_checks_command_from_executor_environment(tmp_path: Path) -> None:
+    """#212's review: the retired command reached the executor by inheritance
+    when whoever launched attavo build had it exported."""
+    root = tenant(tmp_path, checks='[checks]\ncommand = "true"', tests='[tests]\nselect = "cat"\nrun = "true"')
+    (root / "attavo" / "adapters" / "fixture").mkdir(parents=True)
+    probe = root / "attavo" / "adapters" / "fixture" / "run"
+    probe.write_text('#!/bin/sh\nenv | grep "^ATTAVO_" | sort > "$PWD/seen-env.txt"\n'
+                     'echo built > built.txt\ngit add built.txt\ngit commit -q -m built\n'
+                     'printf \'{"status": "done", "question": null}\\n\'\n')
+    probe.chmod(0o755)
+    (root / ".gitignore").write_text("seen-env.txt\n")
+    commit_all(root, "a tenant-side adapter that prints what it was given")
+    approve_item(root)
+    run_attavo(root, "build", "1", env={"ATTAVO_CHECKS_COMMAND": "python3 -m pytest tests"})
+    seen = (root / "seen-env.txt").read_text()
+    assert "ATTAVO_CHECKS_COMMAND" not in seen, seen
+    assert "ATTAVO_TEST_COMMAND" in seen, seen
+
+
 def select(*paths: str) -> list[str]:
     run = subprocess.run([sys.executable, str(SELECT)], input="".join(p + "\n" for p in paths),
                          capture_output=True, text=True, check=True)
@@ -195,6 +214,14 @@ def test_this_repositorys_selector_maps_a_module_to_its_own_tests_and_prose_to_n
     assert select("tests/test_ledger.py") == ["tests/test_ledger.py"]
     assert select("README.md", "attest/records/1/build-01.json", "attest/specs/9/spec.md") == []
     assert "tests/test_executor_conformance.py" in select("adapters/codex/run")
+
+
+def test_deleted_test_file_selects_the_whole_suite() -> None:
+    """#212's review: a deleted test file selected nothing, so the gate could
+    pass a deletion. A file that is gone cannot select itself; the fail-safe
+    rule the operator ruled applies instead."""
+    assert select("tests/test_this_file_was_deleted.py") == ["tests"]
+    assert select("tests/test_report.py") == ["tests/test_report.py"]
 
 
 def test_every_test_file_the_selector_names_exists_and_every_module_is_mapped_or_falls_through() -> None:

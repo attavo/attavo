@@ -7,8 +7,10 @@ on stdout, one per line, for this repository's own test suite:
 
   - prose (*.md, LICENSE) and this repository's own specs and records
     (attest/specs/**, attest/records/**) select nothing;
-  - a test file (tests/test_*.py) selects itself, and nothing at all when
-    it no longer exists;
+  - a test file (tests/test_*.py) selects itself, and the whole suite
+    when it no longer exists -- a deletion cannot select itself, and the
+    fail-safe rule below applies to it rather than exempting it (issue
+    #212's review);
   - a path in MODULE_TESTS (a module of attavo/, and the few files that
     are one thing's own) selects the tests written for it, and a prefix in
     PREFIX_TESTS (adapters/, schema/, templates/) the tests written for
@@ -92,7 +94,11 @@ def select_one(path: str) -> tuple[str, ...] | None:
     if path.startswith(WHOLE_SUITE_PREFIXES):
         return None
     if path.startswith("tests/test_") and path.endswith(".py") and "/" not in path[len("tests/"):]:
-        return (path,) if (repository_root() / path).is_file() else ()
+        # A deleted test file cannot select itself, and the gate must not
+        # pass a deletion unexamined (issue #212's review): fail safe to
+        # the whole suite rather than the () a present file's own removal
+        # would otherwise fall through to.
+        return (path,) if (repository_root() / path).is_file() else None
     if path in MODULE_TESTS:
         return MODULE_TESTS[path]
     for prefix, tests in PREFIX_TESTS:

@@ -156,8 +156,15 @@ def cmd_verify(argv: list[str]) -> int:
 
     build_sha = latest_build["sha"]
     build_record_path = latest_attempt_path(item_records_dir, "build")
+    approval_sha = latest_build.get("approval_sha")
+    spec_dir = root / specs_rel / item_id
     started = time.monotonic()
     head_sha = git(root, "rev-parse", "HEAD").strip()
+
+    diff_text, diff_refusal = diff_since_approval(root, approval_sha)
+    if diff_refusal:
+        print(f"attavo verify: refused: {diff_refusal}")
+        return 1
     # The forge attaches checks to a pull request's head, not to the
     # executor's own commit -- that commit stops being the head the
     # moment a record commit lands on top of it (issue #44). Reading the
@@ -175,7 +182,7 @@ def cmd_verify(argv: list[str]) -> int:
             "sha": head_sha,
             "build_sha": build_sha,
             "build_record": build_record_path.stem if build_record_path else None,
-            "approval_sha": latest_build.get("approval_sha"),
+            "approval_sha": approval_sha,
             "at": now_iso(),
             "adapter": None, "adapter_config": {}, "adapter_version": None,
             "model": None, "model_version": None,
@@ -184,7 +191,7 @@ def cmd_verify(argv: list[str]) -> int:
             "findings": None,
             "tests_named": [],
             "commits": [],
-            "stub_ratio": None,
+            "stub_ratio": stub_ratio(diff_text, spec_dir / "stub", (specs_rel, records_rel)),
             "tokens": {"input": 0, "output": 0}, "cost_usd": None,
             "wall_clock_s": round(time.monotonic() - started, 3),
             "status": "returned",
@@ -206,14 +213,7 @@ def cmd_verify(argv: list[str]) -> int:
 
     adapter_config = merge_adapter_config(m, adapter_name, "verify")
     reports = adapter_reports(adapter_path)
-    approval_sha = latest_build.get("approval_sha")
-    spec_dir = root / specs_rel / item_id
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
-
-    diff_text, diff_refusal = diff_since_approval(root, approval_sha)
-    if diff_refusal:
-        print(f"attavo verify: refused: {diff_refusal}")
-        return 1
 
     events_path = stage_events_dir(root) / f"verify-{next_attempt_number(item_records_dir, 'verify'):02d}.events.jsonl"
 

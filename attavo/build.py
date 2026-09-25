@@ -347,6 +347,10 @@ def cmd_build(argv: list[str]) -> int:
             iterations_used = iteration
             append_event(events_path, "iteration", f"iteration {iteration} of {BUILD_ITERATION_BUDGET}")
             env = dict(os.environ)
+            # #212 retired the checks command reaching the executor; an
+            # ATTAVO_CHECKS_COMMAND exported by whoever launched `attavo
+            # build` must not reach it by inheritance either.
+            env.pop("ATTAVO_CHECKS_COMMAND", None)
             env["ATTAVO_SPEC_DIR"] = str(spec_dir)
             env["ATTAVO_RECORDS_DIR"] = str(item_records_dir)
             env["ATTAVO_RULINGS"] = str(root / m["paths"]["rulings"])
