@@ -26,6 +26,7 @@ from test_drive import (
     add_drive_stall_bound,
     add_forge,
     approve_item,
+    drive,
     head_of,
     record_files,
     records_dir,
@@ -61,7 +62,7 @@ def test_report_names_a_red_check_and_the_head_and_writes_nothing(tmp_path: Path
     add_forge(root, RED_FORGE)
     add_bare_remote(root, tmp_path)
     approve_item(root)
-    assert run_attavo(root, "drive", "1").returncode == 0
+    assert drive(root, "1").returncode == 0
     out = report(root)
     assert (out["state"], out["kind"], out["stage"]) == ("blocked-on-checks", "waits", "verify"), out
     assert out["checks"] == [{"name": "ci", "conclusion": "failure"}], out
@@ -75,7 +76,7 @@ def test_report_never_waits_on_a_check_that_is_still_running(tmp_path: Path) -> 
     add_forge(root, UNCONCLUDED_FORGE)
     add_bare_remote(root, tmp_path)
     approve_item(root)
-    assert run_attavo(root, "drive", "1").returncode == 0
+    assert drive(root, "1").returncode == 0
     started = time.monotonic()
     out = report(root, env={"ATTAVO_DRIVE_POLL_BOUND_S": "30", "ATTAVO_DRIVE_POLL_INTERVAL_S": "5"})
     assert time.monotonic() - started < 4, "the report polled"
@@ -92,9 +93,9 @@ def test_report_walks_an_item_from_approval_to_ready(tmp_path: Path) -> None:
     assert (out["state"], out["kind"]) == ("waiting-on-approval", "yours"), out
     approve_item(root)
     assert (report(root)["state"], report(root)["kind"]) == ("next-build", "acts")
-    assert run_attavo(root, "drive", "1").returncode == 0
+    assert drive(root, "1").returncode == 0
     assert (report(root)["state"], report(root)["stage"]) == ("next-review", "verify")
-    assert run_attavo(root, "drive", "1").returncode == 0
+    assert drive(root, "1").returncode == 0
     out = report(root)
     assert (out["state"], out["kind"], out["says"]) == ("ready-to-merge", "yours", "Ready to merge"), out
 
@@ -117,7 +118,7 @@ def test_report_names_the_stopped_record_its_class_its_counsel_and_its_issue(tmp
     add_drive_stall_bound(root)
     approve_item(root)
     write_dead_marker(root, "build", 1)
-    assert run_attavo(root, "drive", "--recover", "1").returncode == 0
+    assert drive(root, "1").returncode == 0
     d = records_dir(root)
     (d / "build-01.filed").write_text("https://example.invalid/issues/9\n")
     commit_all(root, "the stop is filed")
@@ -182,8 +183,8 @@ def test_report_reads_a_review_of_an_earlier_build_as_review_next(tmp_path: Path
     add_forge(root, GREEN_FORGE)
     add_bare_remote(root, tmp_path)
     approve_item(root)
-    assert run_attavo(root, "drive", "1").returncode == 0
-    assert run_attavo(root, "drive", "1").returncode == 0
+    assert drive(root, "1").returncode == 0
+    assert drive(root, "1").returncode == 0
     assert report(root)["state"] == "ready-to-merge"
     build = json.loads(record_files(root, "build")[-1].read_text())
     build["sha"] = "f" * 40
@@ -211,7 +212,7 @@ def test_report_names_the_counsel_record_that_read_the_stop(tmp_path: Path) -> N
     add_drive_stall_bound(root)
     approve_item(root)
     write_dead_marker(root, "build", 1)
-    assert run_attavo(root, "drive", "--recover", "1").returncode == 0
+    assert drive(root, "1").returncode == 0
     (records_dir(root) / "counsel-01.json").write_text(json.dumps(
         {"record": "build-01", "record_stage": "build", "verdict": "person", "status": "done"}))
     commit_all(root, "counsel read the stop")

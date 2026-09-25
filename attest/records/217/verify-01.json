@@ -1,0 +1,117 @@
+{
+  "sha": "07b54b5d95b22ad3f2d4efd86ae455a802eb45fc",
+  "build_sha": "565520e5c5ac23696ee8cf10bb9861c7052084c2",
+  "build_record": "build-01",
+  "approval_sha": "a79a154df63cab2e827c3097df2e13b67989f501",
+  "at": "2026-09-25T18:46:20Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "07b54b5d95b22ad3f2d4efd86ae455a802eb45fc",
+    "conclusions": [
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "Lease rollback discards unrelated working-tree changes",
+      "specimen": "attavo/drive.py:481",
+      "retires": "Closes the unsafe implementation of \u201cresets its own marker commit\u201d; rollback must remove only the losing marker commit without destroying operator work.",
+      "rejection_test": "test_losing_a_marker_push_preserves_unrelated_tracked_and_untracked_working_tree_changes",
+      "severity": "Blocking when a lease push loses or is refused while the checkout contains unrelated tracked modifications: `git reset --hard HEAD^` deletes those modifications."
+    },
+    {
+      "title": "An uncommitted passing stage record can be treated as completed",
+      "specimen": "attavo/report.py:226",
+      "retires": "Closes the gap in the required worker-held-copy state: every written-but-uncommitted build or verify record must read as running, or as a refusal after its heartbeat becomes stale.",
+      "rejection_test": "test_report_reads_an_uncommitted_passing_build_or_verify_as_running_then_refused_when_its_heartbeat_stales",
+      "severity": "Blocking when the uncommitted record has status `pass`: `drive_state` advances past that stage before `_uncommitted` checks it, allowing a review to start or the item to read ready before the worker commits and pushes the record."
+    },
+    {
+      "title": "Recovery cannot construct a valid verify record",
+      "specimen": "attavo/drive.py:561",
+      "retires": "Closes recovery for dead or hung review workers, rather than only build workers.",
+      "rejection_test": "test_a_pass_recovers_a_dead_verify_invocation_with_the_current_build_binding",
+      "severity": "Blocking when `owes-recovery` names a verify invocation: the generated record leaves required non-null `build_sha` and `build_record` fields unset, so schema validation refuses the recovery instead of writing and pushing `verify-NN.json`."
+    },
+    {
+      "title": "A stage starts without a pushed lease when origin is absent",
+      "specimen": "attavo/drive.py:468",
+      "retires": "Closes the origin-less exception to the rule that only a successfully pushed marker authorizes a worker to start.",
+      "rejection_test": "test_drive_without_an_origin_refuses_and_starts_no_worker",
+      "severity": "Blocking when the checkout has no `origin`: the marker is committed locally and a worker starts even though no marker was pushed, so another checkout has no lease fact preventing the same attempt from running."
+    },
+    {
+      "title": "Pre-pass synchronization rebases local commits instead of only fast-forwarding",
+      "specimen": "attavo/drive.py:315",
+      "retires": "Closes divergence from the approved requirement that a pass fast-forward its working copy to the origin branch before reading.",
+      "rejection_test": "test_drive_refuses_or_leaves_the_checkout_unchanged_when_origin_cannot_be_fast_forwarded",
+      "severity": "Blocking when both the local branch and origin have advanced: the pass rewrites local commits with `git rebase FETCH_HEAD`, changing operator-authored commit identities before taking its lease."
+    },
+    {
+      "title": "The worker entry point does not require the lease marker it claims to execute",
+      "specimen": "attavo/drive.py:431",
+      "retires": "Closes the bypass around the marker-push lease by requiring a worker invocation to correspond to an existing committed marker for the same stage and attempt.",
+      "rejection_test": "test_worker_refuses_without_a_matching_committed_invocation_marker",
+      "severity": "Blocking when `attavo worker N <stage> NN` is invoked directly or with a mismatched attempt: it runs the stage without proving that this process owns a pushed marker, permitting duplicate or unleased execution."
+    }
+  ],
+  "tests_named": [
+    "test_losing_a_marker_push_preserves_unrelated_tracked_and_untracked_working_tree_changes",
+    "test_report_reads_an_uncommitted_passing_build_or_verify_as_running_then_refused_when_its_heartbeat_stales",
+    "test_a_pass_recovers_a_dead_verify_invocation_with_the_current_build_binding",
+    "test_drive_without_an_origin_refuses_and_starts_no_worker",
+    "test_drive_refuses_or_leaves_the_checkout_unchanged_when_origin_cannot_be_fast_forwarded",
+    "test_worker_refuses_without_a_matching_committed_invocation_marker"
+  ],
+  "commits": [],
+  "stub_ratio": 0.5462713387241689,
+  "tokens": {
+    "input": 288716,
+    "output": 3259
+  },
+  "cost_usd": null,
+  "wall_clock_s": 164.945,
+  "status": "pass",
+  "stop": null,
+  "record_version": 6,
+  "item": "217",
+  "product_version": "v0.27.0-2-g1d75ff7",
+  "product_pin": "v0.27.0"
+}

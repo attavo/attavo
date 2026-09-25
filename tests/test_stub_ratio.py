@@ -11,7 +11,7 @@ from pathlib import Path
 
 from attavo.verify import stub_ratio
 from helpers import commit_all, git, make_tenant
-from test_drive import GREEN_FORGE, RED_FORGE, add_bare_remote, add_forge, approve_item, latest_record, run_attavo
+from test_drive import GREEN_FORGE, RED_FORGE, add_bare_remote, add_forge, approve_item, drive, latest_record, run_attavo
 
 ROOT = Path(__file__).resolve().parent.parent
 EXCLUDED = ("specs", "records")
@@ -68,8 +68,8 @@ def test_verify_records_the_ratio_and_no_longer_carries_the_two_fields_nothing_c
     # the branch's work against the default branch, and drive pushes as it goes
     git(root, "checkout", "-q", "-b", "attavo/1-x")
     approve_item(root)
-    assert run_attavo(root, "drive", "1").returncode == 0
-    assert run_attavo(root, "drive", "1").returncode == 0
+    assert drive(root, "1").returncode == 0
+    assert drive(root, "1").returncode == 0
     record = latest_record(root, "verify")
     assert record["stub_ratio"] == 0.0, record["stub_ratio"]
     assert "weak_stub" not in record and "mutation" not in record, sorted(record)
@@ -90,7 +90,7 @@ def test_a_returned_review_carries_the_ratio_too(tmp_path: Path) -> None:
     (root / "specs" / "1" / "stub" / "built.txt").write_text("built\n")
     commit_all(root, "a stub that is the change")
     approve_item(root)
-    assert run_attavo(root, "drive", "1").returncode == 0
+    assert drive(root, "1").returncode == 0
     run = run_attavo(root, "verify", "1")
     assert run.returncode == 0 and "returned" in run.stdout, run.stdout + run.stderr
     record = latest_record(root, "verify")

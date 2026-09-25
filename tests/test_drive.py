@@ -1,6 +1,8 @@
 """attavo drive: the mechanical transitions between approval and
-ready-to-merge (issue #84) -- one step per invocation, and only that step,
-until a state that belongs to a person. Every test uses the fixture
+ready-to-merge (issue #84) -- under R2, one pass per invocation: read the
+report, act at most once (recover, start the build, start the review) in
+a detached worker, return. A level that belongs to a person is printed
+and left. Every test uses the fixture
 adapter and a fake `[forge].checks_command`; every record commit is
 `git commit --only` and pushed to a real (bare) fixture remote.
 
@@ -44,7 +46,8 @@ UNCONCLUDED_FORGE = "printf 'ci in_progress\\n'"
 # defaults themselves. The interval is kept well above typical subprocess
 # startup overhead so a zero-sleep stop and a polled one are easy to tell
 # apart by wall clock alone.
-FAST_POLL_ENV = {"ATTAVO_DRIVE_POLL_BOUND_S": "0.9", "ATTAVO_DRIVE_POLL_INTERVAL_S": "0.5"}
+FAST_POLL_ENV = {"ATTAVO_DRIVE_POLL_BOUND_S": "0.9", "ATTAVO_DRIVE_POLL_INTERVAL_S": "0.5",
+                 "ATTAVO_HEARTBEAT_S": "0.2"}
 
 
 def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
@@ -54,6 +57,27 @@ def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None) -> sub
         full_env.update(env)
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
                           capture_output=True, text=True, check=False, env=full_env)
+
+
+def drive(root: Path, *args: str, env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
+    """One pass, then wait for the worker it may have started (R2): the pass
+    returns as soon as the marker is pushed and the stage runs detached, so
+    a test that reads the record after "drive" waits for the report to stop
+    saying running. The pass's own output is returned, with the worker's
+    log appended, so assertions on the stage's lines still read them."""
+    run = run_attavo(root, "drive", *args, env=env)
+    import re
+    pids = [int(x) for x in re.findall(r"worker pid (\d+)", run.stdout)]
+    deadline = time.monotonic() + 90
+    while pids and time.monotonic() < deadline:
+        try:
+            os.kill(pids[-1], 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.2)
+    logs = sorted(Path(git(root, "rev-parse", "--absolute-git-dir").strip(), "attavo").glob("*.worker.log"))
+    tail = "".join(p.read_text() for p in logs)
+    return subprocess.CompletedProcess(run.args, run.returncode, run.stdout + tail, run.stderr)
 
 
 def attavo_module() -> Any:
@@ -143,25 +167,28 @@ def write_dead_marker(root: Path, stage: str, nn: int, item: str = "1") -> Path:
     return marker
 
 
-def test_drive_refuses_without_a_valid_approval(tmp_path: Path) -> None:
-    """Acceptance row 6. No approval at all: refused by name, nothing run
-    -- no spec-gate, no build, no records of any kind written."""
+
+def test_drive_pass_waits_on_an_absent_approval(tmp_path: Path) -> None:
+    """Acceptance row 6, as a level (R2): with no approval the pass says
+    the item is waiting on the operator, exits 0 because a level is not a
+    refusal, and runs nothing -- no spec-gate, no build, no records."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     add_bare_remote(root, tmp_path)
 
-    run = run_attavo(root, "drive", "1")
-    assert run.returncode != 0
-    assert "approval" in run.stdout
-    assert "absent" in run.stdout
+    run = drive(root, "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "approve the spec" in run.stdout
+    assert "worker pid" not in run.stdout
 
     assert not records_dir(root).exists() or list(records_dir(root).glob("*.json")) == []
 
 
-def test_drive_refuses_with_an_expired_approval(tmp_path: Path) -> None:
+
+def test_drive_pass_waits_on_an_expired_approval(tmp_path: Path) -> None:
     """Acceptance row 6, the other half: an approval bound to a spec sha
-    that has since moved is expired, not absent -- still refused by name,
-    nothing run."""
+    that has since moved is expired, not absent -- the pass says so, by
+    that word, exits 0, and starts nothing."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     add_bare_remote(root, tmp_path)
@@ -171,9 +198,10 @@ def test_drive_refuses_with_an_expired_approval(tmp_path: Path) -> None:
         (root / "specs" / "1" / "spec.md").read_text() + "\n")
     commit_all(root, "touch the spec after approval")
 
-    run = run_attavo(root, "drive", "1")
-    assert run.returncode != 0
+    run = drive(root, "1")
+    assert run.returncode == 0, run.stdout + run.stderr
     assert "expired" in run.stdout
+    assert "worker pid" not in run.stdout
     assert record_files(root, "build") == []
 
 
@@ -187,7 +215,7 @@ def test_drive_builds_from_an_approved_spec_with_no_build(tmp_path: Path) -> Non
     approve_item(root)
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
 
-    run = run_attavo(root, "drive", "1")
+    run = drive(root, "1")
     assert run.returncode == 0, run.stdout + run.stderr
 
     rec = latest_record(root, "build")
@@ -219,7 +247,7 @@ def test_drive_leaves_the_events_file_out_of_the_record_commit(tmp_path: Path) -
     add_bare_remote(root, tmp_path)
     approve_item(root)
 
-    run = run_attavo(root, "drive", "1")
+    run = drive(root, "1")
     assert run.returncode == 0, run.stdout + run.stderr
 
     record_path = record_files(root, "build")[-1]
@@ -248,7 +276,7 @@ def test_drive_commits_the_record_as_the_driver_not_the_tenants_own_identity(tmp
     add_bare_remote(root, tmp_path)
     approve_item(root)
 
-    run = run_attavo(root, "drive", "1")
+    run = drive(root, "1")
     assert run.returncode == 0, run.stdout + run.stderr
 
     author_name = git(root, "log", "-1", "--format=%an").strip()
@@ -272,9 +300,9 @@ def test_drive_verifies_from_a_passed_build_with_the_forge_green(tmp_path: Path)
     approve_item(root)
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
 
-    assert run_attavo(root, "drive", "1").returncode == 0  # builds
+    assert drive(root, "1").returncode == 0  # builds
 
-    run = run_attavo(root, "drive", "1")
+    run = drive(root, "1")
     assert run.returncode == 0, run.stdout + run.stderr
 
     assert record_files(root, "build") and record_files(root, "verify")
@@ -310,8 +338,8 @@ def test_drive_verifies_again_when_the_latest_verify_is_superseded_by_a_later_bu
     add_bare_remote(root, tmp_path)
     approve_item(root)
 
-    assert run_attavo(root, "drive", "1").returncode == 0  # builds
-    assert run_attavo(root, "drive", "1").returncode == 0  # verifies
+    assert drive(root, "1").returncode == 0  # builds
+    assert drive(root, "1").returncode == 0  # verifies
 
     # A second build record, minted by hand -- a real re-run of the
     # fixture adapter is not idempotent against its own tree -- naming a
@@ -321,7 +349,7 @@ def test_drive_verifies_again_when_the_latest_verify_is_superseded_by_a_later_bu
     (records_dir(root) / "build-02.json").write_text(json.dumps(build_01))
     commit_all(root, "attavo: second build record for #1, minted by hand")
 
-    run = run_attavo(root, "drive", "1")
+    run = drive(root, "1")
     assert run.returncode == 0, run.stdout + run.stderr
     assert len(record_files(root, "build")) == 2
     assert len(record_files(root, "verify")) == 2
@@ -330,41 +358,43 @@ def test_drive_verifies_again_when_the_latest_verify_is_superseded_by_a_later_bu
     assert rec["build_sha"] == build_01["sha"]
 
 
+
 def test_drive_prints_ready_to_merge_from_a_passed_verify(tmp_path: Path) -> None:
     """Acceptance row 3. From a passed verify with the forge green, one
-    run prints ready-to-merge, exits 0, writes nothing, enqueues nothing
-    -- and, per row 8, a further run repeats exactly the same thing."""
+    pass prints ready to merge, exits 0, writes nothing, enqueues nothing
+    -- and, per row 8, a further pass repeats exactly the same thing."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     add_bare_remote(root, tmp_path)
     approve_item(root)
 
-    assert run_attavo(root, "drive", "1").returncode == 0  # builds
-    assert run_attavo(root, "drive", "1").returncode == 0  # verifies
+    assert drive(root, "1").returncode == 0  # builds
+    assert drive(root, "1").returncode == 0  # verifies
 
     pre_head = head_of(root)
-    run = run_attavo(root, "drive", "1")
+    run = drive(root, "1")
     assert run.returncode == 0, run.stdout + run.stderr
-    assert "ready to merge" in run.stdout
+    assert "ready to merge" in run.stdout.lower()
     assert head_of(root) == pre_head
     assert record_files(root, "verify") and len(record_files(root, "verify")) == 1
 
     # Acceptance row 8: idempotence -- run it again, same result, nothing
     # new written or pushed.
-    run2 = run_attavo(root, "drive", "1")
+    run2 = drive(root, "1")
     assert run2.returncode == 0
-    assert "ready to merge" in run2.stdout
+    assert "ready to merge" in run2.stdout.lower()
     assert head_of(root) == pre_head
     assert len(record_files(root, "verify")) == 1
     assert len(record_files(root, "build")) == 1
 
 
+
 def test_drive_until_ready_runs_build_then_verify_to_ready_in_one_call(tmp_path: Path) -> None:
-    """Issue #100's own followups. --until-ready repeats step-and-wait in
-    the same process: one call, from an approved item with the forge
-    green, builds, verifies, and prints ready to merge -- both records
-    written and pushed, without the caller invoking drive again after
-    each passing step."""
+    """Issue #100's own followups, kept under R2: --until-ready repeats
+    the pass in one process until the level is the operator's or done.
+    One call, from an approved item with the forge green, starts the
+    build, waits it out, starts the review, waits it out, and prints
+    ready to merge -- both records written and pushed."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     bare = add_bare_remote(root, tmp_path)
@@ -373,7 +403,7 @@ def test_drive_until_ready_runs_build_then_verify_to_ready_in_one_call(tmp_path:
 
     run = run_attavo(root, "drive", "1", "--until-ready")
     assert run.returncode == 0, run.stdout + run.stderr
-    assert "ready to merge" in run.stdout
+    assert "ready to merge" in run.stdout.lower()
 
     assert len(record_files(root, "build")) == 1
     assert len(record_files(root, "verify")) == 1
@@ -381,11 +411,11 @@ def test_drive_until_ready_runs_build_then_verify_to_ready_in_one_call(tmp_path:
     assert latest_record(root, "verify")["status"] == "pass"
     assert remote_head(bare, branch) == head_of(root)
 
-    # Idempotence, same as the single-step form: a further --until-ready
+    # Idempotence, same as the single-pass form: a further --until-ready
     # call repeats exactly the same ready-to-merge result, writing nothing.
     run2 = run_attavo(root, "drive", "1", "--until-ready")
     assert run2.returncode == 0
-    assert "ready to merge" in run2.stdout
+    assert "ready to merge" in run2.stdout.lower()
     assert len(record_files(root, "build")) == 1
     assert len(record_files(root, "verify")) == 1
 
@@ -399,19 +429,21 @@ def test_drive_without_the_flag_still_takes_one_step_at_a_time(tmp_path: Path) -
     add_bare_remote(root, tmp_path)
     approve_item(root)
 
-    run = run_attavo(root, "drive", "1")
+    run = drive(root, "1")
     assert run.returncode == 0
     assert record_files(root, "build") and not record_files(root, "verify")
 
-    run2 = run_attavo(root, "drive", "1")
+    run2 = drive(root, "1")
     assert run2.returncode == 0
     assert record_files(root, "verify")
 
 
+
 def test_drive_until_ready_stops_on_a_halt(tmp_path: Path) -> None:
-    """A step that stops on its own account -- here, a halted build --
-    stops the --until-ready loop exactly where the single-step form
-    would, printing the same thing; it does not retry the halted step."""
+    """A stage that stops on its own account -- here, a halted build --
+    ends the --until-ready loop at a level that is the operator's: the
+    loop prints the stopped line the plain pass would and exits 0; it
+    does not start the next attempt on its own."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     bare = add_bare_remote(root, tmp_path)
@@ -420,8 +452,8 @@ def test_drive_until_ready_stops_on_a_halt(tmp_path: Path) -> None:
 
     run = run_attavo(root, "drive", "1", "--until-ready",
                      env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
-    assert run.returncode == 3
-    assert "which overlay wins?" in run.stdout
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "Needs you" in run.stdout and "stopped" in run.stdout
 
     assert len(record_files(root, "build")) == 1
     assert latest_record(root, "build")["status"] == "halted"
@@ -429,17 +461,19 @@ def test_drive_until_ready_stops_on_a_halt(tmp_path: Path) -> None:
     assert remote_head(bare, branch) == head_of(root)
 
 
+
 def test_drive_until_ready_stops_when_the_forge_goes_red_after_a_build(tmp_path: Path) -> None:
-    """A build that passes, then a forge that concludes red for verify's
-    own gate, stops the loop there -- one record written (the pass), no
-    verify record, no retry of the forge read."""
+    """A build that passes, then a forge that concludes red on its head,
+    stops the loop there with exit 1 -- the loop gave up short of ready
+    -- one record written (the pass), no review record, no retry of the
+    forge read."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, RED_FORGE)
     add_bare_remote(root, tmp_path)
     approve_item(root)
 
     run = run_attavo(root, "drive", "1", "--until-ready")
-    assert run.returncode != 0
+    assert run.returncode == 1, run.stdout + run.stderr
     assert "ci" in run.stdout and "failure" in run.stdout
 
     assert len(record_files(root, "build")) == 1
@@ -447,16 +481,16 @@ def test_drive_until_ready_stops_when_the_forge_goes_red_after_a_build(tmp_path:
     assert record_files(root, "verify") == []
 
 
-def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_build_line_before_verify_ends(tmp_path: Path) -> None:
-    """Issue #145. On tenant zero #652 (2026-09-16), a pipe reader of
-    `attavo drive` (attavo/screen's own row) saw all six stage lines
-    arrive as one burst when the drive ended, each minutes old --
-    Python block-buffers stdout by default when it is not a tty. A
-    tenant-local adapter that sleeps during verify reproduces the same
-    shape of gap in miniature: with `--until-ready` running build then
-    verify in one process, a pipe reader with a timeout well under the
-    sleep must already see the build line before verify's own sleep
-    ends -- unreachable if stdout is still block-buffered.
+
+def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_start_line_before_the_stage_ends(tmp_path: Path) -> None:
+    """Issue #145, kept under R2. A pipe reader of `attavo drive` saw
+    every line arrive as one burst when the process ended -- Python
+    block-buffers stdout when it is not a tty. With --until-ready the
+    process now outlives a slow stage; a pipe reader with a timeout well
+    under the stage's own sleep must already see the "started" line the
+    pass printed before that sleep ends -- unreachable if stdout is
+    still block-buffered. The worker reconfigures its own stdout the same
+    way, so its log is readable while it runs.
     """
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
@@ -471,11 +505,11 @@ def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_build_line_before_v
         "#!/bin/sh\n"
         "set -eu\n"
         'if [ "${ATTAVO_STAGE:-build}" = "verify" ]; then\n'
-        f"  sleep {sleep_s}\n"
         '  printf \'{"model":"slow","model_version":null,"adapter_version":"slow-1",'
         '"tokens":{"input":1,"output":1},"cost_usd":0.0,"findings":[],"tests_named":[]}\\n\'\n'
         "  exit 0\n"
         "fi\n"
+        f"sleep {sleep_s}\n"
         "echo built > built.txt\n"
         "git add built.txt\n"
         "git commit -q -m 'slow: write built.txt'\n"
@@ -485,7 +519,7 @@ def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_build_line_before_v
     adapter_run.chmod(0o755)
     toml = root / "attavo.toml"
     toml.write_text(toml.read_text().replace('build = "fixture"', 'build = "slow"'))
-    commit_all(root, "use a slow adapter for verify")
+    commit_all(root, "use a slow adapter for build")
 
     full_env = dict(os.environ)
     full_env.update(FAST_POLL_ENV)
@@ -509,11 +543,11 @@ def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_build_line_before_v
     except queue.Empty:
         proc.kill()
         raise
-    assert first_line is not None and "attavo build: pass" in first_line, first_line
+    assert first_line is not None and "Build started" in first_line, first_line
 
     collected = [first_line]
     while True:
-        line = lines.get(timeout=sleep_s + 10)
+        line = lines.get(timeout=sleep_s + 30)
         if line is None:
             break
         collected.append(line)
@@ -522,89 +556,102 @@ def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_build_line_before_v
 
     output = "".join(collected)
     assert proc.returncode == 0, output
-    assert "ready to merge" in output
+    assert "ready to merge" in output.lower()
 
 
-def test_drive_stops_when_the_forge_is_red(tmp_path: Path) -> None:
-    """Acceptance row 4. A forge read where the one check has already
-    concluded and failed is not polled at all -- there is nothing left to
-    wait on, so drive stops on the first read, naming the check, with no
-    sleep in between. Writes nothing -- no verify record at all, no new
-    commit."""
+
+def test_drive_pass_reads_a_red_forge_as_blocked_and_starts_nothing(tmp_path: Path) -> None:
+    """Acceptance row 4, as a level. A forge read where the one check has
+    already concluded and failed is not polled at all -- the pass reads
+    the forge once, says Blocked naming the check, exits 0, and starts
+    no review: no marker, no verify record, no new commit, no sleep."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, RED_FORGE)
     add_bare_remote(root, tmp_path)
     approve_item(root)
 
-    assert run_attavo(root, "drive", "1").returncode == 0  # builds
+    assert drive(root, "1").returncode == 0  # builds
     pre_head = head_of(root)
 
     started = time.monotonic()
-    run = run_attavo(root, "drive", "1")
+    run = drive(root, "1")
     elapsed = time.monotonic() - started
-    assert run.returncode != 0
-    assert "ci" in run.stdout and "failure" in run.stdout
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "Blocked" in run.stdout and "ci failure" in run.stdout
+    assert "worker pid" not in run.stdout
     assert elapsed < 0.4, (
-        f"a concluded, red forge check should stop on the first read with no "
-        f"poll interval slept -- took {elapsed:.2f}s")
+        f"a concluded, red forge check is read once with no poll interval slept "
+        f"-- took {elapsed:.2f}s")
 
+    assert record_files(root, "verify") == []
+    assert not (records_dir(root) / "verify-01.started").exists()
+    assert head_of(root) == pre_head
+
+    # Idempotence (row 8): a pass in the same red state says the same,
+    # still nothing written.
+    run2 = drive(root, "1")
+    assert run2.returncode == 0
+    assert "Blocked" in run2.stdout
     assert record_files(root, "verify") == []
     assert head_of(root) == pre_head
 
-    # Idempotence (row 8): running again in the same red state stops the
-    # same way, still nothing written.
-    run2 = run_attavo(root, "drive", "1")
-    assert run2.returncode != 0
-    assert record_files(root, "verify") == []
-    assert head_of(root) == pre_head
 
 
-def test_drive_polls_the_bound_while_the_forge_is_still_running(tmp_path: Path) -> None:
-    """Acceptance row 4, the unconcluded case: a check still carrying a
-    status (in_progress) rather than a conclusion is not yet red -- drive
-    keeps polling it for the full bound before giving up, unlike a
-    concluded red check, which it does not poll at all. Writes nothing."""
+def test_drive_until_ready_waits_out_the_bound_on_a_forge_still_running(tmp_path: Path) -> None:
+    """Acceptance row 4, the unconcluded case, under R2: a check still
+    carrying a status (in_progress) is not red. The pass reads it once
+    and returns at once saying Waiting on the checks; the waiting is
+    --until-ready's, which repeats the pass for the forge bound and then
+    gives up with exit 1, naming the check. Nothing is written either
+    way."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, UNCONCLUDED_FORGE)
     add_bare_remote(root, tmp_path)
     approve_item(root)
 
-    assert run_attavo(root, "drive", "1").returncode == 0  # builds
+    assert drive(root, "1").returncode == 0  # builds
 
     started = time.monotonic()
-    run = run_attavo(root, "drive", "1")
+    run = drive(root, "1")
     elapsed = time.monotonic() - started
-    assert run.returncode != 0
-    assert "ci" in run.stdout and "in_progress" in run.stdout
-    assert elapsed >= 0.4, (
-        f"a check still in_progress should be polled for the bound, not "
-        f"stopped on the first read -- took only {elapsed:.2f}s")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "Waiting on the checks" in run.stdout and "in_progress" in run.stdout
+    assert elapsed < 0.4, f"a pass reads the forge once and returns -- took {elapsed:.2f}s"
+
+    started = time.monotonic()
+    run2 = run_attavo(root, "drive", "1", "--until-ready")
+    elapsed = time.monotonic() - started
+    assert run2.returncode == 1, run2.stdout + run2.stderr
+    assert "in_progress" in run2.stdout and "did not conclude" in run2.stdout
+    assert elapsed >= 0.9, (
+        f"--until-ready should repeat the pass for the bound before giving up "
+        f"-- took only {elapsed:.2f}s")
 
     assert record_files(root, "verify") == []
 
 
-def test_drive_halts_on_a_question_and_resumes_at_build_after_a_ruling(tmp_path: Path) -> None:
-    """Acceptance row 5. The fixture adapter halts with a question: drive
-    stops naming the question and the record (and still pushes that
-    halted record, same as any other record build writes). After a
-    ruling is appended, a second run resumes at build and this time
-    passes."""
+
+def test_drive_halts_on_a_question_and_again_resumes_at_build_after_a_ruling(tmp_path: Path) -> None:
+    """Acceptance row 5, under R2. The fixture adapter halts with a
+    question: the worker writes the halted record naming it and pushes
+    it, same as any other record. After a ruling is appended, a plain
+    pass leaves the stopped stage alone (the level is the operator's
+    until rulings are records, R4); `--again` starts the next attempt,
+    which this time passes."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     bare = add_bare_remote(root, tmp_path)
     approve_item(root)
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
 
-    run = run_attavo(root, "drive", "1",
-                     env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
-    assert run.returncode == 3
-    assert "which overlay wins?" in run.stdout
+    run = drive(root, "1", env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    assert run.returncode == 0, run.stdout + run.stderr
 
     rec = latest_record(root, "build")
     assert rec["status"] == "halted"
     assert rec["halted"] == {"question": "which overlay wins?"}
     record_path = record_files(root, "build")[-1]
-    assert record_path.name in run.stdout
+    assert f"halted ({record_path.name})" in run.stdout
 
     # The halted record was still committed and pushed.
     assert remote_head(bare, branch) == head_of(root)
@@ -615,7 +662,12 @@ def test_drive_halts_on_a_question_and_resumes_at_build_after_a_ruling(tmp_path:
     commit_all(root, "rule on the overlay question")
     git(root, "push", "origin", f"HEAD:{branch}")
 
-    run2 = run_attavo(root, "drive", "1")
+    left = drive(root, "1")
+    assert left.returncode == 0, left.stdout + left.stderr
+    assert "Needs you" in left.stdout
+    assert len(record_files(root, "build")) == 1
+
+    run2 = drive(root, "1", "--again")
     assert run2.returncode == 0, run2.stdout + run2.stderr
 
     assert len(record_files(root, "build")) == 2
@@ -647,9 +699,8 @@ def test_drive_counsels_a_stop_before_filing_it_and_commits_both_records_togethe
     filed = tmp_path / "filed.jsonl"
     configure_filing(root, filed)
 
-    run = run_attavo(root, "drive", "1",
-                     env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
-    assert run.returncode == 3
+    run = drive(root, "1", env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    assert run.returncode == 0, run.stdout + run.stderr
 
     assert record_files(root, "counsel")
     counsel_rec = latest_record(root, "counsel")
@@ -683,9 +734,8 @@ def test_drive_still_files_a_stop_with_no_counsel_adapter_configured(tmp_path: P
     filed = tmp_path / "filed.jsonl"
     configure_filing(root, filed)
 
-    run = run_attavo(root, "drive", "1",
-                     env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
-    assert run.returncode == 3
+    run = drive(root, "1", env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    assert run.returncode == 0, run.stdout + run.stderr
 
     assert record_files(root, "counsel") == []
     committed = set(last_commit_paths(root))
@@ -709,11 +759,12 @@ def configure_filing(root: Path, filed_path: Path) -> None:
     commit_all(root, "configure issue filing")
 
 
+
 def test_drive_files_a_stop_it_reports_exactly_once(tmp_path: Path) -> None:
-    """Issue #89, acceptance row 5. A stop drive reports -- here, the
-    fixture adapter's halt -- calls file-stops once: one drive run files
-    exactly one issue for the attempt it just wrote, not zero and not
-    more than one."""
+    """Issue #89, acceptance row 5. A stop the worker reports -- here,
+    the fixture adapter's halt -- calls file-stops once: one attempt
+    files exactly one issue for the record it just wrote, not zero and
+    not more than one."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     add_bare_remote(root, tmp_path)
@@ -721,20 +772,18 @@ def test_drive_files_a_stop_it_reports_exactly_once(tmp_path: Path) -> None:
     filed = tmp_path / "filed.jsonl"
     configure_filing(root, filed)
 
-    run = run_attavo(root, "drive", "1",
-                     env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
-    assert run.returncode == 3
+    run = drive(root, "1", env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    assert run.returncode == 0, run.stdout + run.stderr
 
     filed_bodies = [json.loads(l) for l in filed.read_text().splitlines() if l.strip()]
     assert len(filed_bodies) == 1
     assert filed_bodies[0]["record"] == "records/1/build-01.json"
 
-    # A second drive run halts again -- a new attempt, build-02 -- and
-    # files exactly one more issue for that new record; file-stops' own
-    # .filed marker means build-01's issue is never filed twice.
-    run2 = run_attavo(root, "drive", "1",
-                      env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
-    assert run2.returncode == 3
+    # The next attempt (`--again`) halts again -- build-02 -- and files
+    # exactly one more issue for that new record; file-stops' own .filed
+    # marker means build-01's issue is never filed twice.
+    run2 = drive(root, "1", "--again", env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    assert run2.returncode == 0, run2.stdout + run2.stderr
     assert len(record_files(root, "build")) == 2
 
     filed_bodies_after = [json.loads(l) for l in filed.read_text().splitlines() if l.strip()]
@@ -758,9 +807,8 @@ def test_drive_marker_holds_the_filing_commands_stdout_and_is_committed_with_the
     filed = tmp_path / "filed.jsonl"
     configure_filing(root, filed)
 
-    run = run_attavo(root, "drive", "1",
-                     env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
-    assert run.returncode == 3
+    run = drive(root, "1", env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    assert run.returncode == 0, run.stdout + run.stderr
 
     marker_path = records_dir(root) / "build-01.filed"
     assert marker_path.is_file()
@@ -787,9 +835,8 @@ def test_drive_a_second_run_in_the_same_state_files_nothing(tmp_path: Path) -> N
     filed = tmp_path / "filed.jsonl"
     configure_filing(root, filed)
 
-    run = run_attavo(root, "drive", "1",
-                     env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
-    assert run.returncode == 3
+    run = drive(root, "1", env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    assert run.returncode == 0, run.stdout + run.stderr
     filed_after_first = filed.read_text()
     assert filed_after_first.strip() != ""
 
@@ -804,20 +851,32 @@ def test_drive_a_second_run_in_the_same_state_files_nothing(tmp_path: Path) -> N
     assert filed.read_text() == filed_after_first  # nothing new was filed
 
 
-def test_drive_retries_a_rejected_push_with_a_merge_never_a_rebase(tmp_path: Path) -> None:
-    """Acceptance row 7. A rejected push with a divergent remote is
-    retried after `git pull --no-rebase --no-edit`, never a rebase; the
-    build record's own sha is unchanged (still reachable, still what the
-    record names), and the retry lands a merge commit, not a rewritten
-    one."""
+
+def slow_build_adapter(root: Path, seconds: float) -> None:
+    """A tenant-side build adapter: the product's own fixture adapter,
+    after `seconds` of sleep on the build stage -- long enough for a test
+    to act between the pass's marker push and the worker's record push."""
+    d = root / "attavo" / "adapters" / "fixture"
+    d.mkdir(parents=True, exist_ok=True)
+    run = d / "run"
+    run.write_text(f'#!/bin/sh\nif [ "${{ATTAVO_STAGE:-build}}" = build ]; then sleep {seconds}; fi\n'
+                   f'exec sh {ROOT / "adapters" / "fixture" / "run"}\n')
+    run.chmod(0o755)
+    commit_all(root, "a slow tenant-side adapter")
+
+
+def test_drive_pass_fast_forwards_to_a_branch_that_moved_before_taking_the_lease(tmp_path: Path) -> None:
+    """R2. A commit landed on the branch from elsewhere before the pass
+    -- an approval from the screen, a ruling, another pass's record -- is
+    not a race for the lease: the pass fast-forwards to origin first, so
+    its report and its marker sit on the branch as the forge holds it,
+    and the marker push is a plain fast-forward."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     bare = add_bare_remote(root, tmp_path)
     approve_item(root)
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
 
-    # Diverge the bare remote: another clone pushes an unrelated commit to
-    # the same branch before drive's own push happens.
     other = tmp_path / "other-clone"
     subprocess.run(["git", "clone", "--quiet", str(bare), str(other)], check=True)
     subprocess.run(["git", "-C", str(other), "checkout", "-q", branch], check=True)
@@ -830,38 +889,80 @@ def test_drive_retries_a_rejected_push_with_a_merge_never_a_rebase(tmp_path: Pat
                    check=True)
     subprocess.run(["git", "-C", str(other), "push", "origin", f"HEAD:{branch}"], check=True)
 
+    run = drive(root, "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "another pass holds" not in run.stdout
+    assert "worker pid" in run.stdout
+
+    rec = latest_record(root, "build")
+    assert rec["status"] == "pass"
+    assert git(root, "log", "--merges", "--format=%H", "HEAD").split() == []
+    assert remote_head(bare, branch) == head_of(root)
+    assert "concurrent.txt" in git(root, "ls-tree", "-r", "--name-only", "HEAD")
+
+
+def test_drive_worker_retries_a_rejected_record_push_with_a_merge_never_a_rebase(tmp_path: Path) -> None:
+    """Acceptance row 7, under R2. The branch moves while the worker
+    runs -- after the pass's marker push, before the worker's record
+    push: the record push is rejected, retried after `git pull
+    --no-rebase --no-edit`, never a rebase; the build record's own sha is
+    unchanged (still reachable, still what the record names), and the
+    retry lands a merge commit, not a rewritten one."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    bare = add_bare_remote(root, tmp_path)
+    slow_build_adapter(root, 3)
+    approve_item(root)
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+
     run = run_attavo(root, "drive", "1")
     assert run.returncode == 0, run.stdout + run.stderr
+    assert "worker pid" in run.stdout
+    assert "invocation 01 started" in subprocess.run(
+        ["git", "-C", str(bare), "log", "-1", "--format=%s", branch],
+        capture_output=True, text=True).stdout
+
+    other = tmp_path / "other-clone"
+    subprocess.run(["git", "clone", "--quiet", str(bare), str(other)], check=True)
+    subprocess.run(["git", "-C", str(other), "checkout", "-q", branch], check=True)
+    subprocess.run(["git", "-C", str(other), "config", "user.email", "other@example.com"],
+                   check=True)
+    subprocess.run(["git", "-C", str(other), "config", "user.name", "Other"], check=True)
+    (other / "concurrent.txt").write_text("from elsewhere\n")
+    subprocess.run(["git", "-C", str(other), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(other), "commit", "-q", "-m", "a concurrent commit"],
+                   check=True)
+    subprocess.run(["git", "-C", str(other), "push", "origin", f"HEAD:{branch}"], check=True)
+
+    waiting = drive(root, "1")  # a pass while the worker holds the copy: reads, touches nothing
+    assert waiting.returncode == 0, waiting.stdout + waiting.stderr
+    assert "running" in waiting.stdout
+    assert "concurrent.txt" not in git(root, "ls-tree", "-r", "--name-only", "HEAD")
+
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline and not (
+            record_files(root, "build") and remote_head(bare, branch) == head_of(root)):
+        time.sleep(0.3)
 
     rec = latest_record(root, "build")
     assert rec["status"] == "pass"
     build_sha = rec["sha"]
-
-    # The build's own commit sha is still reachable -- a merge, not a
-    # rebase, which would have rewritten it under a new sha.
     assert build_sha in git(root, "rev-list", "HEAD").split()
 
-    # Issue #151: the invocation marker's own push lands first and is
-    # what meets the divergent remote, so the merge commit the retry
-    # lands may sit under the build record's commit rather than at HEAD
-    # itself -- somewhere in the reachable history is what "never a
-    # rebase" requires, not specifically the tip.
     merges = git(root, "log", "--merges", "--format=%H", "HEAD").split()
     assert merges, "the retry should have landed a merge commit"
 
     assert remote_head(bare, branch) == head_of(root)
-    # the concurrent commit from the other clone is present too
     assert "concurrent.txt" in git(root, "ls-tree", "-r", "--name-only", "HEAD")
 
 
-def test_drive_a_refused_push_ends_the_drive_with_exit_1(tmp_path: Path) -> None:
-    """Regression, run red first on main at e603f65: _drive_run_stage
-    returned a bare 1 on its four commit and push failure paths, and
-    cmd_drive's `rc, done = _drive_step(...)` raised TypeError on it, so a
-    push the remote refuses ended the drive in a traceback. A remote whose
-    pre-receive hook refuses every push is a refusal the retry merge
-    cannot cure; the drive says why, exits 1, raises nothing, and with
-    --until-ready does not step again."""
+
+def test_drive_a_refused_marker_push_ends_the_pass_with_exit_1(tmp_path: Path) -> None:
+    """A remote whose pre-receive hook refuses every push is a refusal,
+    not a lease held by another pass: the pass says why, exits 1, raises
+    nothing, starts no worker, and with --until-ready does not pass
+    again. Distinct from a non-fast-forward rejection, which is the
+    lease (test_pass)."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     bare = add_bare_remote(root, tmp_path)
@@ -874,7 +975,10 @@ def test_drive_a_refused_push_ends_the_drive_with_exit_1(tmp_path: Path) -> None
     assert run.returncode == 1, run.stdout + run.stderr
     assert "Traceback" not in run.stderr, run.stderr
     assert "could not push the build invocation marker" in run.stdout, run.stdout
+    assert "another pass holds" not in run.stdout
+    assert "worker pid" not in run.stdout
     assert record_files(root, "build") == []
+    assert not (records_dir(root) / "build-01.started").exists()
 
 
 def test_drive_commits_and_pushes_an_invocation_marker_before_the_stage_runs(tmp_path: Path) -> None:
@@ -887,7 +991,7 @@ def test_drive_commits_and_pushes_an_invocation_marker_before_the_stage_runs(tmp
     approve_item(root)
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
 
-    run = run_attavo(root, "drive", "1")
+    run = drive(root, "1")
     assert run.returncode == 0, run.stdout + run.stderr
 
     marker = records_dir(root) / "build-01.started"
@@ -906,11 +1010,13 @@ def test_drive_commits_and_pushes_an_invocation_marker_before_the_stage_runs(tmp
     assert remote_head(bare, branch) == head_of(root)
 
 
-def test_drive_recover_writes_a_died_record_for_a_dead_invocation(tmp_path: Path) -> None:
-    """Issue #151: `attavo drive --recover` retires a build-01.started
+
+def test_drive_pass_writes_a_died_record_for_a_dead_invocation(tmp_path: Path) -> None:
+    """Issue #151, under R2: the pass itself retires a build-01.started
     marker naming a dead pid with a failed record, class died,
     provenance product -- committed by the driver identity, pushed to
-    the fixture remote."""
+    the fixture remote. Recovery is the pass's one act that pass; it
+    starts nothing else."""
     root = make_tenant(tmp_path, "build_valid")
     add_drive_stall_bound(root)
     bare = add_bare_remote(root, tmp_path)
@@ -920,8 +1026,10 @@ def test_drive_recover_writes_a_died_record_for_a_dead_invocation(tmp_path: Path
     marker = write_dead_marker(root, "build", 1)
     git(root, "push", "origin", f"HEAD:{branch}")
 
-    run = run_attavo(root, "drive", "--recover", "1")
+    run = drive(root, "1")
     assert run.returncode == 0, run.stdout + run.stderr
+    assert "recovered build-01 as died" in run.stdout
+    assert "worker pid" not in run.stdout
 
     rec = latest_record(root, "build")
     assert rec["status"] == "failed"
@@ -938,34 +1046,39 @@ def test_drive_recover_writes_a_died_record_for_a_dead_invocation(tmp_path: Path
     assert marker.is_file()  # the marker itself is left in place, retired by the record
 
 
-def test_drive_recover_refuses_without_a_stall_bound(tmp_path: Path) -> None:
-    """No [drive].stall_after_s: a hung invocation cannot be told from a
-    running one, so --recover refuses rather than guessing a bound."""
+
+def test_drive_pass_recovers_a_dead_invocation_without_a_stall_bound(tmp_path: Path) -> None:
+    """R2: the stall bound decides hung, not died. With no
+    [drive].stall_after_s a dead invocation (its heartbeat stale, or no
+    heartbeat and its pid gone) is still recovered as died; what the
+    missing bound forgoes is only the hung class -- alive is running for
+    as long as it lives (test_pass covers the stale heartbeat)."""
     root = make_tenant(tmp_path, "build_valid")
     add_bare_remote(root, tmp_path)
     approve_item(root)
 
     write_dead_marker(root, "build", 1)
 
-    run = run_attavo(root, "drive", "--recover", "1")
-    assert run.returncode == 1
-    assert "stall_after_s" in run.stdout
-    assert record_files(root, "build") == []
+    run = drive(root, "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "recovered build-01 as died" in run.stdout
+    assert latest_record(root, "build")["stop"]["class"] == "died"
 
 
-def test_drive_recover_does_nothing_when_every_invocation_has_its_record(tmp_path: Path) -> None:
-    """A tenant with no dangling marker: --recover is a no-op, not a
-    refusal -- there is simply nothing to recover."""
+def test_drive_recover_flag_is_gone(tmp_path: Path) -> None:
+    """R2 retires `attavo drive --recover`: recovery is what a pass does
+    when the report owes one. The flag is refused with exit 2 and a line
+    saying so; nothing is read or written."""
     root = make_tenant(tmp_path, "build_valid")
     add_drive_stall_bound(root)
     add_forge(root, GREEN_FORGE)
     add_bare_remote(root, tmp_path)
     approve_item(root)
-    assert run_attavo(root, "drive", "1").returncode == 0
+    assert drive(root, "1").returncode == 0
 
     run = run_attavo(root, "drive", "--recover", "1")
-    assert run.returncode == 0, run.stdout + run.stderr
-    assert "nothing to recover" in run.stdout
+    assert run.returncode == 2, run.stdout + run.stderr
+    assert "--recover is gone" in run.stderr
     assert len(record_files(root, "build")) == 1
 
 
