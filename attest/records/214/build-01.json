@@ -1,0 +1,58 @@
+{
+  "sha": "65ddae864df683d1f2727359039100b58a92d726",
+  "start_sha": "d0fc9b726279a20970cf585afbe2fa3c6a44960e",
+  "spec_sha": "3b0fe8f79c589a6a9e26056885be264b07c4892e",
+  "approval_sha": "d842f0c33c3b85a1e1c4399e7d7bb80a465c94bc",
+  "at": "2026-09-25T16:18:24Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.278 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "a-returned-review-carries-the-ratio.sh",
+      "exit": 0
+    },
+    {
+      "name": "a-deleted-test-file-selects-something-and-the-tests-exist.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "count": 7,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 2549786,
+    "output": 15870
+  },
+  "cost_usd": 0.9316374000000001,
+  "wall_clock_s": 387.745,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "stop": null,
+  "record_version": 7,
+  "item": "214",
+  "product_version": "v0.26.0-80-g629c2c4",
+  "product_pin": "v0.26.0"
+}
