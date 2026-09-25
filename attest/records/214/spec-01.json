@@ -1,0 +1,24 @@
+{
+  "sha": "3b0fe8f79c589a6a9e26056885be264b07c4892e",
+  "spec_sha": "3b0fe8f79c589a6a9e26056885be264b07c4892e",
+  "at": "2026-09-25T16:10:44Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "a-returned-review-carries-the-ratio.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "a-deleted-test-file-selects-something-and-the-tests-exist.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "214",
+  "product_version": "v0.26.0",
+  "product_pin": "v0.26.0"
+}
