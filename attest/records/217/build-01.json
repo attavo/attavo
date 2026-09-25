@@ -1,0 +1,66 @@
+{
+  "sha": "565520e5c5ac23696ee8cf10bb9861c7052084c2",
+  "start_sha": "c0d3e981c1940c00a231c5c3b2b818aae6923914",
+  "spec_sha": "0af304d2983dc61c54079af5ac47531309c50459",
+  "approval_sha": "a79a154df63cab2e827c3097df2e13b67989f501",
+  "at": "2026-09-25T18:41:04Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.278 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "a-pass-returns-while-the-build-runs.sh",
+      "exit": 0
+    },
+    {
+      "name": "a-dead-invocation-is-recovered-by-a-pass.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-review-reads-the-checks-the-pass-read.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-tests-exist.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "count": 11,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 36438733,
+    "output": 144175
+  },
+  "cost_usd": 9.999278599999997,
+  "wall_clock_s": 2219.164,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "stop": null,
+  "record_version": 7,
+  "item": "217",
+  "product_version": "v0.27.0-2-g1d75ff7",
+  "product_pin": "v0.27.0"
+}
