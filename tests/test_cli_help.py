@@ -48,7 +48,7 @@ def test_help_names_the_drive_report_and_the_states_it_prints() -> None:
     run = subprocess.run([sys.executable, str(ATTAVO), "--help"],
                          capture_output=True, text=True, check=False)
     assert run.returncode == 0
-    assert "attavo drive [N] [--until-ready | --report]" in run.stdout
+    assert "attavo drive [N] [--until-ready] [--again] [--report]" in run.stdout
     assert "schema/drive-report.schema.json" in run.stdout
     assert "(yours, waits, acts, done)" in " ".join(run.stdout.split())
 

@@ -175,7 +175,17 @@ def cmd_verify(argv: list[str]) -> int:
     # not attached anything to it yet on the first read, so this polls
     # with the same bound and interval the drive's own guard uses, giving
     # those checks room to conclude before this read judges them.
-    forge_checks, forge_ok = poll_forge_checks(root, checks_command, head_sha)
+    given = os.environ.get("ATTAVO_FORGE_CHECKS")
+    if given:
+        # Reconciler ruling B: the pass read the checks on the head before
+        # its marker commit and found them green; a records-only commit
+        # cannot change them (#210's proof), so the review takes that read
+        # and does not poll a head the forge has not attached anything to.
+        forge_checks = json.loads(Path(given).read_text())
+        forge_ok = bool(forge_checks.get("conclusions")) and all(
+            c["conclusion"] in FORGE_OK_CONCLUSIONS for c in forge_checks["conclusions"])
+    else:
+        forge_checks, forge_ok = poll_forge_checks(root, checks_command, head_sha)
 
     if not forge_ok:
         record: dict[str, Any] = {

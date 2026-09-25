@@ -11,7 +11,9 @@
     attavo counsel [N]
     attavo record-only
     attavo attest [--partial] [N]
-    attavo drive [N] [--until-ready | --report]
+    attavo drive [N] [--until-ready] [--again] [--report]
+    attavo drive --all
+    attavo worker N <build|verify> NN
     attavo ledger [N] [--json]
     attavo stops [N] [--json]
     attavo test [N]
@@ -205,43 +207,70 @@ latest build -- still run over whatever records exist. merge_group and a
 push to main still demand the whole chain. See issue #69's lane for the
 full rules it enforces.
 
-drive reads an item's latest records and a forge's own check conclusions
-and performs the next mechanical step, and only that step, then stops: no
-valid approval refuses by name and runs nothing; no passing build bound to
-that approval runs build; a passing build with the forge green on the
-branch head (polled for a bound, not the manifest) runs verify; a passing
-verify with the forge still green prints that the item is ready to merge
-and stops there -- the merge is never drive's own act, and it enqueues
-nothing. A record build or verify writes that is not pass is counseled (counsel,
-issue #100) and filed (file-stops, issue #89) before it is transported,
-so its .filed marker exists in time to be committed alongside it; drive
-then commits the stage record and the counsel record together -- each
-with its own log and marker -- with `git commit --only`, never sweeping
-the index, and pushes; a push a divergent remote rejects
-is retried once after `git pull --no-rebase --no-edit`, never a rebase,
-since the record already names the commit's sha. drive writes no record
-of its own: a second run in the same state repeats the same step or the
-same stop, reading exactly what the prior run left behind -- the marker
-included, so a stop already filed is never filed again, from this
-worktree or a fresh one. See issue #84's lane for the full rules it
-enforces.
+drive (reconciler R2) is one short pass: it fast-forwards its working copy
+to origin's branch (never while a worker holds it), reads the item's
+report (attavo.report, issue #206) exactly as --report would, and acts at
+most once -- one of the three states that are the product's own move --
+before returning, almost always within seconds. owes-recovery writes the
+died or hung record for the one invocation the report named (what
+--recover used to do, by hand); next-build and next-review start their
+stage. Starting a stage is the lease: drive writes the invocation marker,
+commits it, and pushes that one commit as a plain fast-forward, no merge
+and no retry -- a rejection that is not a fast-forward, or a ref another
+push already holds, means another pass started this attempt first, and
+this one says so, resets its own marker commit, and starts nothing; a
+push the remote refuses outright is exit 1 and starts nothing either way.
+On a pushed marker drive spawns `attavo worker N <build|verify> NN` in
+its own session, its stdout and stderr appended to
+<git-dir>/attavo/<stage>-NN.worker.log, and returns -- the worker
+outlives the pass. Every other level is printed in the report's own
+words and left alone, exit 0; exit 1 is a refusal. See issue #217's lane
+(the reconciler's R2) for the full rules it enforces.
 
---until-ready (issue #100's own followups) repeats step-and-wait --
-step, the forge poll already inside a step, step again -- in the same
-process, rather than making the caller invoke drive again after every
-passing step, until the item is ready to merge or a step stops on its
-own account (a refusal, a halted or failed or refused record, or the
-forge never going green); a step that stops still prints exactly what
-the same step would print without the flag. Without --until-ready,
-drive is unchanged: one step, then stop, exactly as before.
+worker N <build|verify> NN is the stage itself, run in the detached child
+a pass just started: build or verify in-process, exactly as the pass used
+to run it inline before R2, touching
+<git-dir>/attavo/<stage>-NN.heartbeat every ATTAVO_HEARTBEAT_S seconds
+(15) while it runs -- what a report or a pass reads first to tell a
+running invocation from a died one, falling back to the pid only when
+there is no heartbeat file at all. A record the stage writes that is not
+pass is counseled (counsel, issue #100) and filed (file-stops, issue #89)
+before it is transported, so its .filed marker exists in time to be
+committed alongside it; the worker then commits the stage record and the
+counsel record together -- each with its own log and marker -- with
+`git commit --only`, never sweeping the index, and pushes, with the
+record push's own retry: a push a divergent remote rejects is retried
+once after `git pull --no-rebase --no-edit`, never a rebase, since the
+record already names the commit's sha. On a review, ATTAVO_FORGE_CHECKS
+names the file the pass already wrote the forge's own read into (the
+checks it saw on the head before its marker, reconciler ruling B); verify
+reads that file instead of polling when it is set.
 
---report (reconciler R1) prints, as JSON against schema/drive-report.schema.json,
-what item N is waiting on: its state, whose move it is (yours, waits, acts,
-done), and one sentence in the operator's words. It reads what drive reads --
-the item's records, its invocation markers, one read of the forge -- and does
-nothing else: it writes no record, starts nothing, terminates nothing, and
-does not poll, so a concluded red check reads as blocked-on-checks for as long
-as it is red. It exits 0 on every state. See issue #206's lane for the states.
+--until-ready repeats the pass in this same process, sleeping
+ATTAVO_DRIVE_POLL_INTERVAL_S between passes, until the level is the
+operator's or done (exit 0), a concluded check reads red (exit 1), or an
+unconcluded one has not concluded within ATTAVO_DRIVE_POLL_BOUND_S (exit
+1) -- a stage running in its own worker is not bounded by either
+constant, only time spent waiting on the forge is. Without the flag,
+drive is one pass, then stop.
+
+--again starts the next attempt of a stopped stage -- the operator's own
+resume, until a later reconciler ruling drives a retry itself. --recover
+is gone: `attavo drive --recover` now exits 2 saying so; recovery is
+what a pass does on its own, the moment the report owes one.
+
+--all runs one pass, in its own process, in every ../attavo-worktree-N
+beside this checkout -- each line either prints is prefixed with the
+worktree's own directory name.
+
+--report prints, as JSON against schema/drive-report.schema.json, what
+item N is waiting on: its state, whose move it is (yours, waits, acts,
+done), and one sentence in the operator's words. It reads exactly what a
+pass reads -- the item's records, its invocation markers and heartbeats,
+one read of the forge -- and does nothing else: it writes no record,
+starts nothing, terminates nothing, and does not poll, so a concluded
+red check reads as blocked-on-checks for as long as it is red. It exits
+0 on every state. See issue #206's lane for the states.
 
 ledger reads, never writes. For item N (or every item under
 paths.records when N is omitted), it walks the commits from the item's
@@ -283,7 +312,7 @@ from attavo.attest import cmd_attest
 from attavo.build import cmd_build
 from attavo.counsel import cmd_counsel
 from attavo.doctor import cmd_doctor
-from attavo.drive import cmd_drive
+from attavo.drive import cmd_drive, cmd_worker
 from attavo.filing import cmd_file_findings, cmd_file_stops
 from attavo.ledger import cmd_ledger
 from attavo.record_only import cmd_record_only
@@ -321,6 +350,8 @@ def main(argv: list[str]) -> int:
         return cmd_attest(argv[1:])
     if argv[0] == "drive":
         return cmd_drive(argv[1:])
+    if argv[0] == "worker":
+        return cmd_worker(argv[1:])
     if argv[0] == "ledger":
         return cmd_ledger(argv[1:])
     if argv[0] == "stops":
@@ -329,5 +360,5 @@ def main(argv: list[str]) -> int:
         return cmd_test(argv[1:])
     print(f"attavo: unknown subcommand {argv[0]!r}; only doctor, spec-gate, approve, "
           f"approval-status, build, verify, file-findings, file-stops, counsel, record-only, "
-          f"attest, drive, ledger, stops, test exist at this commit", file=sys.stderr)
+          f"attest, drive, worker, ledger, stops, test exist at this commit", file=sys.stderr)
     return 2

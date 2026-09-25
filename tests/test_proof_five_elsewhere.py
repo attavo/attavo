@@ -4,13 +4,24 @@ verify on the forge's own runners failed the doctor and the `test` job on
 the very commit the drive then waited on, since a marker's pid is never
 alive there. This file is red before the change: the age judgement (a
 young marker from elsewhere holds, in `in_flight`; an old one still
-fails) does not exist yet, and `_drive_step` treats a `returned` verify
-as if it had passed, so `--until-ready` writes a new marker and a new
-record every poll bound instead of stopping.
+fails) does not exist yet.
+
+Acceptance 3's own regression -- a `returned` verify record must not be
+read as a pass, or --until-ready loops writing a new marker every poll
+bound (#158's own twenty minutes) -- moved on under the reconciler's R2
+(issue #217): `_drive_step`, the synchronous single-process call this
+file used to drive directly, is retired along with the forge poll it
+carried, and a `returned` record can no longer arise from the drive path
+at all -- a pass only ever starts a review once its own single read of
+the forge (ruling B) has already found it green, and hands the worker
+that same read (ATTAVO_FORGE_CHECKS) rather than letting it poll a forge
+that could since have gone unconcluded. The live case --until-ready
+giving up on a forge that never concludes -- is
+test_drive_until_ready_waits_out_the_bound_on_a_forge_still_running in
+tests/test_drive.py now.
 
 Run: python3 -m pytest tests -q
 """
-import importlib
 import json
 import os
 import socket
@@ -27,13 +38,6 @@ ATTAVO = ROOT / "bin" / "attavo"
 
 OTHER_HOST = "elsewhere.example"
 STALL_BOUND_S = 60
-
-
-def attavo_module() -> Any:
-    """attavo.drive imported in-process and fresh each call, so a test can
-    monkeypatch a module-level function (drive_state, poll_forge_checks,
-    cmd_verify, ...) without leaking into any other test."""
-    return importlib.reload(importlib.import_module("attavo.drive"))
 
 
 def iso_ago(seconds: float) -> str:
@@ -131,83 +135,3 @@ def test_proof_five_still_holds_a_live_invocation_on_this_host_as_running(tmp_pa
     assert len(p["running_invocations"]) == 1
     assert "verify-01" in p["running_invocations"][0]
     assert p["in_flight"] == []
-
-
-# --- acceptance 3: a returned verify ends --until-ready, not another marker ---
-
-def _drive_fixture(tmp_path: Path) -> tuple[Any, Path, dict[str, Any], Path]:
-    """A real (if minimal) repository and bare remote -- everything
-    _drive_run_stage itself touches (write_invocation_marker,
-    commit_record, push_record_commit) -- with a fake verify stage
-    standing in for cmd_verify: the same contract (a "returned" record,
-    written to disk, exit code 0 -- issue #174's own point, that exit
-    code says nothing about whether the record is a pass) without any
-    adapter, forge, or approval machinery those functions do not touch.
-    drive_state and poll_forge_checks are faked too, so this exercises
-    exactly _drive_step's own done judgement -- the line this issue
-    changes -- and nothing upstream of it."""
-    module = attavo_module()
-    root = tmp_path / "fake_stage"
-    root.mkdir()
-    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
-    init_repo(root, "install")
-    bare = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "--quiet", "--bare", "-b", "main", str(bare)], check=True)
-    module.git(root, "remote", "add", "origin", str(bare))
-    module.git(root, "push", "origin", "HEAD:main")
-
-    records_dir = root / "records" / "1"
-    m = {"paths": {"records": "records"}, "forge": {"checks_command": "true"}}
-
-    def fake_cmd_verify(argv: list[str]) -> int:
-        nn = module.next_attempt_number(records_dir, "verify")
-        path = records_dir / f"verify-{nn:02d}.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({
-            "status": "returned", "sha": "0" * 40,
-            "stop": {"class": "forge-unconcluded", "provenance": "tenant", "detail": None}}))
-        return 0  # cmd_verify's own contract: exit 0 on a returned record too.
-
-    module.drive_state = lambda root_, m_, item_id: ("verify", None, records_dir)
-    module.poll_forge_checks = lambda root_, checks_command, sha: ({"conclusions": []}, True)
-    module.cmd_verify = fake_cmd_verify
-    module.cmd_counsel = lambda argv: 1
-    module.cmd_file_stops = lambda argv: 1
-    return module, root, m, records_dir
-
-
-def test_drive_step_stops_on_a_returned_verify(tmp_path: Path) -> None:
-    """Acceptance 3 (half). A single _drive_step call against a fake
-    verify stage that writes a "returned" record reports done=True --
-    before this change it read done from cmd_verify's own exit code
-    (0, since returning is not an operational error) and reported
-    done=False instead, as if the stage had just passed."""
-    module, root, m, records_dir = _drive_fixture(tmp_path)
-
-    rc, done = module._drive_step(root, m, "1")
-
-    assert done, "a returned verify must be a stop, not a pass"
-    assert len(list(records_dir.glob("verify-*.json"))) == 1
-    assert len(list(records_dir.glob("verify-*.started"))) == 1
-
-
-def test_drive_until_ready_stops_after_one_step_on_a_returned_verify(tmp_path: Path) -> None:
-    """Acceptance 3 (other half). The same fake stage, driven through
-    --until-ready's own loop shape (repeat while not done, bounded here
-    at 3 iterations so a regression fails fast instead of hanging):
-    exactly one step runs, one marker and one record are written. On
-    main at 5da8b82 this loops for all 3 iterations, writing verify-02
-    and verify-03 markers and records -- #158's own twenty minutes, in
-    miniature."""
-    module, root, m, records_dir = _drive_fixture(tmp_path)
-
-    steps = 0
-    for _ in range(3):
-        steps += 1
-        rc, done = module._drive_step(root, m, "1")
-        if done:
-            break
-
-    assert steps == 1, f"the loop took {steps} steps for one returned verify"
-    assert len(list(records_dir.glob("verify-*.started"))) == 1
-    assert len(list(records_dir.glob("verify-*.json"))) == 1

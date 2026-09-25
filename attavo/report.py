@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 from attavo.common import STAGES, ShallowCheckoutError, git
 from attavo.doctor import invocations_without_record, merge_introducing_records, stall_bound_s
-from attavo.drive import InvocationReading, drive_state, read_invocation
+from attavo.drive import InvocationReading, drive_state, read_invocation, uncommitted_record
 from attavo.records import next_attempt_number, parse_attempts
 from attavo.types import CounselRecord, DriveReport
 from attavo.verify import FORGE_OK_CONCLUSIONS, FORGE_UNCONCLUDED_STATUSES, read_forge_checks
@@ -78,7 +79,7 @@ def _stopped(r: DriveReport, records_dir: Path, stage: str, stem: str, record: d
 
 
 def _invocation(r: DriveReport, reading: InvocationReading, info: dict[str, Any],
-                bound: int) -> DriveReport:
+                bound: int | None) -> DriveReport:
     stage, nn, _log, _last_at, age, cls = reading
     r["stage"], r["attempt"], r["stop_class"] = stage, nn, None if cls == "running" else cls
     r["since"] = info.get("at") if isinstance(info.get("at"), str) else None
@@ -103,16 +104,14 @@ def _invocation(r: DriveReport, reading: InvocationReading, info: dict[str, Any]
 def _pending(root: Path, m: dict[str, Any], records_dir: Path, r: DriveReport) -> DriveReport | None:
     """The report for an invocation that began and wrote no record, or None
     when every invocation has its record. One that needs recovery reads
-    before one still running: it is the one the next move is about."""
+    before one still running: it is the one the next move is about. R2:
+    a bound is no longer required to read this at all -- read_invocation
+    reads alive from the heartbeat first, and needs a stall bound only to
+    call a live, heartbeat-less invocation hung rather than running."""
     pending = invocations_without_record(records_dir)
     if not pending:
         return None
     bound = stall_bound_s(m)
-    if bound is None:
-        r["state"], r["kind"] = "refused", "yours"
-        r["says"] = ("An invocation wrote no record, and the manifest sets no stall bound, so a "
-                     "running one cannot be told from a hung one")
-        return r
     readings = [(read_invocation(root, bound, marker, info), info) for marker, info in pending]
     reading, info = next(((rd, i) for rd, i in readings if rd.cls != "running"), readings[0])
     if reading.stage not in _WORD:
@@ -125,6 +124,42 @@ def _pending(root: Path, m: dict[str, Any], records_dir: Path, r: DriveReport) -
                      f"later one exists; read the records before recovering")
         return r
     return _invocation(r, reading, info, bound)
+
+
+def _uncommitted(root: Path, m: dict[str, Any], records_dir: Path, r: DriveReport,
+                 stage: str) -> DriveReport | None:
+    """R2: a record the working tree carries but git has no commit for yet
+    -- the moment between a worker's write and its own commit -- reads as
+    running for as long as the invocation it belongs to still touches its
+    heartbeat; one a stale heartbeat left behind is a refusal naming the
+    file, not a silent read of a record that was never actually
+    transported. None when the latest record for stage is already
+    committed (the ordinary case)."""
+    path = uncommitted_record(root, records_dir, stage)
+    if path is None:
+        return None
+    nn = int(path.stem.rsplit("-", 1)[1])
+    marker = records_dir / f"{stage}-{nn:02d}.started"
+    info: dict[str, Any] = {}
+    if marker.is_file():
+        try:
+            with marker.open() as fh:
+                loaded = json.load(fh)
+            info = loaded if isinstance(loaded, dict) else {}
+        except (OSError, ValueError):
+            info = {}
+    bound = stall_bound_s(m)
+    reading = read_invocation(root, bound, marker, info) if marker.is_file() else None
+    word = _WORD[stage]
+    if reading is not None and reading.cls == "running":
+        r["state"], r["kind"], r["stage"], r["attempt"] = "running", "waits", stage, nn
+        r["since"] = info.get("at") if isinstance(info.get("at"), str) else None
+        r["says"] = (f"{word.capitalize()} running; its {stage}-{nn:02d}.json is written but "
+                     f"not yet committed")
+        return r
+    r["state"], r["kind"] = "refused", "yours"
+    r["says"] = f"{path.name} exists but was never committed; its worker's heartbeat went stale first"
+    return r
 
 
 def _checks(r: DriveReport, forge_checks: dict[str, Any], ok: bool, ready: bool) -> DriveReport:
@@ -186,6 +221,11 @@ def drive_report(root: Path, m: dict[str, Any], item_id: str) -> DriveReport:
     pending = _pending(root, m, records_dir, r)
     if pending:
         return pending
+
+    if step in ("build", "verify"):
+        held = _uncommitted(root, m, records_dir, r, step)
+        if held:
+            return held
 
     build = _latest(records_dir, "build")
     if step == "build":
