@@ -1,0 +1,95 @@
+{
+  "sha": "bf36b3eba7d2d0730707c35bb57ff26038d68c55",
+  "build_sha": "2dd8b2fe276f2a4d6f6c60cbe9fa873002f9f158",
+  "build_record": "build-01",
+  "approval_sha": "e39232bae84c3b1015ed53eea1b798a63fed766f",
+  "at": "2026-09-26T18:35:43Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "d69c193fed2539474b04caeca55f5fb5a2279457",
+    "conclusions": [
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "A failed fresh run leaves an older passing cache entry active",
+      "specimen": "attavo/testtool.py: the code adds cache entries on exit 0 but never removes an existing entry when the same key is rerun with --fresh and fails",
+      "retires": "The assumption that caching only the newly returned exit code guarantees every failure is followed by a real rerun",
+      "rejection_test": "test_a_failed_fresh_run_invalidates_the_prior_passing_cache_entry",
+      "severity": "Blocking when a cached passing tree is rerun with --fresh, that run fails, and the unchanged tree is tested again without --fresh; the third invocation incorrectly returns the old cached pass"
+    },
+    {
+      "title": "Whole-suite mode cannot apply per-test executor exclusions",
+      "specimen": "attavo/testtool.py: all mode reduces the selection to [\"tests\"], while exclusion only removes exact identifiers present in that list",
+      "retires": "The mapped-mode exclusion test as evidence that --all has the promised same exclusion behavior",
+      "rejection_test": "test_all_mode_leaves_out_exclude_in_executor_identifiers",
+      "severity": "Blocking when ATTAVO_STAGE is set, --all is used, and exclude_in_executor contains specific test identifiers; those tests still run inside the executor"
+    },
+    {
+      "title": "Early-returning test invocations leave no event",
+      "specimen": "attavo/testtool.py: missing item/manifest configuration, incompatible --all plus names, selector failure, and change-discovery failure return before _event",
+      "retires": "The three successful mode invocations as evidence for the specification's one test event per invocation guarantee",
+      "rejection_test": "test_every_test_invocation_emits_exactly_one_event_including_usage_and_selector_errors",
+      "severity": "Blocking when ATTAVO_EVENTS is set and attavo test exits through any validation, discovery, or selector error path; the feed contains no record of the invocation"
+    }
+  ],
+  "tests_named": [
+    "test_a_failed_fresh_run_invalidates_the_prior_passing_cache_entry",
+    "test_all_mode_leaves_out_exclude_in_executor_identifiers",
+    "test_every_test_invocation_emits_exactly_one_event_including_usage_and_selector_errors"
+  ],
+  "commits": [],
+  "stub_ratio": 0.9259259259259259,
+  "tokens": {
+    "input": 192057,
+    "output": 3386
+  },
+  "cost_usd": null,
+  "wall_clock_s": 81.846,
+  "status": "pass",
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 7,
+  "item": "224",
+  "product_version": "v0.28.0-2-gf8b39f9",
+  "product_pin": "v0.28.0"
+}

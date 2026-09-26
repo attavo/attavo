@@ -276,8 +276,10 @@ def build_instruction() -> str:
             f"to run tests while you work, run `{test_command}`: it runs the tests "
             "selected for the files you have changed"
             + (f" and stops at {bound} s" if bound else "")
-            + ". Do not run the whole test suite or any whole-tree check yourself: "
-            "after you commit, the gates are run for you and any failure is "
+            + ". Run a single test with `" + test_command + " <path or test id>`. "
+            "Do not run the test runner directly, the whole test suite, or any "
+            "whole-tree check yourself: when the criteria and " + "`" + test_command + "`"
+            + " pass, commit and stop; the gates are run for you and any failure is "
             "returned to you on the next iteration")
 
     return "\n\n".join(parts)

@@ -63,6 +63,16 @@ MODULE_TESTS: dict[str, tuple[str, ...]] = {
     ".attavo/bin/select-tests": ("tests/test_self_tenancy.py", "tests/test_testtool.py"),
 }
 
+# The modules most of the others import: no table of tests-per-module can
+# know what a change to one of these breaks, so each selects the whole
+# suite, and each is named here so that a new module under attavo/ must be
+# placed -- in MODULE_TESTS or in this tuple -- before the suite accepts it
+# (tests/test_testtool.py).
+SHARED_MODULES: tuple[str, ...] = (
+    "attavo/__init__.py", "attavo/approval.py", "attavo/common.py", "attavo/events.py",
+    "attavo/records.py", "attavo/spec.py", "attavo/stops.py",
+)
+
 PREFIX_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("adapters/claude-code/", ("tests/test_adapters.py", "tests/test_adapter_claude_code.py",
                                "tests/test_executor_conformance.py")),

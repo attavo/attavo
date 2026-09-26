@@ -281,8 +281,10 @@ def build_instruction() -> str:
             f"to run tests while you work, run `{test_command}`: it runs the tests "
             "selected for the files you have changed"
             + (f" and stops at {bound} s" if bound else "")
-            + ". Do not run the whole test suite or any whole-tree check yourself: "
-            "after you commit, the gates are run for you and any failure is "
+            + ". Run a single test with `" + test_command + " <path or test id>`. "
+            "Do not run the test runner directly, the whole test suite, or any "
+            "whole-tree check yourself: when the criteria and " + "`" + test_command + "`"
+            + " pass, commit and stop; the gates are run for you and any failure is "
             "returned to you on the next iteration")
 
     return "\n\n".join(parts)
@@ -468,6 +470,15 @@ VERIFY_ALLOWED_TOOLS = ["Read", "Bash"]
 # specimen either.
 SUBAGENT_TOOLS = ["Agent", "Workflow"]
 
+# The raw test runner and the product's transport are not the executor's
+# tools: `attavo test` is the one test command (issue #212) and the pass
+# is the one transport. Permission-rule patterns, prefix-matched by the
+# tool; the product refuses its transport on its own account too
+# (ATTAVO_STAGE), so the second half here is belt beside braces.
+DENIED_COMMANDS = ["Bash(pytest:*)", "Bash(python3 -m pytest:*)", "Bash(python -m pytest:*)",
+                   "Bash(npm test:*)", "Bash(npx vitest:*)", "Bash(go test:*)", "Bash(cargo test:*)",
+                   "Bash(attavo drive:*)", "Bash(attavo worker:*)"]
+
 
 def load_config() -> dict:
     raw = os.environ.get("ATTAVO_ADAPTER_CONFIG")
@@ -559,7 +570,7 @@ def build_command(instruction: str, config: dict, schema: dict, stage: str) -> l
            "--json-schema", json.dumps(schema),
            "--permission-mode", permission_mode,
            "--allowedTools", ",".join(allowed_tools),
-           "--disallowedTools", ",".join(SUBAGENT_TOOLS)]
+           "--disallowedTools", ",".join(SUBAGENT_TOOLS + DENIED_COMMANDS)]
     model = config.get("model")
     if model:
         cmd += ["--model", model]

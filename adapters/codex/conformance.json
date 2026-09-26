@@ -10,6 +10,10 @@
     "value": 1048576,
     "reason": null
   },
+  "denied_commands": {
+    "mechanism": "none per command: codex's sandbox governs writes and network, not command names; the instruction names the one test command and the product refuses its own transport under ATTAVO_STAGE",
+    "patterns": []
+  },
   "subagent_guard": {
     "supported": false,
     "reason": "codex exec's --help, its JSONL event stream (thread.*, turn.*, item.*), and its --output-schema/--output-last-message response name no subagent or background-task concept at all (confirmed against codex-cli 0.153.4) -- codex drives sandboxed shell commands as a single agent, with no tool of its own that could spawn work outliving this invocation the way issue #88's claude-code specimen did"
