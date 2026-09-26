@@ -4,6 +4,7 @@
   "tool_binary": "codex",
   "stages": ["build", "verify", "counsel"],
   "reports": ["tokens"],
+  "streams_events": true,
   "input_limit": {
     "unit": "chars",
     "value": 1048576,
@@ -31,6 +32,16 @@
         {"type": "turn.started"},
         {"type": "error", "message": "Reconnecting... 5/5 (unexpected status 401 Unauthorized)"},
         {"type": "turn.failed", "error": {"message": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header"}}
+      ],
+      "final": null,
+      "exit_code": 1
+    },
+    "transient": {
+      "events": [
+        {"type": "thread.started", "thread_id": "conformance-transient"},
+        {"type": "turn.started"},
+        {"type": "error", "message": "unexpected status 503 Service Unavailable"},
+        {"type": "turn.failed", "error": {"message": "unexpected status 503 Service Unavailable"}}
       ],
       "final": null,
       "exit_code": 1

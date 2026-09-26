@@ -135,8 +135,12 @@ def test_verify_returns_when_the_forge_is_red(tmp_path: Path) -> None:
     assert rec["forge_checks"]["conclusions"] == [{"name": "ci", "conclusion": "failure"}]
     # no adapter was ever invoked -- no transcript log for this attempt
     assert not (root / "records" / "1" / "verify-01.log").exists()
-    # Issue #89, rejection test 3: a returned verify is forge-unconcluded/tenant.
-    assert rec["stop"] == {"class": "forge-unconcluded", "provenance": "tenant", "detail": None}
+    # R3 (ruling C amended): a concluded red required check is
+    # returned/tenant, retryable, signed by the check's own name -- the
+    # genuinely unconcluded case alone stays forge-unconcluded (issue #89,
+    # rejection test 3, unchanged for that case).
+    assert rec["stop"] == {"class": "returned", "provenance": "tenant", "detail": "ci failure",
+                           "signature": "ci", "bound": None}
 
 
 def test_verify_treats_an_empty_forge_read_as_not_green(tmp_path: Path) -> None:
@@ -327,7 +331,8 @@ def test_verify_ceiling_error_line_carries_ceiling_stop(tmp_path: Path) -> None:
 
     rec = latest_verify(root)
     assert rec["status"] == "failed"
-    assert rec["stop"] == {"class": "ceiling", "provenance": "product", "detail": None}
+    assert rec["stop"] == {"class": "ceiling", "provenance": "product", "detail": None,
+                       "signature": None, "bound": None}
     log = latest_verify_log(root)
     assert "input_too_large" in log
 

@@ -158,20 +158,26 @@ def invocation_marker_path(records_dir: Path, stage: str, nn: int) -> Path:
     return records_dir / f"{stage}-{nn:02d}{INVOCATION_MARKER_SUFFIX}"
 
 
-def write_invocation_marker(root: Path, records_dir: Path, stage: str, nn: int) -> Path:
+def write_invocation_marker(root: Path, records_dir: Path, stage: str, nn: int,
+                            again_by: bool = False) -> Path:
     """The fact that an invocation began, written before it does: at,
     host, pid, the sha it starts on, and the product that started it.
     Its record's arrival is what retires it; a marker with no record is
-    an invocation that died or hangs, and proof five names it."""
+    an invocation that died or hangs, and proof five names it. R3:
+    again_by is true only on a marker `--again` wrote to reset a stage
+    whose budget was spent (or whose last two signatures matched) --
+    absent on every ordinary marker, never a bare false."""
     import os
     import socket
     from datetime import datetime, timezone
     records_dir.mkdir(parents=True, exist_ok=True)
     path = invocation_marker_path(records_dir, stage, nn)
     sha = git(root, "rev-parse", "HEAD").strip()
-    info = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "host": socket.gethostname(), "pid": os.getpid(), "sha": sha,
-            "product_version": product_version()}
+    info: dict[str, Any] = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            "host": socket.gethostname(), "pid": os.getpid(), "sha": sha,
+                            "product_version": product_version()}
+    if again_by:
+        info["again_by"] = True
     path.write_text(json.dumps(info, indent=2) + "\n")
     return path
 
@@ -239,6 +245,37 @@ def stall_bound_s(m: dict[str, Any]) -> int | None:
     return int(bound)
 
 
+def ceiling_s(m: dict[str, Any], stage: str) -> int | None:
+    """R3: [drive.<stage>].ceiling_s, the wall clock past which a live
+    invocation of that stage is hung by its ceiling, whatever event age
+    says (or does not say, for an adapter that streams none). No
+    default: a ceiling the tenant did not declare is not assumed."""
+    value = ((m.get("drive") or {}).get(stage) or {}).get("ceiling_s")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        return None
+    return int(value)
+
+
+def attempts_budget(m: dict[str, Any]) -> int:
+    """R3: [drive].attempts, the attempts a stage may spend -- across a
+    plain retry, a returned retry, and a steered one alike -- before the
+    item is a person's; 3 when the manifest does not say."""
+    value = (m.get("drive") or {}).get("attempts")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return 3
+    return value
+
+
+def retry_after_s(m: dict[str, Any]) -> int:
+    """R3: [drive].retry_after_s, the wait a transient stop's record sits
+    through before its next attempt starts; 300 when the manifest does
+    not say."""
+    value = (m.get("drive") or {}).get("retry_after_s")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        return 300
+    return int(value)
+
+
 def proof_no_invocation_lacks_record(root: Path, m: dict[str, Any] | None) -> Proof:
     import socket
     p = Proof("no-invocation-lacks-record", "no invocation lacks its record")
@@ -252,6 +289,19 @@ def proof_no_invocation_lacks_record(root: Path, m: dict[str, Any] | None) -> Pr
     if bound is None:
         return p.fail("no [drive].stall_after_s in the manifest; a hung invocation cannot be "
                       "told from a running one")
+    # R3: a stage with no ceiling can run forever unjudged even when
+    # stall_after_s is set (an adapter that streams no events trips no
+    # stall bound at all) -- refused the same way stall_after_s's own
+    # absence is, not folded into it, so the reason names exactly which
+    # keys the manifest is missing.
+    missing_ceilings = [f"[drive.{stage}].ceiling_s" for stage in ("build", "verify")
+                        if ceiling_s(m, stage) is None]
+    if missing_ceilings:
+        return p.fail(f"no {' or '.join(missing_ceilings)} in the manifest; a stage with no "
+                      f"ceiling can run forever unjudged (R3)")
+    if (m.get("drive") or {}).get("attempts") is None:
+        return p.fail("no [drive].attempts in the manifest; a retryable stop would spend an "
+                      "unbounded number of attempts (R3)")
     this_host = socket.gethostname()
     recorded = 0
     running: list[str] = []

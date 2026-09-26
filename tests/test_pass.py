@@ -208,7 +208,11 @@ def test_until_ready_is_a_loop_of_passes_that_returns_at_ready(tmp_path: Path) -
     assert report(root)["state"] == "ready-to-merge"
 
 
-def test_a_stopped_stage_is_left_alone_by_a_pass_and_started_again_by_again(tmp_path: Path) -> None:
+def test_a_died_stage_retries_plainly_and_again_is_a_no_op_inside_the_budget(tmp_path: Path) -> None:
+    """R3: died is one of the four plain retryable families -- the very
+    next pass retries it on its own, with no operator and no --again
+    needed; `--again` inside the budget is a no-op that says so, rather
+    than starting a second attempt of its own."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     add_drive_stall_bound(root)
@@ -216,13 +220,14 @@ def test_a_stopped_stage_is_left_alone_by_a_pass_and_started_again_by_again(tmp_
     write_dead_marker(root, "build", 1)
     assert run_attavo(root, "drive", "1", env=FAST).returncode == 0
     assert latest_record(root, "build")["stop"]["class"] == "died"
-    plain = run_attavo(root, "drive", "1", env=FAST)
-    assert plain.returncode == 0 and "Needs you" in plain.stdout, plain.stdout
-    assert not (records_dir(root) / "build-02.started").exists()
     again = run_attavo(root, "drive", "1", "--again", env=FAST)
-    assert "Build started" in again.stdout, again.stdout + again.stderr
+    assert again.returncode == 0 and "retries on its own" in again.stdout, again.stdout
+    assert not (records_dir(root) / "build-02.started").exists()
+    plain = run_attavo(root, "drive", "1", env=FAST)
+    assert "Build started" in plain.stdout, plain.stdout + plain.stderr
     assert (records_dir(root) / "build-02.started").exists()
     wait_for(lambda: len(record_files(root, "build")) == 2)
+    assert latest_record(root, "build")["retry_of"] == "build-01"
 
 
 def test_all_runs_one_pass_in_every_working_copy_beside_the_checkout(tmp_path: Path) -> None:

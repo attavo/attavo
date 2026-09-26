@@ -462,23 +462,53 @@ def test_drive_until_ready_stops_on_a_halt(tmp_path: Path) -> None:
 
 
 
-def test_drive_until_ready_stops_when_the_forge_goes_red_after_a_build(tmp_path: Path) -> None:
-    """A build that passes, then a forge that concludes red on its head,
-    stops the loop there with exit 1 -- the loop gave up short of ready
-    -- one record written (the pass), no review record, no retry of the
-    forge read."""
+def retry_friendly_adapter(root: Path) -> None:
+    """R3: a build the fixture adapter already passed once carries
+    built.txt already; a plain retry of that same build must still have
+    something to commit, so this tenant-side wrapper rewrites built.txt
+    with a fresh timestamp before delegating to the product's own
+    fixture adapter."""
+    d = root / "attavo" / "adapters" / "fixture"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "run").write_text(
+        "#!/bin/sh\n"
+        'if [ "${ATTAVO_STAGE:-build}" = build ] && [ -f built.txt ]; then\n'
+        '  echo "built again $(date +%s%N)" > built.txt\n'
+        "  git add built.txt\n"
+        "  git commit -q -m 'fixture: write built.txt again'\n"
+        f'  echo \'{{"status":"done","question":null,"model":"fixture","model_version":null,'
+        '"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0}\'\n'
+        "  exit 0\n"
+        "fi\n"
+        f"exec sh {ROOT / 'adapters' / 'fixture' / 'run'}\n")
+    (d / "run").chmod(0o755)
+    commit_all(root, "a retry-friendly tenant adapter")
+
+
+def test_drive_until_ready_stops_after_two_matching_returned_reviews(tmp_path: Path) -> None:
+    """R3 (ruling C amended): a build that passes, then a forge that
+    concludes red on its head every time, is no longer a dead end the
+    loop gives up on -- the pass converts it into a returned record and
+    retries the build on its own, inside the budget. Two returned
+    reviews with the identical signature then stop the stage: the loop
+    reads that as done (a person's to look at, not a forge it never
+    finished reading), and exits 0."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, RED_FORGE)
+    retry_friendly_adapter(root)
     add_bare_remote(root, tmp_path)
     approve_item(root)
 
     run = run_attavo(root, "drive", "1", "--until-ready")
-    assert run.returncode == 1, run.stdout + run.stderr
-    assert "ci" in run.stdout and "failure" in run.stdout
+    assert run.returncode == 0, run.stdout + run.stderr
 
-    assert len(record_files(root, "build")) == 1
-    assert latest_record(root, "build")["status"] == "pass"
-    assert record_files(root, "verify") == []
+    assert len(record_files(root, "build")) == 2
+    assert [r["status"] for r in (latest_record(root, "build"),)] == ["pass"]
+    assert len(record_files(root, "verify")) == 2
+    for rec in (json.loads(p.read_text()) for p in record_files(root, "verify")):
+        assert rec["status"] == "returned" and rec["stop"]["class"] == "returned"
+    out = json.loads(run_attavo(root, "drive", "1", "--report").stdout)
+    assert out["state"] == "stopped" and out["signatures_match"] is True, out
 
 
 
@@ -560,40 +590,36 @@ def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_start_line_before_t
 
 
 
-def test_drive_pass_reads_a_red_forge_as_blocked_and_starts_nothing(tmp_path: Path) -> None:
-    """Acceptance row 4, as a level. A forge read where the one check has
-    already concluded and failed is not polled at all -- the pass reads
-    the forge once, says Blocked naming the check, exits 0, and starts
-    no review: no marker, no verify record, no new commit, no sleep."""
+def test_drive_pass_turns_a_red_forge_on_a_passed_build_into_a_returned_record(tmp_path: Path) -> None:
+    """R3 (ruling C amended, #206's own build-01): a forge read where the
+    one required check has already concluded and failed is a record now,
+    not a level with nothing behind it -- the pass starts the review,
+    which writes verify-01 status returned, class returned, naming the
+    check in its signature. Inside the budget, the very next pass
+    retries the build on its own -- no operator act, no counsel run."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, RED_FORGE)
+    retry_friendly_adapter(root)
     add_bare_remote(root, tmp_path)
     approve_item(root)
 
     assert drive(root, "1").returncode == 0  # builds
     pre_head = head_of(root)
 
-    started = time.monotonic()
     run = drive(root, "1")
-    elapsed = time.monotonic() - started
     assert run.returncode == 0, run.stdout + run.stderr
-    assert "Blocked" in run.stdout and "ci failure" in run.stdout
-    assert "worker pid" not in run.stdout
-    assert elapsed < 0.4, (
-        f"a concluded, red forge check is read once with no poll interval slept "
-        f"-- took {elapsed:.2f}s")
+    assert head_of(root) != pre_head
 
-    assert record_files(root, "verify") == []
-    assert not (records_dir(root) / "verify-01.started").exists()
-    assert head_of(root) == pre_head
+    assert len(record_files(root, "verify")) == 1
+    review = latest_record(root, "verify")
+    assert review["status"] == "returned", review
+    assert review["stop"]["class"] == "returned" and "ci" in review["stop"]["signature"], review["stop"]
 
-    # Idempotence (row 8): a pass in the same red state says the same,
-    # still nothing written.
     run2 = drive(root, "1")
-    assert run2.returncode == 0
-    assert "Blocked" in run2.stdout
-    assert record_files(root, "verify") == []
-    assert head_of(root) == pre_head
+    assert run2.returncode == 0, run2.stdout + run2.stderr
+    assert len(record_files(root, "build")) == 2
+    assert latest_record(root, "build")["retry_of"] == "build-01"
+    assert record_files(root, "counsel") == []
 
 
 

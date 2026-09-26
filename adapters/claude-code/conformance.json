@@ -4,6 +4,7 @@
   "tool_binary": "claude",
   "stages": ["build", "verify", "counsel"],
   "reports": ["tokens", "cost_usd"],
+  "streams_events": true,
   "input_limit": {
     "unit": null,
     "value": null,
@@ -24,6 +25,13 @@
       "modelUsage": {"claude-sonnet-5": {"inputTokens": 5, "outputTokens": 9}}
     },
     "is_error": {
+      "is_error": true,
+      "result": "API error: overloaded",
+      "structured_output": {"status": "done", "question": null},
+      "usage": {"input_tokens": 1, "output_tokens": 1},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}}
+    },
+    "transient": {
       "is_error": true,
       "result": "API error: overloaded",
       "structured_output": {"status": "done", "question": null},

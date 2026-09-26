@@ -17,8 +17,11 @@ from attavo.common import MANIFEST, PRODUCT_ROOT, derive_item_id, git, read_mani
 from attavo.counsel import cmd_counsel
 from attavo.doctor import (
     _parse_json_line,
+    attempts_budget,
+    ceiling_s,
     invocation_alive,
     invocations_without_record,
+    retry_after_s,
     stall_bound_s,
     write_invocation_marker,
 )
@@ -28,9 +31,11 @@ from attavo.records import (
     latest_attempt_path,
     latest_record,
     next_attempt_number,
+    parse_attempts,
     stage_schema,
     write_record,
 )
+from attavo.stops import RETRYABLE_CLASSES, counsel_record_for, signature_of
 from attavo.verify import cmd_verify, read_forge_checks
 
 if TYPE_CHECKING:
@@ -257,6 +262,31 @@ class InvocationReading(NamedTuple):
     last_at: str | None
     age: float | None
     cls: str  # "running" | "hung" | "died"
+    bound: str | None = None  # R3: "stall" or "ceiling" when cls is "hung"
+
+
+def _manifest_of(root: Path) -> dict[str, Any]:
+    m = read_manifest(root)
+    return m if m is not None else {}
+
+
+def _streams_events(root: Path, m: dict[str, Any], stage: str) -> bool:
+    """R3: whether stage's adapter declares it streams events at all
+    (adapters/<name>/conformance.json, "streams_events") -- one that does
+    not is judged by its ceiling alone, and never called hung by event
+    age it never produces. True (the ordinary case) when the adapter
+    declares nothing, or none is configured to ask."""
+    name = (m.get("executor") or {}).get(stage) or (m.get("executor") or {}).get("build")
+    if not name:
+        return True
+    for base in (root / "attavo" / "adapters", PRODUCT_ROOT / "adapters"):
+        conf = base / name / "conformance.json"
+        if conf.is_file():
+            try:
+                return bool(json.loads(conf.read_text()).get("streams_events", True))
+            except (OSError, ValueError):
+                return True
+    return True
 
 
 def read_invocation(root: Path, bound: int | None, marker: Path, info: dict[str, Any]) -> InvocationReading:
@@ -270,10 +300,24 @@ def read_invocation(root: Path, bound: int | None, marker: Path, info: dict[str,
     first beat -- does this fall back to the pid: alive and, with a
     stall bound declared, past it is hung; alive with no bound, or
     within it, is running for as long as it lives; not alive is died.
-    The stall bound decides hung, never died."""
+    The stall bound decides hung, never died.
+
+    R3: the stage's own ceiling (wall clock from the marker's own `at`)
+    is judged first, before any of that -- alive past it is hung by the
+    ceiling whatever event age says, and an adapter that declares it
+    streams no events is judged by the ceiling alone: bound is read as
+    None for it, so the stall check below never fires on an event age it
+    never had."""
     stage, nn_text = marker.stem.rsplit("-", 1)
     nn = int(nn_text)
     log, last_at = _events_tail(_events_path_for(root, stage, nn))
+    m = _manifest_of(root)
+    ceiling = ceiling_s(m, stage)
+    since_start = _seconds_since(info.get("at"))
+    if ceiling is not None and since_start is not None and since_start > ceiling:
+        return InvocationReading(stage, nn, log, last_at, since_start, "hung", "ceiling")
+    if not _streams_events(root, m, stage):
+        bound = None
     beat = heartbeat_path(root, stage, nn)
     if beat.is_file():
         try:
@@ -287,7 +331,7 @@ def read_invocation(root: Path, bound: int | None, marker: Path, info: dict[str,
         return InvocationReading(stage, nn, log, last_at, age, "died")
     if bound is None or age is None or age <= bound:
         return InvocationReading(stage, nn, log, last_at, age, "running")
-    return InvocationReading(stage, nn, log, last_at, age, "hung")
+    return InvocationReading(stage, nn, log, last_at, age, "hung", "stall")
 
 
 def uncommitted_record(root: Path, records_dir: Path, stage: str) -> Path | None:
@@ -403,16 +447,27 @@ def _stage_body(item_id: str, stage: str, nn: int) -> int:
     status_out = record.get("status")
     to_commit = [after]
     if status_out != "pass":
-        counsel_before = latest_attempt_path(records_dir, "counsel")
-        cmd_counsel([item_id])
-        counsel_after = latest_attempt_path(records_dir, "counsel")
-        if counsel_after is not None and counsel_after != counsel_before:
-            to_commit.append(counsel_after)
-        # file-stops is its own idempotent read of the item's records, so
-        # calling it here on every run that wrote a non-pass record is
-        # safe to call again on a later run: an already-filed stop's own
-        # marker is what stops it from being filed twice.
-        cmd_file_stops([item_id])
+        stop = record.get("stop") or {}
+        state = retry_state(root, m, records_dir, stage, stop.get("class"),
+                            int(after.stem.rsplit("-", 1)[1]))
+        # R3: a stop the next plain pass would already retry -- now, or
+        # once its transient wait elapses -- asks counsel nothing and
+        # files nothing (#194's own verify-01, replayed as this item's
+        # rejection fixture, paid for exactly this on a vendor's own
+        # capacity error). Counsel reads it, as before, the moment that
+        # is no longer true: the budget is spent, the early stop fired,
+        # or the class was never a plain retry's to begin with.
+        if not (state.eligible or state.waiting_s is not None):
+            counsel_before = latest_attempt_path(records_dir, "counsel")
+            cmd_counsel([item_id])
+            counsel_after = latest_attempt_path(records_dir, "counsel")
+            if counsel_after is not None and counsel_after != counsel_before:
+                to_commit.append(counsel_after)
+            # file-stops is its own idempotent read of the item's records,
+            # so calling it here on every run that wrote a non-pass record
+            # is safe to call again on a later run: an already-filed
+            # stop's own marker is what stops it from being filed twice.
+            cmd_file_stops([item_id])
 
     message = f"attavo: {stage} record for item {item_id} ({after.stem})"
     try:
@@ -468,7 +523,7 @@ def cmd_worker(argv: list[str]) -> int:
 # exactly the one invocation the report names owed one. ---
 
 def _start_stage(root: Path, m: dict[str, Any], item_id: str, stage: str,
-                 forge_checks: dict[str, Any] | None) -> int:
+                 forge_checks: dict[str, Any] | None, again_by: bool = False) -> int:
     """The lease (ruling A): the marker, committed and pushed as a plain
     fast-forward with no merge and no retry (push_lease). Lost to another
     pass, or refused outright by the remote, both undo the marker commit
@@ -478,11 +533,14 @@ def _start_stage(root: Path, m: dict[str, Any], item_id: str, stage: str,
     the pre-marker head (ruling B) -- written to
     <git-dir>/attavo/verify-NN.forge-checks.json and named in
     ATTAVO_FORGE_CHECKS, so the worker's own `attavo verify` reads it
-    instead of polling."""
+    instead of polling. again_by (R3) is true only when `--again` is what
+    started this attempt, past a budget already spent or an early stop
+    -- named in the marker, never on an ordinary or plainly-retried
+    attempt."""
     records_dir = root / m["paths"]["records"] / item_id
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
     nn = next_attempt_number(records_dir, stage)
-    marker = write_invocation_marker(root, records_dir, stage, nn)
+    marker = write_invocation_marker(root, records_dir, stage, nn, again_by=again_by)
     try:
         commit_record(root, [marker], f"attavo: {stage} invocation {nn:02d} started for item {item_id}")
     except RuntimeError as exc:
@@ -536,7 +594,7 @@ def _recover_one(root: Path, m: dict[str, Any], item_id: str, records_dir: Path)
         # finished on its own).
         return 0
     marker, info, reading = candidate
-    stage, nn, log, last_at, age, cls = reading
+    stage, nn, log, last_at, age, cls, crossed = reading
     pid, host = info.get("pid"), info.get("host")
 
     if next_attempt_number(records_dir, stage) != nn:
@@ -551,11 +609,17 @@ def _recover_one(root: Path, m: dict[str, Any], item_id: str, records_dir: Path)
             ended = "terminated"
         except OSError as exc:
             ended = f"not terminated ({exc})"
-        detail = (f"pid {pid} on {host} alive with no event for {int(cast(float, age))} s "
-                  f"(bound {bound} s); {ended}")
+        if crossed == "ceiling":
+            detail = (f"pid {pid} on {host} alive {int(cast(float, age))} s after its marker, "
+                      f"past the {stage} ceiling of {ceiling_s(m, stage)} s; {ended}")
+        else:
+            detail = (f"pid {pid} on {host} alive with no event for {int(cast(float, age))} s "
+                      f"(bound {bound} s); {ended}")
     else:
         detail = (f"pid {pid} on {host} is not running and wrote no {marker.stem}.json; "
                   f"started {info.get('at')}, last event {last_at or 'none'}")
+
+    signature_text = log.strip().splitlines()[-1] if log.strip() else detail
 
     schema = stage_schema(stage)
     record: dict[str, Any] = {k: None for k in schema.get("required", [])}
@@ -565,7 +629,9 @@ def _recover_one(root: Path, m: dict[str, Any], item_id: str, records_dir: Path)
                    "at": info.get("at"),
                    "adapter": (m.get("executor") or {}).get(stage),
                    "status": "failed", "refusal": None, "halted": None,
-                   "stop": {"class": cls, "provenance": "product", "detail": detail}})
+                   "retry_of": None, "steer": None,
+                   "stop": {"class": cls, "provenance": "product", "detail": detail,
+                            "signature": signature_of(signature_text), "bound": crossed}})
     if "wall_clock_s" in record:
         record["wall_clock_s"] = None if age is None else int(age)
     record = {k: v for k, v in record.items() if k in schema.get("properties", {})}
@@ -591,14 +657,16 @@ def _recover_one(root: Path, m: dict[str, Any], item_id: str, records_dir: Path)
     return 0
 
 
-def _advance_again(root: Path, m: dict[str, Any], item_id: str, stage: str, head: str | None) -> int:
-    """`--again`'s own act on a stopped stage: exactly what next-build or
-    next-review would do, bypassing the level a plain pass leaves alone
-    for the operator. A review reads the forge fresh here -- once, since
-    the report's own stopped reading never touched it -- rather than
-    reusing a read that was never taken."""
+def _advance_again(root: Path, m: dict[str, Any], item_id: str, stage: str, head: str | None,
+                   again_by: bool = False) -> int:
+    """The next attempt of a stopped stage, bypassing the level a plain
+    pass leaves alone for the operator: what a plain retry (R3, inside
+    the budget) starts on its own, and what `--again` starts by force
+    once the budget is spent or an early stop fired. A review reads the
+    forge fresh here -- once, since the report's own stopped reading
+    never touched it -- rather than reusing a read that was never taken."""
     if stage == "build":
-        return _start_stage(root, m, item_id, "build", None)
+        return _start_stage(root, m, item_id, "build", None, again_by=again_by)
     checks_command = (m.get("forge") or {}).get("checks_command")
     if not checks_command:
         print("attavo drive: refused: no [forge].checks_command in the manifest")
@@ -609,32 +677,132 @@ def _advance_again(root: Path, m: dict[str, Any], item_id: str, stage: str, head
         named = ", ".join(f"{c['name']} {c['conclusion']}" for c in conclusions) or "no checks reported"
         print(f"attavo drive: forge checks not green on {cast(str, head)[:12]}: {named}")
         return 0
-    return _start_stage(root, m, item_id, "verify", forge_checks)
+    return _start_stage(root, m, item_id, "verify", forge_checks, again_by=again_by)
+
+
+# --- R3: the retry decision, shared by the report's own kind/says and the
+# pass's own act (retry_state) so the two cannot drift. ---
+
+# Never retried by this item, whatever counsel might rule: a
+# claims-boundary stop is a person's; a tenant's gate refusal is the
+# spec-gate's own, earlier than any of this; an environment refusal is
+# recorded here and acted on by R4's breaker. A question is not in this
+# tuple -- counsel reads it exactly like any other non-pass record, and
+# an "answer" verdict starts the next attempt steered by it, the same as
+# any class counsel can rule on; a question nobody answers (no counsel
+# configured, or its own verdict is "person") simply never becomes
+# eligible, with no exclusion needed to keep it that way.
+NEVER_RETRIED_CLASSES = ("claims-boundary", "gate", "environment")
+
+
+def _budget_stage(stage: str, stop_class: str | None) -> str:
+    """The stage whose [drive].attempts budget a stop spends -- build for
+    a returned review (the check rejection or the blocking finding is the
+    build's to answer, never the review's own to repeat), the stop's own
+    stage for everything else."""
+    return "build" if stop_class == "returned" else stage
+
+
+def _signatures_match(records_dir: Path, stage: str) -> bool:
+    """Whether the last two attempts of stage carry the identical,
+    non-null signature -- the early stop (R3): two attempts of one stage
+    ending the same way spend no third."""
+    attempts = parse_attempts(records_dir, stage)
+    if len(attempts) < 2:
+        return False
+    nums = sorted(attempts)
+    sig_a = (attempts[nums[-1]].get("stop") or {}).get("signature")
+    sig_b = (attempts[nums[-2]].get("stop") or {}).get("signature")
+    return sig_a is not None and sig_a == sig_b
+
+
+class RetryState(NamedTuple):
+    """Whether a plain pass, right now, would start the next attempt of a
+    stopped stage (R3) -- eligible; a transient stop still short of
+    [drive].retry_after_s carries waiting_s instead, eligible for neither
+    a plain pass nor `--again`'s own no-op read of the same fact; steer
+    names the counsel record an "answer" verdict would hand the next
+    attempt; target_stage is the stage the next attempt actually starts
+    (build, for a returned review)."""
+    eligible: bool
+    waiting_s: float | None
+    steer: str | None
+    target_stage: str
+
+
+def retry_state(root: Path, m: dict[str, Any], records_dir: Path, stage: str,
+                stop_class: str | None, attempt: int | None) -> RetryState:
+    """The one read behind both the report's own kind/says (a stopped
+    stage that would retry reads as "acts" or "waits", never "yours") and
+    the pass's own act, so the two cannot say different things about the
+    same stop. died, hung, transient, and returned retry with no counsel
+    asked, inside the shared budget and past the early stop; every other
+    class retries only when counsel's own verdict for this exact stop is
+    "answer" -- and never when the class is one of NEVER_RETRIED_CLASSES,
+    whatever counsel might have said."""
+    target_stage = _budget_stage(stage, stop_class)
+    if stop_class is None or stop_class in NEVER_RETRIED_CLASSES or attempt is None:
+        return RetryState(False, None, None, target_stage)
+    spent = next_attempt_number(records_dir, target_stage) - 1
+    if spent >= attempts_budget(m):
+        return RetryState(False, None, None, target_stage)
+    if _signatures_match(records_dir, stage):
+        return RetryState(False, None, None, target_stage)
+    if stop_class in RETRYABLE_CLASSES:
+        if stop_class == "transient":
+            attempts = parse_attempts(records_dir, stage)
+            rec = attempts.get(attempt)
+            age = _seconds_since(rec.get("at")) if rec else None
+            wait = retry_after_s(m)
+            if age is not None and age < wait:
+                return RetryState(False, wait - age, None, target_stage)
+        return RetryState(True, None, None, target_stage)
+    counsel = counsel_record_for(records_dir, stage, attempt)
+    if counsel is not None and counsel.get("verdict") == "answer":
+        target = f"{stage}-{attempt:02d}"
+        counsel_attempts = parse_attempts(records_dir, "counsel")
+        matches = [n for n, rec in counsel_attempts.items() if rec.get("record") == target]
+        if matches:
+            return RetryState(True, None, f"counsel-{max(matches):02d}", target_stage)
+    return RetryState(False, None, None, target_stage)
 
 
 def _pass_once(root: Path, m: dict[str, Any], item_id: str, again: bool) -> tuple[int, "DriveReport"]:
     """One pass: fast-forward to origin (never while a worker holds the
-    copy), read the report, act at most once, return. The three acts,
-    one per report state that is the product's move: owes-recovery
+    copy), read the report, act at most once, return. owes-recovery
     recovers; next-build and next-review start their stage, handing a
     review the checks the report already read once on the pre-marker
-    head. --again starts the next attempt of a stopped stage. Every
-    other level is printed in the report's own words and left."""
+    head; blocked-on-checks on a review (R3) starts it too -- the same
+    act as next-review, since a concluded red check on a passed build's
+    head is now a returned record, not a level a pass leaves alone. A
+    stopped stage inside its budget (RetryState.eligible) retries itself,
+    with no flag needed; `--again` is a no-op that says so when the plain
+    mechanism would already act or is only waiting out retry_after_s, and
+    forces the next attempt, named again_by in its marker, when it would
+    not. Every other level is printed in the report's own words and left."""
     from attavo.report import drive_report
     fast_forward_to_origin(root, m, item_id)
     r = drive_report(root, m, item_id)
+    records_dir = root / m["paths"]["records"] / item_id
 
     if r["state"] == "owes-recovery":
-        records_dir = root / m["paths"]["records"] / item_id
         return _recover_one(root, m, item_id, records_dir), r
     if r["state"] == "next-build":
         return _start_stage(root, m, item_id, "build", None), r
-    if r["state"] == "next-review":
+    if r["state"] in ("next-review", "blocked-on-checks") and r["stage"] == "verify":
         checks_command = (m.get("forge") or {}).get("checks_command")
         forge_checks = {"command": checks_command, "sha": r["head"], "conclusions": r["checks"] or []}
         return _start_stage(root, m, item_id, "verify", forge_checks), r
-    if again and r["state"] == "stopped" and r["stage"]:
-        return _advance_again(root, m, item_id, r["stage"], r["head"]), r
+    if r["state"] == "stopped" and r["stage"]:
+        state = retry_state(root, m, records_dir, r["stage"], r["stop_class"], r["attempt"])
+        if again:
+            if state.eligible or state.waiting_s is not None:
+                print("attavo drive: --again inside the budget is a no-op; the pass retries "
+                      "on its own")
+                return 0, r
+            return _advance_again(root, m, item_id, state.target_stage, r["head"], again_by=True), r
+        if state.eligible:
+            return _advance_again(root, m, item_id, state.target_stage, r["head"]), r
 
     print(f"attavo drive: {r['says']}")
     return (1 if r["state"] == "refused" else 0), r
@@ -669,9 +837,18 @@ def _until_ready(root: Path, m: dict[str, Any], item_id: str, again: bool) -> in
 
         if rc != 0:
             return rc
-        if state in _TERMINAL_STATES:
+        # R3: "stopped" is terminal only when the pass actually left it
+        # alone -- kind "acts" or "waits" means this same pass just
+        # retried it (or is only waiting out retry_after_s), and the loop
+        # must keep going rather than call that done.
+        if state in _TERMINAL_STATES and not (state == "stopped" and r["kind"] != "yours"):
             return 0
-        if state == "blocked-on-checks":
+        # R3: blocked-on-checks on a review is no longer a dead end -- the
+        # pass just converted it into a returned record and, inside its
+        # budget, a build retry follows on its own. Only the post-verify
+        # case (the checks went red after a passing review, stage None)
+        # is still the level with nothing left to do but give up.
+        if state == "blocked-on-checks" and r["stage"] is None:
             return 1
         time.sleep(interval)
 

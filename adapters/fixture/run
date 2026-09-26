@@ -5,6 +5,16 @@ set -eu
 
 write_name="${ATTAVO_FIXTURE_WRITE:-built.txt}"
 
+if [ -n "${ATTAVO_FIXTURE_TRANSIENT:-}" ]; then
+  # R3: a vendor's capacity, rate, or 5xx refusal, classed on the report
+  # line like every class is -- for the rejection fixture only; a real
+  # adapter's own tool reports this on its own transcript, mapped the
+  # same way non-question already is (issue #88).
+  printf '{"status":"failed","question":null,"class":"transient","detail":"%s","model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0}\n' \
+    "${ATTAVO_FIXTURE_TRANSIENT}, retry after 30s"
+  exit 1
+fi
+
 if [ -n "${ATTAVO_FIXTURE_CEILING_ERROR:-}" ]; then
   # issue #89: a tool error line matching a declared ceiling (the
   # specimen is codex's own "input_too_large" on a diff too large to

@@ -146,4 +146,5 @@ def test_verify_returns_forge_unconcluded_at_the_bound_when_the_forge_never_conc
     assert rec["status"] == "returned"
     assert rec["adapter"] is None
     assert rec["forge_checks"]["conclusions"] == [{"name": "ci", "conclusion": "in_progress"}]
-    assert rec["stop"] == {"class": "forge-unconcluded", "provenance": "tenant", "detail": None}
+    assert rec["stop"] == {"class": "forge-unconcluded", "provenance": "tenant", "detail": None,
+                       "signature": None, "bound": None}

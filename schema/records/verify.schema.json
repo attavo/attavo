@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/verify/6",
+  "$id": "https://attavo.dev/schema/records/verify/7",
   "title": "attavo verify record (verify-NN.json)",
   "type": "object",
   "additionalProperties": false,
@@ -104,7 +104,16 @@
           "type": "string",
           "enum": ["non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
                    "ceiling", "claims-boundary", "repeated-act", "unclassed", "question",
-                   "died", "hung"]
+                   "died", "hung", "transient", "returned"]
+        },
+        "signature": {
+          "type": ["string", "null"],
+          "description": "R3: the failure's signature, the detail or last event with every run of digits removed; equal between two attempts means the same failure"
+        },
+        "bound": {
+          "type": ["string", "null"],
+          "enum": ["stall", "ceiling", null],
+          "description": "R3: the bound a hung invocation crossed, or null"
         },
         "provenance": {"type": "string", "enum": ["product", "tenant", "executor", "spec"]},
         "detail": {
@@ -112,6 +121,14 @@
           "description": "Populated for class \"unclassed\" (the log's last line, capped at 200 characters) and class \"question\" (the halt's own question, its first line only); null for every other class, whose evidence already lives in forge_checks or the log itself."
         }
       }
+    },
+    "retry_of": {
+      "type": ["string", "null"],
+      "description": "R3: the stem of the attempt this one retries, or null on a first attempt"
+    },
+    "steer": {
+      "type": ["string", "null"],
+      "description": "R3: the counsel or ruling record whose text this attempt was handed, or null"
     },
     "product_version": {"type": "string", "minLength": 1},
     "product_pin": {"type": ["string", "null"]}

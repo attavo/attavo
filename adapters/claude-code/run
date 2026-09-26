@@ -645,6 +645,26 @@ def question_class(status: str, question: str | None) -> str:
     return "question"
 
 
+# R3: a vendor's capacity, rate, or 5xx refusal is transient -- classed on
+# this adapter's own report line, the same way non-question already is
+# (issue #88), so a pass retries it plainly instead of paying for a
+# counsel run on a stop the definition of done never touches (#194's own
+# verify-01, closed by the item this adapter now serves).
+TRANSIENT_MARKERS = ("overloaded", "rate limit", "rate_limit", "429", "500", "502", "503", "529",
+                    "internal server error", "service unavailable", "temporarily unavailable")
+
+
+def transient_detail(response: dict) -> str | None:
+    """response.get("result")'s own text when is_error and it names one of
+    TRANSIENT_MARKERS; else None -- an is_error for any other reason (an
+    auth mismatch, a malformed request) is not this."""
+    if not response.get("is_error"):
+        return None
+    text = str(response.get("result") or "")
+    low = text.lower()
+    return text if any(marker in low for marker in TRANSIENT_MARKERS) else None
+
+
 def subagent_refusal(response: dict) -> str | None:
     """None if response carries no spawned background work; else the
     refusal naming the counts (issue #88, class B). Checked on the
@@ -959,6 +979,11 @@ def main() -> int:
     # not a halt someone must rule on. Stage-independent: a tool error or
     # an absent report is a failure whether this is a build or a verify.
     if response.get("is_error") or not response.get("structured_output"):
+        detail = transient_detail(response)
+        if detail:
+            common = report_fields(response, config.get("model"))
+            if common is not None:
+                print(json.dumps({**common, "class": "transient", "detail": detail}))
         return 1
 
     refusal = subagent_refusal(response)

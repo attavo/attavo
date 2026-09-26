@@ -695,6 +695,26 @@ def question_class(status: str, question: str | None) -> str:
     return "question"
 
 
+# R3: a vendor's capacity, rate, or 5xx refusal is transient -- classed
+# on this adapter's own report line, the same way non-question already
+# is (issue #88), so a pass retries it plainly instead of paying for a
+# counsel run on a stop the definition of done never touches.
+TRANSIENT_MARKERS = ("overloaded", "rate limit", "rate_limit", "429", "500", "502", "503", "529",
+                    "internal server error", "service unavailable", "temporarily unavailable")
+
+
+def transient_detail(events: list[dict]) -> str | None:
+    """The terminal turn.failed event's own message when it names one of
+    TRANSIENT_MARKERS; else None -- a turn.failed for any other reason
+    (an auth mismatch, a malformed request) is not this."""
+    term = terminal_event(events)
+    if term is None or term.get("type") != "turn.failed":
+        return None
+    message = str((term.get("error") or {}).get("message") or "")
+    low = message.lower()
+    return message if any(marker in low for marker in TRANSIENT_MARKERS) else None
+
+
 def usage_fields(events: list[dict]) -> tuple[int, int]:
     """(tokens.input, tokens.output) for one call's own event stream --
     split out from report_fields so a retry's first, discarded call
@@ -774,6 +794,10 @@ def main() -> int:
         write_events(events_path, events)
 
     if exit_code != 0:
+        detail = transient_detail(events)
+        if detail:
+            line = {**report_fields(model, events), "class": "transient", "detail": detail}
+            print(json.dumps(line))
         return exit_code
 
     # An absent or unparseable output file is a failure whether this is

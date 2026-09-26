@@ -148,7 +148,8 @@ def test_build_refuses_an_executor_commit_under_records(tmp_path: Path) -> None:
     rec = latest_build(root)
     assert rec["status"] == "refused"
     assert rec["refusal"] == "records/1/sneaky.txt"
-    assert rec["stop"] == {"class": "claims-boundary", "provenance": "executor", "detail": None}
+    assert rec["stop"] == {"class": "claims-boundary", "provenance": "executor", "detail": None,
+                       "signature": None, "bound": None}
 
 
 def test_build_refuses_an_executor_commit_under_specs(tmp_path: Path) -> None:
@@ -163,7 +164,8 @@ def test_build_refuses_an_executor_commit_under_specs(tmp_path: Path) -> None:
     rec = latest_build(root)
     assert rec["status"] == "refused"
     assert rec["refusal"] == "specs/1/sneaky.txt"
-    assert rec["stop"] == {"class": "claims-boundary", "provenance": "executor", "detail": None}
+    assert rec["stop"] == {"class": "claims-boundary", "provenance": "executor", "detail": None,
+                       "signature": None, "bound": None}
 
 
 def test_fixture_adapter_traverses_build(tmp_path: Path) -> None:
@@ -564,7 +566,8 @@ def test_build_refused_on_a_claims_violation_carries_claims_boundary_stop(tmp_pa
 
     rec = latest_build(root)
     assert rec["status"] == "refused"
-    assert rec["stop"] == {"class": "claims-boundary", "provenance": "spec", "detail": None}
+    assert rec["stop"] == {"class": "claims-boundary", "provenance": "spec", "detail": None,
+                       "signature": None, "bound": None}
 
 
 def test_build_refused_on_a_foreign_commit_is_unclassed(tmp_path: Path) -> None:
@@ -596,7 +599,8 @@ def test_build_ceiling_error_line_carries_ceiling_stop(tmp_path: Path) -> None:
 
     rec = latest_build(root)
     assert rec["status"] == "failed"
-    assert rec["stop"] == {"class": "ceiling", "provenance": "product", "detail": None}
+    assert rec["stop"] == {"class": "ceiling", "provenance": "product", "detail": None,
+                       "signature": None, "bound": None}
     log = (root / "records" / "1" / "build-01.log").read_text()
     assert "input_too_large" in log
 
@@ -624,7 +628,8 @@ def test_build_adapter_ceiling_refusal_on_a_declared_limit_carries_ceiling_stop(
 
     rec = latest_build(root)
     assert rec["status"] == "failed"
-    assert rec["stop"] == {"class": "ceiling", "provenance": "product", "detail": None}
+    assert rec["stop"] == {"class": "ceiling", "provenance": "product", "detail": None,
+                       "signature": None, "bound": None}
     log = (root / "records" / "1" / "build-01.log").read_text()
     assert "ceiling" in log
     assert "10" in log
@@ -648,7 +653,8 @@ def test_build_halted_on_a_genuine_question_carries_question_stop(tmp_path: Path
     rec = latest_build(root)
     assert rec["status"] == "halted"
     assert rec["stop"] == {"class": "question", "provenance": "spec",
-                           "detail": "which overlay wins?"}
+                           "detail": "which overlay wins?", "signature": "which overlay wins?",
+                           "bound": None}
 
 
 def test_build_halted_question_detail_is_only_the_first_line(tmp_path: Path) -> None:
@@ -673,7 +679,8 @@ def test_build_halted_question_detail_is_only_the_first_line(tmp_path: Path) -> 
     rec = latest_build(root)
     assert rec["status"] == "halted"
     assert rec["stop"] == {"class": "question", "provenance": "spec",
-                           "detail": "Which overlay wins here?"}
+                           "detail": "Which overlay wins here?",
+                           "signature": "Which overlay wins here?", "bound": None}
 
 
 def attavo_module() -> Any:
@@ -761,7 +768,8 @@ def test_build_halt_naming_non_question_in_its_report_line_carries_that_stop_cla
 
     rec = latest_build(root)
     assert rec["status"] == "halted"
-    assert rec["stop"] == {"class": "non-question", "provenance": "executor", "detail": None}
+    assert rec["stop"] == {"class": "non-question", "provenance": "executor", "detail": None,
+                       "signature": None, "bound": None}
 
     log = (root / "records" / "1" / "build-01.log").read_text()
     assert "class non-question" in log
@@ -824,7 +832,8 @@ def test_build_halt_report_line_class_field_sets_stop_class(tmp_path: Path) -> N
 
     rec = latest_build(root)
     assert rec["status"] == "halted"
-    assert rec["stop"] == {"class": "non-question", "provenance": "executor", "detail": None}
+    assert rec["stop"] == {"class": "non-question", "provenance": "executor", "detail": None,
+                       "signature": None, "bound": None}
 
 
 def test_build_refuses_a_commit_not_authored_by_the_executor(tmp_path: Path) -> None:
@@ -869,7 +878,8 @@ def test_build_refuses_when_checks_command_exits_2_on_the_approved_tree(tmp_path
     rec = latest_build(root)
     assert rec["status"] == "refused"
     assert rec["stop"] == {"class": "environment", "provenance": "tenant",
-                           "detail": "no jsonschema"}
+                           "detail": "no jsonschema", "signature": "no jsonschema",
+                           "bound": None}
     assert rec["checks"] == {"command": "echo no jsonschema; exit 2", "exit": 2}
     # the adapter never ran: no commit, no model, the stub file untouched
     assert rec["sha"] == rec["start_sha"]

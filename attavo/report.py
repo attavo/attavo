@@ -6,7 +6,7 @@ from typing import Any
 
 from attavo.common import STAGES, ShallowCheckoutError, git
 from attavo.doctor import invocations_without_record, merge_introducing_records, stall_bound_s
-from attavo.drive import InvocationReading, drive_state, read_invocation, uncommitted_record
+from attavo.drive import InvocationReading, drive_state, read_invocation, retry_state, uncommitted_record
 from attavo.records import next_attempt_number, parse_attempts
 from attavo.types import CounselRecord, DriveReport
 from attavo.verify import FORGE_OK_CONCLUSIONS, FORGE_UNCONCLUDED_STATUSES, read_forge_checks
@@ -59,20 +59,55 @@ def _counsel_of(records_dir: Path, stem: str) -> tuple[str, CounselRecord] | Non
     return None
 
 
-def _stopped(r: DriveReport, records_dir: Path, stage: str, stem: str, record: dict[str, Any]) -> DriveReport:
+def _stopped(root: Path, m: dict[str, Any], r: DriveReport, records_dir: Path, stage: str,
+            stem: str, record: dict[str, Any]) -> DriveReport:
     stop = record.get("stop") or {}
     stop_class = stop.get("class")
+    attempt = int(stem.rsplit("-", 1)[1])
     r["state"], r["kind"], r["stage"] = "stopped", "yours", stage
-    r["attempt"], r["record"], r["stop_class"] = int(stem.rsplit("-", 1)[1]), stem, stop_class
+    r["attempt"], r["record"], r["stop_class"] = attempt, stem, stop_class
     r["filed"] = _filed(records_dir, stem)
+
+    # R3: every attempt of this stage, side by side -- the exhaustion
+    # report's own comparison, printed whether or not the budget is
+    # actually spent yet, since a person reading --report wants the same
+    # picture drive itself would act on.
+    attempts = parse_attempts(records_dir, stage)
+    rows: list[dict[str, Any]] = [
+        {"attempt": nn, "class": (rec.get("stop") or {}).get("class"),
+         "signature": (rec.get("stop") or {}).get("signature"),
+         "bound": (rec.get("stop") or {}).get("bound"),
+         "wall_clock_s": rec.get("wall_clock_s"), "cost_usd": rec.get("cost_usd")}
+        for nn, rec in sorted(attempts.items())]
+    r["attempts"] = rows
+    last_two = [row["signature"] for row in rows[-2:]]
+    signatures_match = bool(len(last_two) == 2 and last_two[0] is not None and last_two[0] == last_two[1])
+    r["signatures_match"] = signatures_match
+    r["rulings_available"] = [
+        "attavo drive N --again: reset the budget and start the next attempt"
+        + (" (unlikely to help: the last two attempts failed the same way)" if signatures_match else ""),
+        "amend the spec (moves the approval)"]
+
+    state = retry_state(root, m, records_dir, stage, stop_class, attempt)
     how = f"as {stop_class}" if stop_class else f"({record.get('status')})"
-    says = f"Needs you: {_WORD[stage]} attempt {stem.rsplit('-', 1)[1]} stopped {how}"
+    if state.waiting_s is not None:
+        r["kind"] = "waits"
+        says = (f"{_WORD[stage].capitalize()} attempt {attempt:02d} stopped {how}; retrying "
+                f"{_WORD[stage]} in {int(state.waiting_s)} s")
+    elif state.eligible:
+        r["kind"] = "acts"
+        says = f"{_WORD[stage].capitalize()} attempt {attempt:02d} stopped {how}; the next pass retries it"
+    else:
+        says = f"Needs you: {_WORD[stage]} attempt {attempt:02d} stopped {how}"
     counsel = _counsel_of(records_dir, stem)
     if counsel:
         r["counsel"] = counsel[0]
-        verdict = _COUNSEL_SAYS.get(str(counsel[1].get("verdict")))
-        says += f"; {counsel[0]} {verdict or 'could not read it'}"
-    if r["filed"]:
+        verdict = str(counsel[1].get("verdict"))
+        verdict_says = _COUNSEL_SAYS.get(verdict)
+        says += f"; {counsel[0]} {verdict_says or 'could not read it'}"
+        if verdict == "patch":
+            says += f"; waiting on {r['filed'] or 'the issue counsel filed'}"
+    if r["filed"] and "waiting on" not in says:
         says += f"; filed as {r['filed']}"
     r["says"] = says
     return r
@@ -80,7 +115,7 @@ def _stopped(r: DriveReport, records_dir: Path, stage: str, stem: str, record: d
 
 def _invocation(r: DriveReport, reading: InvocationReading, info: dict[str, Any],
                 bound: int | None) -> DriveReport:
-    stage, nn, _log, _last_at, age, cls = reading
+    stage, nn, _log, _last_at, age, cls, crossed = reading
     r["stage"], r["attempt"], r["stop_class"] = stage, nn, None if cls == "running" else cls
     r["since"] = info.get("at") if isinstance(info.get("at"), str) else None
     r["last_event_age_s"] = None if age is None else int(age)
@@ -91,7 +126,14 @@ def _invocation(r: DriveReport, reading: InvocationReading, info: dict[str, Any]
                      f"nothing to do until it finishes")
     else:
         r["state"], r["kind"] = "owes-recovery", "acts"
-        if cls == "hung":
+        if cls == "hung" and crossed == "ceiling":
+            # R3: a stage past its own ceiling is hung by wall clock
+            # alone -- never worded in terms of event age, which an
+            # adapter that streams no events never had to begin with.
+            r["says"] = (f"{word.capitalize()} attempt {nn:02d} is alive {r['last_event_age_s']} s "
+                         f"after it began, past its ceiling; recovery would end it and record it "
+                         f"as hung")
+        elif cls == "hung":
             r["says"] = (f"{word.capitalize()} attempt {nn:02d} is alive but has had no event for "
                          f"{r['last_event_age_s']} s (bound {bound} s); recovery would end it and "
                          f"record it as hung")
@@ -199,7 +241,8 @@ def drive_report(root: Path, m: dict[str, Any], item_id: str) -> DriveReport:
     r: DriveReport = {"item": item_id, "state": "refused", "kind": "yours", "says": "", "stage": None,
                       "attempt": None, "record": None, "stop_class": None, "counsel": None,
                       "filed": None, "head": _head(root), "checks": None, "since": None,
-                      "last_event_age_s": None}
+                      "last_event_age_s": None, "attempts": None, "signatures_match": None,
+                      "rulings_available": None}
 
     merge, _ = merge_introducing_records(root, m["paths"]["records"], item_id, STAGES)
     if merge:
@@ -232,7 +275,7 @@ def drive_report(root: Path, m: dict[str, Any], item_id: str) -> DriveReport:
         approval = _latest(records_dir, "approval")
         if (build and build[1].get("status") != "pass"
                 and build[1].get("approval_sha") == (approval[1].get("sha") if approval else None)):
-            return _stopped(r, records_dir, "build", build[0], build[1])
+            return _stopped(root, m, r, records_dir, "build", build[0], build[1])
         r["state"], r["kind"], r["stage"] = "next-build", "acts", "build"
         r["says"] = "Build is next"
         return r
@@ -240,7 +283,7 @@ def drive_report(root: Path, m: dict[str, Any], item_id: str) -> DriveReport:
     review = _latest(records_dir, "verify")
     if (step == "verify" and review and review[1].get("status") != "pass"
             and build and review[1].get("build_sha") == build[1].get("sha")):
-        return _stopped(r, records_dir, "verify", review[0], review[1])
+        return _stopped(root, m, r, records_dir, "verify", review[0], review[1])
 
     checks_command = (m.get("forge") or {}).get("checks_command")
     if not checks_command:
