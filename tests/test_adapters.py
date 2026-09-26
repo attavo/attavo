@@ -250,7 +250,7 @@ def test_claude_code_names_the_tenants_checks(tmp_path: Path) -> None:
     instruction = with_tool[with_tool.index("-p") + 1]
     assert "are run for you" in instruction
     assert "before you commit" not in instruction
-    assert "Do not run the whole test suite" in instruction
+    assert "Do not run the test runner directly, the whole test suite" in instruction
 
     without_tool = dry_run(tmp_path)
     instruction_without = without_tool[without_tool.index("-p") + 1]
@@ -474,10 +474,10 @@ def test_claude_code_disallowedtools_names_the_subagent_tools(tmp_path: Path) ->
     tenant-zero specimen made with neither tool in it at all.
     """
     build = dry_run(tmp_path)
-    assert build[build.index("--disallowedTools") + 1] == "Agent,Workflow"
+    assert build[build.index("--disallowedTools") + 1].startswith("Agent,Workflow,")
 
     verify = dry_run(tmp_path, extra_env={"ATTAVO_STAGE": "verify"})
-    assert verify[verify.index("--disallowedTools") + 1] == "Agent,Workflow"
+    assert verify[verify.index("--disallowedTools") + 1].startswith("Agent,Workflow,")
 
 
 def test_claude_code_refuses_a_result_with_spawned_subagents(tmp_path: Path) -> None:
@@ -716,7 +716,7 @@ def test_claude_code_counsel_sandbox_is_read_only(tmp_path: Path) -> None:
     assert settings["sandbox"]["network"]["allowedDomains"] == []
     assert settings["sandbox"]["filesystem"]["denyWrite"] == [str(Path.cwd())]
     assert cmd[cmd.index("--allowedTools") + 1] == "Read,Bash"
-    assert cmd[cmd.index("--disallowedTools") + 1] == "Agent,Workflow"
+    assert cmd[cmd.index("--disallowedTools") + 1].startswith("Agent,Workflow,")
 
 
 def test_claude_code_counsel_names_the_product_root_and_the_record(tmp_path: Path) -> None:

@@ -71,3 +71,16 @@ def test_no_vendor_name_in_bin_attavo() -> None:
         cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert run.returncode == 1, run.stdout
     assert run.stdout == ""
+
+
+def test_help_names_the_test_modes_the_cache_and_the_transport_refusal() -> None:
+    """The test tool as the executor's only way to run tests (v0.28.0's
+    first item): the help names the three modes, --fresh and the cache,
+    exclude_in_executor, and that the transport refuses inside an
+    executor. Red on the tree and on the stub: the words are the build's."""
+    run = subprocess.run([sys.executable, str(ATTAVO), "--help"],
+                         capture_output=True, text=True, check=False)
+    assert run.returncode == 0
+    assert "attavo test [N] [--all | <test>...] [--fresh]" in run.stdout, run.stdout
+    for phrase in ("--fresh", "unchanged", "exclude_in_executor", "ATTAVO_STAGE", "refuse"):
+        assert phrase in run.stdout, phrase

@@ -244,3 +244,148 @@ def test_this_repositorys_manifest_declares_the_probe_a_gate_without_the_suite_a
     assert m["tests"]["call_timeout_s"] <= 300, m["tests"]
     jsonschema.validate(m["checks"], MANIFEST_SCHEMA["properties"]["checks"])
     jsonschema.validate(m["tests"], MANIFEST_SCHEMA["properties"]["tests"])
+
+
+# --- the test tool as the executor's only way to run tests (v0.28.0's first
+# item). Specimen: #219's attempt 2 ran pytest directly 32 times against 2
+# runs of `attavo test` and spent a third of its 7,668 s after the tree was
+# green; attempt 3 ran it 0 times and passed in 247 s. Tests written red
+# first against v0.28.0 (f8b39f9): no cache, no modes, no test event, no
+# exclusion, the transport accepted inside an executor, the raw runner
+# allowed. ---
+
+MODES = ('[tests]\nselect = "sed -n s#^src/#tests/test_#p"\n'
+         'run = "sh -c \'cat > selected.txt; echo run >> runs.log; cat selected.txt\'"\n'
+         'exclude_in_executor = ["tests/test_slow.py"]')
+
+
+def modes_tenant(tmp_path: Path) -> Path:
+    """build_valid with src/a.py on main and src/b.py on the item's branch,
+    a selector that maps src/X to tests/test_X, and a run command that
+    counts its own runs."""
+    root = make_tenant(tmp_path, "build_valid")
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace('[tests]\nselect = "cat"\nrun = "true"', MODES))
+    (root / ".gitignore").write_text("selected.txt\nruns.log\n")
+    (root / "src").mkdir()
+    (root / "src" / "a.py").write_text("x = 1\n")
+    commit_all(root, "configure")
+    git(root, "update-ref", "refs/remotes/origin/main", git(root, "rev-parse", "HEAD").strip())
+    git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    git(root, "checkout", "-q", "-b", "attavo/1-x")
+    (root / "src" / "b.py").write_text("y = 2\n")
+    commit_all(root, "change b")
+    return root
+
+
+def runs(root: Path) -> int:
+    log = root / "runs.log"
+    return log.read_text().count("run") if log.is_file() else 0
+
+
+def selected(root: Path) -> list[str]:
+    return sorted((root / "selected.txt").read_text().split())
+
+
+def test_attavo_test_answers_from_the_cache_on_an_unchanged_tree(tmp_path: Path) -> None:
+    root = modes_tenant(tmp_path)
+    assert run_attavo(root, "test", "1").returncode == 0
+    assert runs(root) == 1 and selected(root) == ["tests/test_b.py"]
+    started = time.monotonic()
+    second = run_attavo(root, "test", "1")
+    assert time.monotonic() - started < 5
+    assert second.returncode == 0 and runs(root) == 1, second.stdout + second.stderr
+    assert "not rerun" in second.stdout and "--fresh" in second.stdout, second.stdout
+    (root / "src" / "b.py").write_text("y = 3\n")
+    assert run_attavo(root, "test", "1").returncode == 0 and runs(root) == 2, "an edited tree was answered from the cache"
+    assert run_attavo(root, "test", "1", "--fresh").returncode == 0 and runs(root) == 3
+    failing = root / "attavo.toml"
+    failing.write_text(failing.read_text().replace("cat selected.txt'", "cat selected.txt; exit 1'"))
+    assert run_attavo(root, "test", "1").returncode == 1 and runs(root) == 4
+    assert run_attavo(root, "test", "1").returncode == 1 and runs(root) == 5, "a failing run was cached"
+
+
+def test_attavo_test_runs_a_named_test_and_the_whole_suite_on_request(tmp_path: Path) -> None:
+    root = modes_tenant(tmp_path)
+    named = run_attavo(root, "test", "1", "tests/test_a.py::test_a")
+    assert named.returncode == 0 and selected(root) == ["tests/test_a.py::test_a"], named.stdout + named.stderr
+    whole = run_attavo(root, "test", "1", "--all")
+    assert whole.returncode == 0 and selected(root) == ["tests"], whole.stdout + whole.stderr
+    mapped = run_attavo(root, "test", "1")
+    assert mapped.returncode == 0 and selected(root) == ["tests/test_b.py"], mapped.stdout + mapped.stderr
+    both = run_attavo(root, "test", "1", "--all", "tests/test_a.py")
+    assert both.returncode == 2 and "not both" in both.stderr, both.stdout + both.stderr
+
+
+def test_attavo_test_writes_one_event_per_run(tmp_path: Path) -> None:
+    root = modes_tenant(tmp_path)
+    events_file = tmp_path / "events.jsonl"
+    env = {"ATTAVO_EVENTS": str(events_file)}
+    assert run_attavo(root, "test", "1", "tests/test_a.py::test_a", env=env).returncode == 0
+    assert run_attavo(root, "test", "1", "--all", env=env).returncode == 0
+    assert run_attavo(root, "test", "1", env=env).returncode == 0
+    assert run_attavo(root, "test", "1", env=env).returncode == 0
+    rows = [json.loads(line) for line in events_file.read_text().splitlines() if line.strip()]
+    texts = [r["text"] for r in rows if r["kind"] == "test"]
+    assert len(texts) == 4, rows
+    assert "mode named, 1 selected, exit 0" in texts[0], texts
+    assert "mode all, 1 selected, exit 0" in texts[1], texts
+    assert "mode mapped, 1 selected, exit 0" in texts[2] and texts[2].endswith(" s"), texts
+    assert texts[3].endswith("cached"), texts
+
+
+def test_attavo_test_leaves_out_excluded_tests_inside_an_executor(tmp_path: Path) -> None:
+    root = modes_tenant(tmp_path)
+    (root / "src" / "slow.py").write_text("z = 1\n")
+    commit_all(root, "change slow")
+    outside = run_attavo(root, "test", "1")
+    assert outside.returncode == 0 and selected(root) == ["tests/test_b.py", "tests/test_slow.py"], outside.stdout
+    inside = run_attavo(root, "test", "1", "--fresh", env={"ATTAVO_STAGE": "build"})
+    assert inside.returncode == 0 and selected(root) == ["tests/test_b.py"], inside.stdout + inside.stderr
+    assert "left out inside an executor: tests/test_slow.py" in inside.stdout, inside.stdout
+    jsonschema.validate({"select": "cat", "run": "true", "exclude_in_executor": ["tests/test_slow.py"]},
+                        MANIFEST_SCHEMA["properties"]["tests"])
+
+
+def test_the_transport_refuses_inside_an_executor(tmp_path: Path) -> None:
+    root = modes_tenant(tmp_path)
+    for argv in (["drive", "1"], ["worker", "1", "build", "01"], ["build", "1"], ["verify", "1"],
+                 ["counsel", "1"], ["file-stops", "1"]):
+        run = run_attavo(root, *argv, env={"ATTAVO_STAGE": "build"})
+        assert run.returncode == 2, (argv, run.stdout, run.stderr)
+        assert f"attavo {argv[0]}: refused inside an executor" in run.stderr, (argv, run.stderr)
+        assert not record_files(root, "build"), argv
+    assert run_attavo(root, "test", "1", env={"ATTAVO_STAGE": "build"}).returncode == 0
+    assert run_attavo(root, "drive", "1", "--report", env={"ATTAVO_STAGE": "build"}).returncode == 2
+
+
+def test_the_claude_code_adapter_denies_the_raw_runner_and_says_when_to_stop(tmp_path: Path) -> None:
+    from test_adapters import dry_run
+    argv = dry_run(tmp_path, extra_env={"ATTAVO_TEST_COMMAND": "python3 /product/bin/attavo test 7"})
+    denied = argv[argv.index("--disallowedTools") + 1].split(",")
+    for pattern in ("Bash(pytest:*)", "Bash(python3 -m pytest:*)", "Bash(python -m pytest:*)",
+                    "Bash(attavo drive:*)", "Bash(attavo worker:*)"):
+        assert pattern in denied, denied
+    assert "Agent" in denied and "Workflow" in denied, denied
+    instruction = argv[argv.index("-p") + 1]
+    assert "Run a single test with `python3 /product/bin/attavo test 7 <path or test id>`" in instruction
+    assert "Do not run the test runner directly" in instruction, instruction
+    assert "when the criteria and `python3 /product/bin/attavo test 7` pass, commit and stop" in instruction
+    for adapter in ("claude-code", "codex"):
+        conformance = json.loads((ROOT / "adapters" / adapter / "conformance.json").read_text())
+        assert set(conformance["denied_commands"]) == {"mechanism", "patterns"}, adapter
+    claude = json.loads((ROOT / "adapters" / "claude-code" / "conformance.json").read_text())
+    assert set(claude["denied_commands"]["patterns"]) <= set(denied), "conformance.json and the adapter disagree"
+
+
+def test_every_module_under_attavo_is_mapped_or_named_shared() -> None:
+    namespace: dict[str, Any] = {}
+    exec(compile(SELECT.read_text(), str(SELECT), "exec"), {"__name__": "selector"}, namespace)
+    mapped = set(namespace["MODULE_TESTS"]) | set(namespace["SHARED_MODULES"])
+    modules = {p.relative_to(ROOT).as_posix() for p in (ROOT / "attavo").glob("*.py")}
+    unplaced = sorted(modules - mapped)
+    assert not unplaced, f"module(s) neither in MODULE_TESTS nor SHARED_MODULES: {unplaced}"
+    gone = sorted(m for m in namespace["SHARED_MODULES"] if m not in modules)
+    assert not gone, f"SHARED_MODULES names module(s) that do not exist: {gone}"
+    doubled = sorted(set(namespace["MODULE_TESTS"]) & set(namespace["SHARED_MODULES"]))
+    assert not doubled, f"module(s) both mapped and shared: {doubled}"

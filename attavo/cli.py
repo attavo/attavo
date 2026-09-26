@@ -16,7 +16,7 @@
     attavo worker N <build|verify> NN
     attavo ledger [N] [--json]
     attavo stops [N] [--json]
-    attavo test [N]
+    attavo test [N] [--all | <test>...] [--fresh]
 
 The doctor is the definition of done. It asserts five proofs against a
 tenant root and exits 1 until every proof holds:
@@ -109,11 +109,30 @@ enforces.
 test [N] runs the tests [tests].select names for every path the item has
 changed since it left the default branch (refs/remotes/origin/HEAD),
 committed or not and untracked included, paths.records aside, through
-[tests].run. It prints how many were selected (or that none was, and runs
+[tests].run (mode mapped, the default). test N <test>... runs exactly the
+named tests instead (mode named), so an executor working on one test runs
+one test; test N --all runs the whole suite through [tests].run with
+"tests" as the one identifier (mode all), the same bound, event, and
+exclusion as the other two. Naming tests and --all together is refused
+(exit 2). It prints how many were selected (or that none was, and runs
 nothing), exits as the run does, and, when [tests].call_timeout_s is
 declared and the run outlasts it, ends the run and everything it started
 and exits 124. It exits 2 when it cannot name the changes or the selector
-fails. It is the one test command an executor is given (issue #212).
+fails. A run that exits 0 is cached against a fingerprint of the tree
+(HEAD, the diff against it, and every untracked unignored file's name and
+content hash, together with the mode and the identifiers); asked again on
+an unchanged tree it says so -- unchanged since the earlier run, not
+rerun -- without spending a second on it; --fresh reruns anyway. A
+failing run is never cached, since the next question after one is always
+whether an edit fixed it. [tests].exclude_in_executor names test
+identifiers left out, and said so, when ATTAVO_STAGE is set (inside an
+executor); they run outside one and in CI. When ATTAVO_EVENTS is set, one
+event of kind test is written per invocation, naming the mode, the count
+selected, the exit code, and the seconds spent (or that the answer came
+from the cache). It is the one test command an executor is given (issue
+#212); the product's own transport -- drive, worker, build, verify,
+counsel, file-stops -- refuses to run at all when ATTAVO_STAGE is set,
+since the transport is the pass's, not the executor's.
 
 verify refuses (exit 1) unless the item's latest build record has
 status pass, and unless the manifest declares [forge].checks_command --
@@ -305,6 +324,7 @@ full rules it enforces.
 
 from __future__ import annotations
 
+import os
 import sys
 
 from attavo.approval import cmd_approval_status, cmd_approve
@@ -322,10 +342,20 @@ from attavo.testtool import cmd_test
 from attavo.verify import cmd_verify
 
 
+TRANSPORT = ("drive", "worker", "build", "verify", "counsel", "file-stops")
+
+
 def main(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__.strip())
         return 0 if argv else 2
+    if argv[0] in TRANSPORT and os.environ.get("ATTAVO_STAGE"):
+        # The product's transport is never the executor's tool: a stage
+        # runs inside an invocation whose environment names the stage,
+        # and nothing under it may start, judge, or record another.
+        print(f"attavo {argv[0]}: refused inside an executor (ATTAVO_STAGE is set); "
+              f"the transport is the pass's, not the executor's", file=sys.stderr)
+        return 2
     if argv[0] == "doctor":
         return cmd_doctor(argv[1:])
     if argv[0] == "spec-gate":

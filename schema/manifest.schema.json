@@ -54,6 +54,11 @@
           "description": "A command that reads touched paths on stdin, one per line, and writes test identifiers on stdout, one per line.",
           "minLength": 1
         },
+        "exclude_in_executor": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Test identifiers attavo test leaves out when it runs inside an executor (ATTAVO_STAGE set): tests that need a live tenant, the network, or the process's own working directory. CI runs them."
+        },
         "run": {
           "type": "string",
           "description": "A command that reads test identifiers on stdin, one per line; its exit code is the verdict.",
