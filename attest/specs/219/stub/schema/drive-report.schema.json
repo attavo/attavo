@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://attavo.dev/drive-report/v1",
+  "title": "attavo drive --report",
+  "description": "What one item is waiting on and for whom: a pure function of its records, its markers, and one read of the forge. Printing it changes nothing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "item",
+    "state",
+    "kind",
+    "says",
+    "stage",
+    "attempt",
+    "record",
+    "stop_class",
+    "counsel",
+    "filed",
+    "head",
+    "checks",
+    "since",
+    "last_event_age_s",
+    "attempts",
+    "signatures_match",
+    "rulings_available"
+  ],
+  "properties": {
+    "item": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "waiting-on-approval",
+        "running",
+        "owes-recovery",
+        "stopped",
+        "next-build",
+        "waiting-on-checks",
+        "blocked-on-checks",
+        "next-review",
+        "ready-to-merge",
+        "merged",
+        "refused"
+      ]
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "yours",
+        "waits",
+        "acts",
+        "done"
+      ],
+      "description": "yours: a person's act is next. waits: nothing to do but wait. acts: the next drive would act. done: nothing further from here."
+    },
+    "says": {
+      "type": "string",
+      "description": "One sentence in the operator's words."
+    },
+    "stage": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "build",
+        "verify",
+        null
+      ]
+    },
+    "attempt": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "record": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "stop_class": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "counsel": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "filed": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "head": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "checks": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "conclusion"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "conclusion": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "since": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "last_event_age_s": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "attempts": {
+      "type": ["array", "null"],
+      "items": {"type": "object"},
+      "description": "R3: on a stopped stage, one entry per attempt: attempt, class, signature, bound, wall_clock_s, cost_usd; null otherwise"
+    },
+    "signatures_match": {
+      "type": ["boolean", "null"],
+      "description": "R3: whether the last two attempts' signatures are equal; null when fewer than two or not stopped"
+    },
+    "rulings_available": {
+      "type": ["array", "null"],
+      "items": {"type": "string"},
+      "description": "R3: what an operator can do about a stopped stage; null otherwise"
+    }
+  }
+}
