@@ -1,7 +1,7 @@
 schema_version = 1
 
 [attavo]
-version = "v0.27.0"
+version = "v0.28.0"
 
 [forge]
 checks_command = "python3 .attavo/bin/forge-checks"
@@ -59,7 +59,7 @@ attempts = 3
 retry_after_s = 300
 
 [drive.build]
-ceiling_s = 2400
+ceiling_s = 3600
 
 [drive.verify]
 ceiling_s = 1200
