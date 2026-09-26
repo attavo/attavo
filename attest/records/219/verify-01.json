@@ -1,0 +1,109 @@
+{
+  "sha": "1fdc9bb27e09619706b1621bf5b8ee0183dd16d9",
+  "build_sha": "da79931a0c8941e28fcf1043e6f578142124e860",
+  "build_record": "build-03",
+  "approval_sha": "ba497297b4c828eed70a3d7190674051c77bc4e8",
+  "at": "2026-09-26T14:54:30Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "4f08b2067590029ec9737c65fe9ab1e47269391f",
+    "conclusions": [
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "Ceiling recovery targets the pass PID, not the over-ceiling worker",
+      "specimen": "attavo/doctor.py::write_invocation_marker records os.getpid() before attavo/drive.py::_start_stage spawns the detached worker; attavo/drive.py::_recover_one later sends SIGTERM to that marker PID. The worker can therefore survive a ceiling recovery and subsequently write a competing record.",
+      "retires": "The claim that stage ceilings terminate workers, rather than merely recording them as hung while their work continues.",
+      "rejection_test": "tests/test_retry.py::test_ceiling_recovery_terminates_the_actual_worker_and_it_cannot_write_a_late_record",
+      "severity": "Harmless only when the worker has already exited independently; blocking when an alive worker crosses its ceiling and continues running after recovery."
+    },
+    {
+      "title": "Recovered retry attempts lose retry_of and steer provenance",
+      "specimen": "attavo/drive.py::_recover_one unconditionally writes \"retry_of\": null and \"steer\": null, including for build-02/verify-02 markers started as retries. This contradicts the required record shape for every retried attempt.",
+      "retires": "Ambiguous recovered records that cannot identify the prior attempt or the counsel steer whose input they consumed.",
+      "rejection_test": "tests/test_retry.py::test_a_recovered_retried_attempt_records_retry_of_and_steer",
+      "severity": "Harmless for a first attempt; blocking when attempt 02 or later dies or hangs and its recovered record omits its retry lineage."
+    },
+    {
+      "title": "Exhaustion caused by recovery never receives the required final counsel read",
+      "specimen": "attavo/drive.py::_stage_body invokes counsel after an ordinarily completed non-pass record exhausts the budget, but attavo/drive.py::_recover_one commits died/hung records directly and never invokes counsel. Two identical recovered failures therefore stop early without the exhaustion sentence required beside the comparison.",
+      "retires": "Exhaustion reports that present only mechanical attempt comparison and omit counsel\u2019s final interpretation.",
+      "rejection_test": "tests/test_retry.py::test_two_identical_recovered_failures_run_counsel_once_at_exhaustion_and_report_its_sentence",
+      "severity": "Harmless while recovery leaves retry budget available; blocking when a recovered died or hung record spends the budget or triggers the identical-signature early stop."
+    },
+    {
+      "title": "Questions are retried after counsel answer despite being explicitly non-retryable",
+      "specimen": "attavo/drive.py::NEVER_RETRIED_CLASSES omits question, and retry_state consequently starts another attempt when counsel answers one. tests/test_retry.py::test_counsels_verdict_routes_the_next_pass positively encodes this divergence even though the approved spec and build commit both say a question is never retried by this item.",
+      "retires": "Automatic reruns after a stop whose answer may alter or interpret the definition of done.",
+      "rejection_test": "tests/test_retry.py::test_a_question_is_never_retried_even_when_counsel_verdict_is_answer",
+      "severity": "Harmless when no counsel answer exists; blocking when a question receives an answer and the next pass automatically starts another attempt."
+    },
+    {
+      "title": "--again bypasses person-only stops, not just exhausted retry budgets",
+      "specimen": "attavo/drive.py::_pass_once calls _advance_again for every stopped state that is neither presently eligible nor waiting. Thus --again can restart claims-boundary, environment, gate, unanswered/person-ruled question, and patch stops, although the approved narrowing permits it only after a stage\u2019s retry budget or early stop is spent.",
+      "retires": "The old broad --again escape hatch inside states reserved for an operator or later breaker behavior.",
+      "rejection_test": "tests/test_retry.py::test_again_refuses_person_patch_claims_boundary_gate_and_environment_stops",
+      "severity": "Harmless without --again; blocking when --again is issued against a person-only or never-retried stop and creates a new marker."
+    }
+  ],
+  "tests_named": [
+    "tests/test_retry.py::test_ceiling_recovery_terminates_the_actual_worker_and_it_cannot_write_a_late_record",
+    "tests/test_retry.py::test_a_recovered_retried_attempt_records_retry_of_and_steer",
+    "tests/test_retry.py::test_two_identical_recovered_failures_run_counsel_once_at_exhaustion_and_report_its_sentence",
+    "tests/test_retry.py::test_a_question_is_never_retried_even_when_counsel_verdict_is_answer",
+    "tests/test_retry.py::test_again_refuses_person_patch_claims_boundary_gate_and_environment_stops"
+  ],
+  "commits": [],
+  "stub_ratio": 0.4801940177849636,
+  "tokens": {
+    "input": 336147,
+    "output": 3366
+  },
+  "cost_usd": null,
+  "wall_clock_s": 75.036,
+  "status": "pass",
+  "stop": null,
+  "record_version": 6,
+  "item": "219",
+  "product_version": "v0.27.0-11-gd20fdea",
+  "product_pin": "v0.27.0"
+}

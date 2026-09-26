@@ -1,0 +1,39 @@
+{
+  "sha": "52f3e3d77cbe9cc4fee25c30e92e5f1e5c1eeb22",
+  "spec_sha": "52f3e3d77cbe9cc4fee25c30e92e5f1e5c1eeb22",
+  "at": "2026-09-26T02:05:16Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "a-transient-stop-retries-plainly.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "a-red-check-becomes-a-returned-record-and-the-next-build-is-handed-its-log.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "two-identical-failures-stop-at-two-and-the-report-compares-them.sh",
+      "on_tree": 128,
+      "on_stub": 0
+    },
+    {
+      "name": "a-stage-past-its-ceiling-is-hung-by-the-ceiling.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "the-manifest-and-the-tests-exist.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "219",
+  "product_version": "v0.27.0",
+  "product_pin": "v0.27.0"
+}

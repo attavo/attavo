@@ -1,0 +1,9 @@
+{
+  "streams_events": true,
+  "situations": {
+    "transient": {
+      "class": "transient",
+      "detail": "API error: overloaded, retry after 30s"
+    }
+  }
+}

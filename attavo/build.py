@@ -3,12 +3,13 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from attavo.approval import approval_status
 from attavo.common import (
@@ -22,9 +23,9 @@ from attavo.common import (
     read_manifest,
 )
 from attavo.events import append_event, stage_events_dir
-from attavo.records import latest_record, next_attempt_number, write_record
+from attavo.records import latest_record, next_attempt_number, parse_attempts, write_record
 from attavo.spec import parse_spec, run_criterion
-from attavo.stops import _log_last_line, derive_stop
+from attavo.stops import _log_last_line, derive_stop, signature_of
 from attavo.testtool import run_bounded, without_records
 
 # --- build: adapter, claims boundary, criteria, and the tenant's tests ---
@@ -201,6 +202,79 @@ BUILD_HALT_EXIT = 3
 CHECKS_FEEDBACK_TAIL_LINES = 200
 
 
+def _retry_seed(root: Path, m: dict[str, Any], records_dir: Path
+                ) -> tuple[str | None, str | None, str]:
+    """(retry_of, steer, feedback): what a retried build's first iteration
+    is handed (R3), in this order -- the prior attempt's own class and
+    signature; the evidence a returned review carries (a red required
+    check's log, read through [forge].check_log_command, or a review's
+    own blocking findings); and the newest steer newer than the blocking
+    record (counsel's answer text, named by the record it came from). A
+    build retries the latest build record that is not a pass, or --
+    retry_of still naming that same build attempt, the one a required
+    check rejected or a review returned -- the latest verify record that
+    returned it (class returned, its own build_sha matching the latest
+    build's): the two never coexist, since a returned review is read
+    only once its own build has already passed. (None, None, "") on a
+    first attempt -- nothing to retry, nothing to seed."""
+    latest_build = cast("dict[str, Any] | None", latest_record(records_dir, "build"))
+    latest_verify = cast("dict[str, Any] | None", latest_record(records_dir, "verify"))
+    prior_stem = f"build-{next_attempt_number(records_dir, 'build') - 1:02d}"
+    prior: dict[str, Any] | None = None
+    counsel_stage, counsel_n = "build", next_attempt_number(records_dir, "build") - 1
+    if (latest_verify and (latest_verify.get("stop") or {}).get("class") == "returned"
+            and latest_build and latest_verify.get("build_sha") == latest_build.get("sha")):
+        prior = latest_verify
+        verify_attempts = parse_attempts(records_dir, "verify")
+        counsel_stage = "verify"
+        counsel_n = max(verify_attempts) if verify_attempts else 0
+    elif latest_build and latest_build.get("status") != "pass":
+        prior = latest_build
+    if prior is None:
+        return None, None, ""
+
+    stop: dict[str, Any] = prior.get("stop") or {}
+    lines = [f"attempt {prior_stem} stopped as {stop.get('class')}: {stop.get('detail') or ''}",
+            f"signature: {stop.get('signature') or ''}", ""]
+
+    forge = m.get("forge") or {}
+    if stop.get("class") == "returned":
+        findings = [f for f in (prior.get("findings") or [])
+                   if str(f.get("severity")) == "blocking"]
+        if findings:
+            lines.append("blocking findings:")
+            for finding in findings:
+                lines.append(f"- {finding.get('title')}: {finding.get('specimen')} "
+                             f"(retires: {finding.get('retires')})")
+            lines.append("")
+        elif forge.get("check_log_command"):
+            for c in (prior.get("forge_checks") or {}).get("conclusions") or []:
+                if c.get("conclusion") in ("success", "neutral", "skipped"):
+                    continue
+                run = subprocess.run(
+                    f"{forge['check_log_command']} {shlex.quote(str(prior.get('sha')))} "
+                    f"{shlex.quote(c['name'])}", shell=True, cwd=str(root),
+                    capture_output=True, text=True, check=False)
+                lines += [f"--- check {c['name']} {c['conclusion']} ---",
+                         run.stdout.strip(), ""]
+
+    steer_stem: str | None = None
+    if counsel_n:
+        target = f"{counsel_stage}-{counsel_n:02d}"
+        counsel_attempts = parse_attempts(records_dir, "counsel")
+        matches = [(n, rec) for n, rec in sorted(counsel_attempts.items())
+                  if rec.get("record") == target]
+        if matches:
+            nn, counsel = matches[-1]
+            if counsel.get("verdict") == "answer":
+                steer_stem = f"counsel-{nn:02d}"
+                answer = (counsel.get("proposal") or {}).get("ruling_text")
+                if answer:
+                    lines += [f"steer from {steer_stem}:", answer.strip(), ""]
+
+    return prior_stem, steer_stem, "\n".join(lines) + "\n"
+
+
 def cmd_build(argv: list[str]) -> int:
     root = Path(".").resolve()
     item_id = argv[0] if argv else derive_item_id(root)
@@ -318,7 +392,14 @@ def cmd_build(argv: list[str]) -> int:
                 "status": "refused",
                 "refusal": refusal_text,
                 "halted": None,
-                "stop": {"class": "environment", "provenance": "tenant", "detail": detail},
+                "retry_of": None,
+                "steer": None,
+                # R3: environment is never retried by this item (recorded
+                # here, acted on by R4's breaker) -- signed anyway for
+                # the exhaustion report's own side-by-side, on the
+                # remote chance a person retries by hand.
+                "stop": {"class": "environment", "provenance": "tenant", "detail": detail,
+                        "signature": signature_of(detail), "bound": None},
             }
             record_path = write_record(item_records_dir, "build", record, m, item_id,
                                        log=log or refusal_text + "\n")
@@ -342,6 +423,13 @@ def cmd_build(argv: list[str]) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         feedback_path = Path(tmp) / "feedback.txt"
         feedback_path.write_text("")
+        # R3: a retried attempt's first iteration starts with the prior
+        # attempt's class and signature, its evidence, and the newest
+        # steer newer than the blocking record -- the one file the
+        # contract already passes, no new adapter input at all.
+        retry_of, steer, seed = _retry_seed(root, m, item_records_dir)
+        if seed:
+            feedback_path.write_text(seed)
 
         for iteration in range(1, BUILD_ITERATION_BUDGET + 1):
             iterations_used = iteration
@@ -518,11 +606,25 @@ def cmd_build(argv: list[str]) -> int:
         "status": status_out,
         "refusal": refusal,
         "halted": halted,
+        "retry_of": retry_of,
+        "steer": steer,
         "stop": derive_stop(status_out, refusal=refusal, halted=halted,
                             log="\n".join(transcripts),
                             report_class=(payload or {}).get("class"),
                             refusal_provenance=refusal_provenance),
     }
+    if record["stop"] is not None:
+        stop_out: dict[str, Any] = record["stop"]
+        # R3: transient's own signature is the adapter's stop detail
+        # (payload.get("detail")), not derive_stop's detail (which is
+        # None for every class but unclassed/question/environment/gate);
+        # every other non-pass class signs off its own detail (None for
+        # most, so signature is None too -- the class alone, or the log
+        # itself for unclassed, is the specimen's own cause).
+        stop_detail: str | None = ((payload or {}).get("detail") if stop_out["class"] == "transient"
+                                   else stop_out.get("detail"))
+        record["stop"] = {**stop_out, "detail": stop_detail, "signature": signature_of(stop_detail),
+                          "bound": None}
     record_path = write_record(item_records_dir, "build", record, m, item_id,
                                log="\n".join(transcripts))
 

@@ -113,6 +113,9 @@ def test_report_says_what_recovery_would_record_for_a_dead_invocation(tmp_path: 
 
 
 def test_report_names_the_stopped_record_its_class_its_counsel_and_its_issue(tmp_path: Path) -> None:
+    """R3: died is one of the four plain retryable families -- inside its
+    budget, the report reads it as "acts" (the next pass retries it on
+    its own), not "yours"; a filed issue is still named regardless."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     add_drive_stall_bound(root)
@@ -124,8 +127,32 @@ def test_report_names_the_stopped_record_its_class_its_counsel_and_its_issue(tmp
     commit_all(root, "the stop is filed")
     out = report(root)
     assert (out["state"], out["kind"], out["record"], out["stop_class"], out["filed"]) == (
-        "stopped", "yours", "build-01", "died", "https://example.invalid/issues/9"), out
-    assert out["says"].startswith("Needs you: build attempt 01 stopped as died"), out
+        "stopped", "acts", "build-01", "died", "https://example.invalid/issues/9"), out
+    assert out["says"].startswith("Build attempt 01 stopped as died"), out
+
+
+def test_report_compares_attempts_at_exhaustion(tmp_path: Path) -> None:
+    """R3 (ruled 2026-09-20): when a stage's budget is spent or two
+    attempts failed the same way, the report carries every attempt's
+    class, signature, bound crossed, wall clock and cost, whether the
+    last two signatures match, and the rulings available -- computed
+    across the records, not from counsel on one."""
+    from test_retry import add_drive_table, stop_of
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_drive_table(root, build_ceiling_s=10**7, verify_ceiling_s=10**7)
+    approve_item(root)
+    write_dead_marker(root, "build", 1)
+    assert drive(root, "1").returncode == 0
+    write_dead_marker(root, "build", 2)
+    assert drive(root, "1").returncode == 0
+    assert stop_of(root, "build", 1)["class"] == stop_of(root, "build", 2)["class"] == "died"
+    out = report(root)
+    assert out["state"] == "stopped", out
+    assert [a["attempt"] for a in out["attempts"]] == [1, 2], out["attempts"]
+    assert all(set(a) >= {"class", "signature", "bound", "wall_clock_s", "cost_usd"} for a in out["attempts"])
+    assert isinstance(out["signatures_match"], bool)
+    assert any("again" in r for r in out["rulings_available"]), out["rulings_available"]
 
 
 def write_live_marker(root: Path, stage: str, nn: int, age_s: int) -> None:

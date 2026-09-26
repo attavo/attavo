@@ -805,6 +805,10 @@ def test_doctor_proof_four_fails_on_an_unclassed_stop_with_no_detail(tmp_path: P
     assert "unclassed with no detail" in p["reason"]
 
 
+FULL_DRIVE_TABLE = ('[drive]\nstall_after_s = 60\nattempts = 3\n\n'
+                    '[drive.build]\nceiling_s = 600\n\n[drive.verify]\nceiling_s = 600\n')
+
+
 def _dead_pid() -> int:
     """A pid guaranteed not to be running: a real child, spawned and
     reaped, on this host."""
@@ -819,8 +823,7 @@ def test_doctor_proof_five_fails_on_a_dead_invocation_with_no_record(tmp_path: P
     build attempts of item #148 left behind -- proof five names it."""
     root = tmp_path / "dead_invocation"
     root.mkdir()
-    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n\n'
-                                      '[drive]\nstall_after_s = 60\n')
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n\n' + FULL_DRIVE_TABLE)
     init_repo(root, "install")
 
     records = root / "records" / "1"
@@ -841,8 +844,7 @@ def test_doctor_proof_five_holds_once_the_record_arrives(tmp_path: Path) -> None
     removal."""
     root = tmp_path / "recorded_invocation"
     root.mkdir()
-    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n\n'
-                                      '[drive]\nstall_after_s = 60\n')
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n\n' + FULL_DRIVE_TABLE)
     init_repo(root, "install")
 
     records = root / "records" / "1"
@@ -864,8 +866,7 @@ def test_doctor_proof_five_reports_a_live_invocation_as_running_not_failed(tmp_p
     yet."""
     root = tmp_path / "live_invocation"
     root.mkdir()
-    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n\n'
-                                      '[drive]\nstall_after_s = 60\n')
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n\n' + FULL_DRIVE_TABLE)
     init_repo(root, "install")
 
     records = root / "records" / "1"
@@ -898,3 +899,45 @@ def test_doctor_proof_five_fails_without_stall_after_s_in_the_manifest(tmp_path:
     p = run_doctor(root)["no-invocation-lacks-record"]
     assert not p["holds"]
     assert "stall_after_s" in p["reason"]
+
+
+def test_doctor_refuses_a_drive_table_without_ceilings(tmp_path: Path) -> None:
+    """R3: a [drive] table that declares a stall bound and no
+    [drive.build].ceiling_s or [drive.verify].ceiling_s carries no bound
+    past which a live stage is hung by wall clock -- proof five refuses
+    to guess one, as it refuses to guess the stall bound."""
+    root = tmp_path / "no_ceilings"
+    root.mkdir()
+    (root / "attavo.toml").write_text(
+        '[paths]\nrecords = "records"\n\n[drive]\nstall_after_s = 60\nattempts = 3\n')
+    init_repo(root, "install")
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "build-01.json").write_text(json.dumps({"status": "pass"}))
+    commit_all(root, "a drive table with no ceilings")
+
+    p = run_doctor(root)["no-invocation-lacks-record"]
+    assert not p["holds"]
+    assert "ceiling" in p["reason"]
+
+
+def test_doctor_refuses_a_drive_table_without_attempts(tmp_path: Path) -> None:
+    """R3: a [drive] table with both ceilings and a stall bound but no
+    [drive].attempts carries no bound on how many attempts a retryable
+    stop may spend -- proof five refuses to guess a default here too."""
+    root = tmp_path / "no_attempts"
+    root.mkdir()
+    (root / "attavo.toml").write_text(
+        '[paths]\nrecords = "records"\n\n[drive]\nstall_after_s = 60\n\n'
+        '[drive.build]\nceiling_s = 600\n\n[drive.verify]\nceiling_s = 600\n')
+    init_repo(root, "install")
+
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "build-01.json").write_text(json.dumps({"status": "pass"}))
+    commit_all(root, "a drive table with no attempts budget")
+
+    p = run_doctor(root)["no-invocation-lacks-record"]
+    assert not p["holds"]
+    assert "attempts" in p["reason"]

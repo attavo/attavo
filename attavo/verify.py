@@ -8,7 +8,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from attavo.build import (
     adapter_reports,
@@ -18,8 +18,14 @@ from attavo.build import (
 )
 from attavo.common import MANIFEST, derive_item_id, git, now_iso, read_manifest
 from attavo.events import stage_events_dir
-from attavo.records import latest_attempt_path, latest_record, next_attempt_number, write_record
-from attavo.stops import derive_stop
+from attavo.records import (
+    latest_attempt_path,
+    latest_record,
+    next_attempt_number,
+    parse_attempts,
+    write_record,
+)
+from attavo.stops import counsel_record_for, derive_stop, signature_of
 
 # --- verify: the forge's own read first, a judge only once it is green ---
 
@@ -123,6 +129,54 @@ def stub_ratio(diff_text: str, stub_dir: Path, excluded: tuple[str, ...]) -> flo
     return shipped / added if added else None
 
 
+def _returned_stop(forge_checks: dict[str, Any]) -> dict[str, Any]:
+    """R3 (ruling C amended): a review the forge returned because a
+    required check concluded red is class returned, retryable -- the
+    next build attempt is handed the evidence -- signed by the sorted
+    names of the checks that concluded red. A review returned because
+    the checks have not concluded at all yet (nothing to sign) stays
+    forge-unconcluded, as before -- there is no rejection to hand a
+    build, only a wait that already has its own bound (the drive
+    forge-poll bound, unchanged by this item)."""
+    conclusions = forge_checks.get("conclusions") or []
+    red = sorted(c["name"] for c in conclusions
+                if c["conclusion"] not in FORGE_OK_CONCLUSIONS
+                and c["conclusion"] not in FORGE_UNCONCLUDED_STATUSES)
+    unconcluded = [c for c in conclusions if c["conclusion"] in FORGE_UNCONCLUDED_STATUSES]
+    if red and not unconcluded:
+        detail = ", ".join(f"{c['name']} {c['conclusion']}" for c in conclusions if c["name"] in red)
+        return {"class": "returned", "provenance": "tenant", "detail": detail,
+               "signature": signature_of(" ".join(red)), "bound": None}
+    stop = dict(derive_stop("returned") or {})
+    return {**stop, "signature": None, "bound": None}
+
+
+def _verify_retry_seed(records_dir: Path, build_sha: str) -> tuple[str | None, str | None]:
+    """(retry_of, steer): a plain retry of verify itself -- died, hung,
+    transient, or any other non-returned stop counsel answered -- names
+    the prior verify attempt it retries, the same way build's own retry
+    does. A returned review is never this: its own fix is a new build,
+    not a new verify, so build.py's _retry_seed is what names it as
+    retry_of instead."""
+    attempts = parse_attempts(records_dir, "verify")
+    if not attempts:
+        return None, None
+    nn = max(attempts)
+    prior = attempts[nn]
+    stop = cast("dict[str, Any]", prior.get("stop") or {})
+    if prior.get("status") == "pass" or prior.get("build_sha") != build_sha or stop.get("class") == "returned":
+        return None, None
+    prior_stem = f"verify-{nn:02d}"
+    counsel = counsel_record_for(records_dir, "verify", nn)
+    steer = None
+    if counsel is not None and counsel.get("verdict") == "answer":
+        counsel_attempts = parse_attempts(records_dir, "counsel")
+        matches = [n for n, rec in counsel_attempts.items() if rec.get("record") == prior_stem]
+        if matches:
+            steer = f"counsel-{max(matches):02d}"
+    return prior_stem, steer
+
+
 def cmd_verify(argv: list[str]) -> int:
     root = Path(".").resolve()
     item_id = argv[0] if argv else derive_item_id(root)
@@ -205,7 +259,8 @@ def cmd_verify(argv: list[str]) -> int:
             "tokens": {"input": 0, "output": 0}, "cost_usd": None,
             "wall_clock_s": round(time.monotonic() - started, 3),
             "status": "returned",
-            "stop": derive_stop("returned"),
+            "retry_of": None, "steer": None,
+            "stop": _returned_stop(forge_checks),
         }
         record_path = write_record(item_records_dir, "verify", record, m, item_id)
         print(f"attavo verify: returned ({record_path.name}); the forge checks are not green")
@@ -285,6 +340,35 @@ def cmd_verify(argv: list[str]) -> int:
             tests_named = payload.get("tests_named") or []
             status_out = "pass"
 
+    # R3 (ruling C amended): a finding whose severity is "blocking" makes
+    # this review's status failed with class returned -- retryable, the
+    # next build attempt handed the findings as its evidence -- signed
+    # by the sorted titles of the blocking findings themselves. Every
+    # other severity leaves the review a pass, filed as today (issue
+    # #46's own findings channel, untouched).
+    blocking = sorted(f["title"] for f in (findings or []) if str(f.get("severity")) == "blocking")
+    if blocking:
+        status_out = "failed"
+        # write_record refuses a "failed" record with no trail at all
+        # (issue #53); a review whose own transcript is otherwise empty
+        # (a terse adapter that prints only its report line) still owes
+        # one -- the blocking findings themselves are the cause.
+        if not transcript.strip():
+            transcript = "blocking finding(s): " + "; ".join(blocking)
+
+    retry_of, steer = _verify_retry_seed(item_records_dir, build_sha)
+    if blocking:
+        stop: dict[str, Any] | None = {"class": "returned", "provenance": "tenant",
+                                       "detail": "; ".join(blocking),
+                                       "signature": signature_of(" ".join(blocking)), "bound": None}
+    else:
+        stop = cast("dict[str, Any] | None",
+                   derive_stop(status_out, log=transcript, report_class=(payload or {}).get("class")))
+        if stop is not None:
+            stop_detail: str | None = ((payload or {}).get("detail") if stop["class"] == "transient"
+                                       else stop.get("detail"))
+            stop = {**stop, "detail": stop_detail, "signature": signature_of(stop_detail), "bound": None}
+
     record = {
         "sha": head_sha,
         "build_sha": build_sha,
@@ -306,8 +390,9 @@ def cmd_verify(argv: list[str]) -> int:
         "cost_usd": cost_usd,
         "wall_clock_s": round(time.monotonic() - started, 3),
         "status": status_out,
-        "stop": derive_stop(status_out, log=transcript,
-                            report_class=(payload or {}).get("class")),
+        "retry_of": retry_of,
+        "steer": steer,
+        "stop": stop,
     }
     record_path = write_record(item_records_dir, "verify", record, m, item_id, log=transcript)
 

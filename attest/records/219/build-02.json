@@ -1,0 +1,76 @@
+{
+  "sha": "7fb8a9b913f3f9937ce198715a533f5d7f8ad13e",
+  "start_sha": "1de8c1ab0f87932b439c335e0c15d3f70587a4a0",
+  "spec_sha": "52f3e3d77cbe9cc4fee25c30e92e5f1e5c1eeb22",
+  "approval_sha": "ba497297b4c828eed70a3d7190674051c77bc4e8",
+  "at": "2026-09-26T05:22:59Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.283 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 2,
+  "criteria": [
+    {
+      "name": "a-transient-stop-retries-plainly.sh",
+      "exit": 0
+    },
+    {
+      "name": "a-red-check-becomes-a-returned-record-and-the-next-build-is-handed-its-log.sh",
+      "exit": 0
+    },
+    {
+      "name": "two-identical-failures-stop-at-two-and-the-report-compares-them.sh",
+      "exit": 0
+    },
+    {
+      "name": "a-stage-past-its-ceiling-is-hung-by-the-ceiling.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-manifest-and-the-tests-exist.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "count": 1,
+    "exit": 1
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 115885770,
+    "output": 260280
+  },
+  "cost_usd": 28.222488799999997,
+  "wall_clock_s": 7668.001,
+  "status": "halted",
+  "refusal": null,
+  "halted": {
+    "question": "Item 219's code is already complete and committed (7fb8a9b matches the spec/criteria). The only remaining gate failure is a stray attest/records/219/build-02.started marker with a dead worker pid and no record. I recovered it once using the product's own `attavo drive` recovery pass, but a subsequent `attavo test 219` run (which falls back to the whole suite because attavo/stops.py is intentionally unmapped in select-tests) triggered a `git reset --hard HEAD^` inside attavo/drive.py's own lease-push-failure path, silently destroying that recovery commit (push failed because this sandbox has no network to github.com). The repo is back to its clean starting state at 7fb8a9b, no work lost. Should I: (a) leave the stray build-02 marker for the driver/harness to recover in its own networked environment (since that's its role, not the executor's), or (b) track down which test/fixture is leaking the real repo as cwd into that git reset call so it can't clobber real history when run in a no-network sandbox?"
+  },
+  "stop": {
+    "class": "question",
+    "provenance": "spec",
+    "detail": "Item 219's code is already complete and committed (7fb8a9b matches the spec/criteria). The only remaining gate failure is a stray attest/records/219/build-02.started marker with a dead worker pid and no record. I recovered it once using the product's own `attavo drive` recovery pass, but a subsequent `attavo test 219` run (which falls back to the whole suite because attavo/stops.py is intentionally unmapped in select-tests) triggered a `git reset --hard HEAD^` inside attavo/drive.py's own lease-push-failure path, silently destroying that recovery commit (push failed because this sandbox has no network to github.com). The repo is back to its clean starting state at 7fb8a9b, no work lost. Should I: (a) leave the stray build-02 marker for the driver/harness to recover in its own networked environment (since that's its role, not the executor's), or (b) track down which test/fixture is leaking the real repo as cwd into that git reset call so it can't clobber real history when run in a no-network sandbox?"
+  },
+  "record_version": 7,
+  "item": "219",
+  "product_version": "v0.27.0-11-gd20fdea",
+  "product_pin": "v0.27.0"
+}

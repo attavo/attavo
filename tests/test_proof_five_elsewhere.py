@@ -58,7 +58,8 @@ def _proof_five_fixture(tmp_path: Path, name: str) -> Path:
     root.mkdir()
     (root / "attavo.toml").write_text(
         '[paths]\nrecords = "records"\n\n'
-        f'[drive]\nstall_after_s = {STALL_BOUND_S}\n')
+        f'[drive]\nstall_after_s = {STALL_BOUND_S}\nattempts = 3\n\n'
+        '[drive.build]\nceiling_s = 600\n\n[drive.verify]\nceiling_s = 600\n')
     init_repo(root, "install")
     return root
 

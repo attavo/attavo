@@ -217,6 +217,30 @@
           "type": "integer",
           "minimum": 1,
           "description": "seconds without a new event past which a live invocation is hung; attavo drive --recover terminates and records it"
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "R3: attempts a stage may spend before the item is a person's; 3 when absent"
+        },
+        "retry_after_s": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "R3: seconds a transient stop waits before its next attempt; 300 when absent"
+        },
+        "build": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ceiling_s": {"type": "integer", "minimum": 1, "description": "R3: wall clock past which a live build is hung by its ceiling"}
+          }
+        },
+        "verify": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ceiling_s": {"type": "integer", "minimum": 1, "description": "R3: wall clock past which a live review is hung by its ceiling"}
+          }
         }
       }
     }

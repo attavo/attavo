@@ -1,0 +1,90 @@
+{
+  "sha": "ae4fe380a038cc8d040c16486430a060997ff5c5",
+  "record_stage": "build",
+  "record": "build-01",
+  "at": "2026-09-26T03:07:14Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 239005,
+    "output": 2245
+  },
+  "cost_usd": null,
+  "wall_clock_s": 72.684,
+  "status": "done",
+  "class": "non-question",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "attest/specs/219/spec.md",
+      "symbol": "The families",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "attavo/drive.py",
+      "symbol": "_counsel_answered",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "adapters/claude-code/run",
+      "symbol": "build_instruction",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "Continue the build from the existing working tree. The stop was a progress report, not a question requiring any change to the definition of done. Do not start or wait for a whole-suite or whole-tree run: the log already records all 11 retry tests passing and mypy succeeding with no type ignores. Review the current diff, run only the prescribed selected-test command if further validation is needed, resolve any concrete selected-test failure, and commit the completed implementation. Return status question only if an unresolved decision would change the criteria.",
+    "patch": null,
+    "question": null,
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": [
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "question": null,
+  "record_version": 3,
+  "item": "219",
+  "product_version": "v0.27.0-11-gd20fdea",
+  "product_pin": "v0.27.0"
+}

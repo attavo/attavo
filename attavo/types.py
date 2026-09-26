@@ -19,14 +19,22 @@ from typing import Any, Literal, TypedDict
 Stage = Literal["spec", "approval", "build", "verify", "counsel"]
 
 # "class" is a Python keyword, so the record kinds that carry it are built
-# with the functional syntax.
-Stop = TypedDict("Stop", {
+# with the functional syntax. signature and bound are R3's own additions,
+# optional (a record older than record_version 8/7 carries neither).
+_StopRequired = TypedDict("_StopRequired", {
     "class": str,
     "provenance": str,
     "detail": str | None,
 })
-"""build-NN.json's and verify-NN.json's `stop`: the class of a stop and whose
-it is. The two schemas enumerate different classes; the shape is the same."""
+_StopOptional = TypedDict("_StopOptional", {
+    "signature": str | None,
+    "bound": str | None,
+}, total=False)
+
+
+class Stop(_StopRequired, _StopOptional):
+    """build-NN.json's and verify-NN.json's `stop`: the class of a stop and whose
+    it is. The two schemas enumerate different classes; the shape is the same."""
 
 
 class SpecRecord(TypedDict):
@@ -54,7 +62,7 @@ class ApprovalRecord(TypedDict):
     product_pin: str | None
 
 
-class BuildRecord(TypedDict):
+class _BuildRequired(TypedDict):
     record_version: int
     item: str
     sha: str
@@ -84,7 +92,17 @@ class BuildRecord(TypedDict):
     product_pin: str | None
 
 
-class VerifyRecord(TypedDict):
+class _BuildOptional(TypedDict, total=False):
+    retry_of: str | None
+    steer: str | None
+
+
+class BuildRecord(_BuildRequired, _BuildOptional):
+    """build-NN.json (issue #60): retry_of and steer (R3) are optional --
+    absent on a record written before this release."""
+
+
+class _VerifyRequired(TypedDict):
     record_version: int
     item: str
     sha: str
@@ -110,6 +128,16 @@ class VerifyRecord(TypedDict):
     stop: Stop | None
     product_version: str
     product_pin: str | None
+
+
+class _VerifyOptional(TypedDict, total=False):
+    retry_of: str | None
+    steer: str | None
+
+
+class VerifyRecord(_VerifyRequired, _VerifyOptional):
+    """verify-NN.json (issue #60): retry_of and steer (R3) are optional --
+    absent on a record written before this release."""
 
 
 CounselRecord = TypedDict("CounselRecord", {
@@ -220,3 +248,6 @@ class DriveReport(TypedDict):
     checks: list[dict[str, str]] | None
     since: str | None
     last_event_age_s: int | None
+    attempts: list[dict[str, Any]] | None
+    signatures_match: bool | None
+    rulings_available: list[str] | None

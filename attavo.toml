@@ -55,3 +55,11 @@ probe_timeout_s = 60
 
 [drive]
 stall_after_s = 1800
+attempts = 3
+retry_after_s = 300
+
+[drive.build]
+ceiling_s = 2400
+
+[drive.verify]
+ceiling_s = 1200

@@ -1,0 +1,65 @@
+schema_version = 1
+
+[attavo]
+version = "v0.27.0"
+
+[forge]
+checks_command = "python3 .attavo/bin/forge-checks"
+check_log_command = "python3 .attavo/bin/forge-check-log"
+file_issue_command = "python3 .attavo/bin/file-issue"
+attestation_command = "sh .attavo/bin/forge-attestation"
+sealed_since = "83fcbc6863fdb65956b77768c66c2103d221521b"
+
+[executor]
+build = "claude-code"
+verify = "codex"
+
+[executor.claude-code]
+auth = "subscription"
+model = "claude-sonnet-5"
+
+[executor.codex]
+model = "gpt-5.6-sol"
+
+[spec]
+[spec.boundary]
+paths = ["bin/**", "attavo/**", "adapters/**", "schema/**", "templates/**", "action.yml", "scripts/**"]
+
+[gates]
+[gates.spec]
+command = "attavo spec-gate"
+retires = [
+  "the lane as the product's transport: a Claude Code lane session reporting to a reviewing session, with no spec, no approval bound to a commit, no build/verify separation, and no attestation on the product's own commits",
+  "the || true step in ci.yml that ran the doctor's four proofs against this repository expected to still fail",
+  "the reviewing session as the reader of whether the lane did what the issue said",
+]
+
+[tests]
+select = "python3 .attavo/bin/select-tests"
+call_timeout_s = 240
+run = "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed"
+
+[paths]
+specs = "attest/specs"
+records = "attest/records"
+rulings = "attest/rulings.md"
+rejections = "attest/rejections"
+
+[operators]
+approvers = ["dbean10"]
+
+[checks]
+command = "python3 -m mypy"
+probe = "python3 -c 'import pytest, mypy, jsonschema'"
+probe_timeout_s = 60
+
+[drive]
+stall_after_s = 1800
+attempts = 3
+retry_after_s = 300
+
+[drive.build]
+ceiling_s = 2400
+
+[drive.verify]
+ceiling_s = 1200

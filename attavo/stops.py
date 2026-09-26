@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,24 @@ from attavo.types import CounselRecord, Stop
 
 STOP_CLASSES = ("non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
                "ceiling", "claims-boundary", "repeated-act", "unclassed", "question",
-               "environment", "gate", "died", "hung")
+               "environment", "gate", "died", "hung", "transient", "returned")
+
+# R3: the four families a pass retries with no person involved -- every
+# other class is counsel's to read first, and a person's when counsel says
+# so (or when counsel is not configured at all).
+RETRYABLE_CLASSES = ("died", "hung", "transient", "returned")
+
+
+def signature_of(text: str | None) -> str | None:
+    """R3: a failure's signature, compared between attempts by plain string
+    equality -- text with every run of digits removed, so two stops that
+    differ only in a pid, a timestamp, or a retry-after count still match.
+    None for no text at all (nothing to sign)."""
+    if not text:
+        return None
+    stripped = re.sub(r"[0-9]+", "", text).strip()
+    return stripped or None
+
 
 STOP_PROVENANCES = ("product", "tenant", "executor", "spec")
 
@@ -36,6 +54,14 @@ STOP_PROVENANCES = ("product", "tenant", "executor", "spec")
 CLASS_TEXT_MARKERS: dict[str, tuple[str, ...]] = {
     "non-question": (),
     "outlived-invocation": (),
+    # R3: transient is read from the adapter's own report line
+    # (report_class) below; returned is written directly by the pass or
+    # cmd_verify, never derived from a log's text -- a retried attempt's
+    # feedback file names the prior stop's class in prose, and that text
+    # reaches the next attempt's own transcript, which must not then be
+    # misread as a fresh instance of either class.
+    "transient": (),
+    "returned": (),
     # Issue #93: ceiling's own text-based check is CEILING_MARKERS, below,
     # with provenance "product" -- a fact about the tool, not an executor
     # judgment like non-question/outlived-invocation are. Left at the

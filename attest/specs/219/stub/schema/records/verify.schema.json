@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://attavo.dev/schema/records/verify/7",
+  "title": "attavo verify record (verify-NN.json)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record_version", "item", "sha", "build_sha", "build_record", "approval_sha", "at", "adapter",
+    "adapter_config", "adapter_version", "model", "model_version", "reports",
+    "forge_checks", "findings", "tests_named", "commits",
+    "stub_ratio", "tokens", "cost_usd", "wall_clock_s", "status",
+    "stop", "product_version", "product_pin"
+  ],
+  "properties": {
+    "record_version": {"type": "integer", "minimum": 1},
+    "item": {"type": "string", "minLength": 1},
+    "sha": {"type": "string", "minLength": 1},
+    "build_sha": {"type": "string", "minLength": 1},
+    "build_record": {"type": ["string", "null"]},
+    "approval_sha": {"type": ["string", "null"]},
+    "at": {"type": "string", "minLength": 1},
+    "adapter": {"type": ["string", "null"]},
+    "adapter_config": {
+      "type": "object",
+      "description": "Copied verbatim from [executor.<adapter>] merged with [executor.<adapter>.verify]; {} when no adapter was called."
+    },
+    "adapter_version": {"type": ["string", "null"]},
+    "model": {"type": ["string", "null"]},
+    "model_version": {"type": ["string", "null"]},
+    "reports": {
+      "type": "array",
+      "description": "Field names adapters/<name>/conformance.json declares this adapter can supply with a real value (vendor independence, 2026-09-09 ruling) -- [] when no adapter was called or it declares no conformance.json. Dollars are never summed across adapters; a field absent here renders as not reported by this executor, never zero or blank.",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "forge_checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "sha", "conclusions"],
+      "properties": {
+        "command": {"type": "string", "minLength": 1},
+        "sha": {"type": "string", "minLength": 1},
+        "conclusions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "conclusion"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "conclusion": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": ["array", "null"],
+      "description": "null when no adapter was called (the forge checks were not green), or when the adapter ran but reported no findings key at all -- distinct from an explicit empty list, which is a clean report, not a missing channel.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "specimen", "retires", "rejection_test", "severity"],
+        "properties": {
+          "title": {"type": "string", "minLength": 1},
+          "specimen": {"type": "string", "minLength": 1},
+          "retires": {"type": "string", "minLength": 1},
+          "rejection_test": {"type": "string", "minLength": 1},
+          "severity": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "tests_named": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "commits": {
+      "type": "array",
+      "description": "Empty unless the adapter moved the branch head during verify -- a report, not a commit; a non-empty list here always accompanies status: \"failed\", naming exactly what the adapter should not have created.",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "stub_ratio": {
+      "type": ["number", "null"], "minimum": 0, "maximum": 1,
+      "description": "The share of the lines the item's diff adds (outside the specs and records directories, blank lines aside) that are a line of the spec's stub at the same path. Near 1 the build shipped the stub; near 0 the builder wrote the change. Null when the spec carries no stub or the diff adds no counted line. Version 5 carried two further fields that no release ever computed; they are gone."
+    },
+    "tokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "output"],
+      "properties": {
+        "input": {"type": "integer", "minimum": 0},
+        "output": {"type": "integer", "minimum": 0}
+      }
+    },
+    "cost_usd": {"type": ["number", "null"]},
+    "wall_clock_s": {"type": "number", "minimum": 0},
+    "status": {"type": "string", "enum": ["pass", "returned", "failed"]},
+    "stop": {
+      "type": ["object", "null"],
+      "description": "Non-null exactly when status is not \"pass\" (issue #89): what class of stop this is and whose it is, derived by the record writer from the forge_checks and log it already has -- never a fresh read of anything.",
+      "additionalProperties": false,
+      "required": ["class", "provenance", "detail"],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": ["non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
+                   "ceiling", "claims-boundary", "repeated-act", "unclassed", "question",
+                   "died", "hung", "transient", "returned"]
+        },
+        "signature": {
+          "type": ["string", "null"],
+          "description": "R3: the failure's signature, the detail or last event with every run of digits removed; equal between two attempts means the same failure"
+        },
+        "bound": {
+          "type": ["string", "null"],
+          "enum": ["stall", "ceiling", null],
+          "description": "R3: the bound a hung invocation crossed, or null"
+        },
+        "provenance": {"type": "string", "enum": ["product", "tenant", "executor", "spec"]},
+        "detail": {
+          "type": ["string", "null"],
+          "description": "Populated for class \"unclassed\" (the log's last line, capped at 200 characters) and class \"question\" (the halt's own question, its first line only); null for every other class, whose evidence already lives in forge_checks or the log itself."
+        }
+      }
+    },
+    "retry_of": {
+      "type": ["string", "null"],
+      "description": "R3: the stem of the attempt this one retries, or null on a first attempt"
+    },
+    "steer": {
+      "type": ["string", "null"],
+      "description": "R3: the counsel or ruling record whose text this attempt was handed, or null"
+    },
+    "product_version": {"type": "string", "minLength": 1},
+    "product_pin": {"type": ["string", "null"]}
+  }
+}

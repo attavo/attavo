@@ -1,0 +1,70 @@
+{
+  "sha": "da79931a0c8941e28fcf1043e6f578142124e860",
+  "start_sha": "da79931a0c8941e28fcf1043e6f578142124e860",
+  "spec_sha": "52f3e3d77cbe9cc4fee25c30e92e5f1e5c1eeb22",
+  "approval_sha": "ba497297b4c828eed70a3d7190674051c77bc4e8",
+  "at": "2026-09-26T14:51:52Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.283 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "a-transient-stop-retries-plainly.sh",
+      "exit": 0
+    },
+    {
+      "name": "a-red-check-becomes-a-returned-record-and-the-next-build-is-handed-its-log.sh",
+      "exit": 0
+    },
+    {
+      "name": "two-identical-failures-stop-at-two-and-the-report-compares-them.sh",
+      "exit": 0
+    },
+    {
+      "name": "a-stage-past-its-ceiling-is-hung-by-the-ceiling.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-manifest-and-the-tests-exist.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "count": 0,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 818354,
+    "output": 7543
+  },
+  "cost_usd": 0.45190100000000005,
+  "wall_clock_s": 246.922,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "stop": null,
+  "record_version": 7,
+  "item": "219",
+  "product_version": "v0.27.0-11-gd20fdea",
+  "product_pin": "v0.27.0"
+}
