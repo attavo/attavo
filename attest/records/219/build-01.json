@@ -1,0 +1,47 @@
+{
+  "sha": "ae4fe380a038cc8d040c16486430a060997ff5c5",
+  "start_sha": "ae4fe380a038cc8d040c16486430a060997ff5c5",
+  "spec_sha": "52f3e3d77cbe9cc4fee25c30e92e5f1e5c1eeb22",
+  "approval_sha": "ba497297b4c828eed70a3d7190674051c77bc4e8",
+  "at": "2026-09-26T03:06:01Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.283 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [],
+  "selected_tests": null,
+  "checks": null,
+  "tokens": {
+    "input": 89849566,
+    "output": 211010
+  },
+  "cost_usd": 22.269941,
+  "wall_clock_s": 3509.641,
+  "status": "halted",
+  "refusal": null,
+  "halted": {
+    "question": null
+  },
+  "stop": {
+    "class": "non-question",
+    "provenance": "executor",
+    "detail": null
+  },
+  "record_version": 7,
+  "item": "219",
+  "product_version": "v0.27.0-11-gd20fdea",
+  "product_pin": "v0.27.0"
+}
