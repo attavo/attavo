@@ -1,0 +1,61 @@
+{
+  "sha": "7fb8a9b913f3f9937ce198715a533f5d7f8ad13e",
+  "record_stage": "build",
+  "record": "build-02",
+  "at": "2026-09-26T05:24:02Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 250100,
+    "output": 2412
+  },
+  "cost_usd": null,
+  "wall_clock_s": 62.467,
+  "status": "done",
+  "class": "question",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "attest/specs/219/spec.md",
+      "symbol": "The families; One budget",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "attavo/drive.py",
+      "symbol": "_recover_one",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "tests/test_doctor.py",
+      "symbol": "test_no_invocation_lacks_record",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "Leave build-02.started for the driver to recover in its networked environment. Recovery of a dead invocation is explicitly the next pass's act; the recovered attempt counts against the stage budget, and the following pass retries it automatically as `died` when budget remains. Do not expand item 219 into investigating the test invocation or lease rollback: that is separate from this item's definition of done and its five acceptance criteria already pass. The failed local push does not authorize bypassing the lease or manually manufacturing the recovery transport.",
+    "patch": null,
+    "question": null,
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": []
+  },
+  "question": null,
+  "record_version": 3,
+  "item": "219",
+  "product_version": "v0.27.0-11-gd20fdea",
+  "product_pin": "v0.27.0"
+}
