@@ -1,0 +1,111 @@
+{
+  "dry_run_env": "ATTAVO_ADAPTER_DRY_RUN",
+  "response_env": "ATTAVO_ADAPTER_RESPONSE_FILE",
+  "tool_binary": "claude",
+  "stages": ["build", "verify", "counsel"],
+  "reports": ["tokens", "cost_usd"],
+  "streams_events": true,
+  "input_limit": {
+    "unit": null,
+    "value": null,
+    "reason": "claude code documents no numeric input-size ceiling anywhere in its own surface (--help, docs, or any config file, confirmed against claude 2.1.269) -- this adapter asserts its own instruction stays under a fixed 64 KB bound instead"
+  },
+  "success_script": "#!/bin/sh\ngit commit -q --allow-empty -m 'adapter commit'\nprintf '{\"type\": \"result\", \"is_error\": false, \"structured_output\": {\"status\": \"done\", \"question\": null}, \"usage\": {\"input_tokens\": 1, \"output_tokens\": 1}, \"modelUsage\": {\"claude-sonnet-5\": {\"inputTokens\": 1, \"outputTokens\": 1}}}\\n'\n",
+  "denied_commands": {
+    "mechanism": "--disallowedTools permission-rule patterns, prefix-matched by the tool",
+    "patterns": ["Bash(pytest:*)", "Bash(python3 -m pytest:*)", "Bash(python -m pytest:*)", "Bash(npm test:*)", "Bash(npx vitest:*)", "Bash(go test:*)", "Bash(cargo test:*)", "Bash(attavo drive:*)", "Bash(attavo worker:*)"]
+  },
+  "subagent_guard": {
+    "supported": true,
+    "situation": "subagent_spawned",
+    "note": "issue #88, class B -- checked against the tool's own subagent_stats.spawned, named in --disallowedTools by 'Agent' and 'Workflow' (confirmed live, claude 2.1.269, see adapters/claude-code/run's own docstring)"
+  },
+  "situations": {
+    "done": {
+      "is_error": false,
+      "structured_output": {"status": "done", "question": null},
+      "usage": {"input_tokens": 5, "output_tokens": 9},
+      "total_cost_usd": 0.01,
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 5, "outputTokens": 9}}
+    },
+    "is_error": {
+      "is_error": true,
+      "result": "API error: overloaded",
+      "structured_output": {"status": "done", "question": null},
+      "usage": {"input_tokens": 1, "output_tokens": 1},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}}
+    },
+    "transient": {
+      "is_error": true,
+      "result": "API error: overloaded",
+      "structured_output": {"status": "done", "question": null},
+      "usage": {"input_tokens": 1, "output_tokens": 1},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}}
+    },
+    "no_structured_output": {
+      "is_error": false,
+      "usage": {"input_tokens": 1, "output_tokens": 1},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}}
+    },
+    "question_null": {
+      "is_error": false,
+      "structured_output": {"status": "question", "question": null},
+      "usage": {"input_tokens": 1, "output_tokens": 1},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}}
+    },
+    "question_empty": {
+      "is_error": false,
+      "structured_output": {"status": "question", "question": ""},
+      "usage": {"input_tokens": 1, "output_tokens": 1},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}}
+    },
+    "question_short": {
+      "is_error": false,
+      "structured_output": {"status": "question", "question": "placeholder"},
+      "usage": {"input_tokens": 1, "output_tokens": 1},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}}
+    },
+    "question_long": {
+      "is_error": false,
+      "structured_output": {
+        "status": "question",
+        "question": "The criteria do not say which of two conflicting rulings applies here."
+      },
+      "usage": {"input_tokens": 1, "output_tokens": 1},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 1, "outputTokens": 1}}
+    },
+    "subagent_spawned": {
+      "is_error": false,
+      "structured_output": {"status": "done", "question": null},
+      "usage": {"input_tokens": 5, "output_tokens": 9},
+      "total_cost_usd": 0.01,
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 5, "outputTokens": 9}},
+      "subagent_stats": {
+        "spawned": 3,
+        "completed": 1,
+        "killed": {"parent": 0, "user": 0, "system": 2},
+        "started_in_background": 3
+      }
+    },
+    "counsel_158_forge_evidence": {
+      "is_error": false,
+      "structured_output": {
+        "class": "forge-unconcluded",
+        "verdict": "answer",
+        "citations": [
+          {"kind": "instruction", "path": "attest/specs/158/spec.md", "symbol": "Criteria", "ruling_id": null},
+          {"kind": "mechanism", "path": "bin/attavo", "symbol": "invocation_alive", "ruling_id": null},
+          {"kind": "guard", "path": "bin/attavo", "symbol": "proof_no_invocation_lacks_record", "ruling_id": null}
+        ],
+        "proposal": {
+          "ruling_text": "verify-02 read forge-unconcluded because the checks command found no conclusions for 7a2529ee349547a259dbd8b0b78043b39bbf63c2 at that moment, but the checks handed to counsel now show doctor and test both concluded failure on that same sha, and the doctor job's own log names proof 5 no-invocation-lacks-record: item 158 verify-02 started on Davids-MacBook-Pro.local and never wrote its record -- invocation_alive found no live process for the marker commit. Re-running verification will not help: the fix belongs in invocation_alive, not the forge.",
+          "patch": null,
+          "question": null,
+          "issue": null
+        }
+      },
+      "usage": {"input_tokens": 20, "output_tokens": 60},
+      "modelUsage": {"claude-sonnet-5": {"inputTokens": 20, "outputTokens": 60}}
+    }
+  }
+}

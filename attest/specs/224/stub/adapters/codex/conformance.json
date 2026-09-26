@@ -1,0 +1,114 @@
+{
+  "dry_run_env": "ATTAVO_ADAPTER_DRY_RUN",
+  "response_env": "ATTAVO_ADAPTER_RESPONSE_FILE",
+  "tool_binary": "codex",
+  "stages": ["build", "verify", "counsel"],
+  "reports": ["tokens"],
+  "streams_events": true,
+  "input_limit": {
+    "unit": "chars",
+    "value": 1048576,
+    "reason": null
+  },
+  "denied_commands": {
+    "mechanism": "none per command: codex's sandbox governs writes and network, not command names; the instruction names the one test command and the product refuses its own transport under ATTAVO_STAGE",
+    "patterns": []
+  },
+  "subagent_guard": {
+    "supported": false,
+    "reason": "codex exec's --help, its JSONL event stream (thread.*, turn.*, item.*), and its --output-schema/--output-last-message response name no subagent or background-task concept at all (confirmed against codex-cli 0.153.4) -- codex drives sandboxed shell commands as a single agent, with no tool of its own that could spawn work outliving this invocation the way issue #88's claude-code specimen did"
+  },
+  "success_script": "#!/bin/sh\ngit commit -q --allow-empty -m 'adapter commit'\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--output-last-message\" ] || [ \"$prev\" = \"-o\" ]; then\n    out=\"$arg\"\n  fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then\n  printf '{\"status\":\"done\",\"question\":null}' > \"$out\"\nfi\nprintf '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"reasoning_output_tokens\":0}}\\n'\n",
+  "situations": {
+    "done": {
+      "events": [
+        {"type": "thread.started", "thread_id": "conformance-done"},
+        {"type": "turn.started"},
+        {"type": "item.completed", "item": {"id": "item_0", "type": "agent_message", "text": "ok"}},
+        {"type": "turn.completed", "usage": {"input_tokens": 15272, "cached_input_tokens": 12160, "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}}
+      ],
+      "final": {"status": "done", "question": null},
+      "exit_code": 0
+    },
+    "is_error": {
+      "events": [
+        {"type": "thread.started", "thread_id": "conformance-is-error"},
+        {"type": "turn.started"},
+        {"type": "error", "message": "Reconnecting... 5/5 (unexpected status 401 Unauthorized)"},
+        {"type": "turn.failed", "error": {"message": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header"}}
+      ],
+      "final": null,
+      "exit_code": 1
+    },
+    "transient": {
+      "events": [
+        {"type": "thread.started", "thread_id": "conformance-transient"},
+        {"type": "turn.started"},
+        {"type": "error", "message": "unexpected status 503 Service Unavailable"},
+        {"type": "turn.failed", "error": {"message": "unexpected status 503 Service Unavailable"}}
+      ],
+      "final": null,
+      "exit_code": 1
+    },
+    "no_structured_output": {
+      "events": [
+        {"type": "thread.started", "thread_id": "conformance-no-output"},
+        {"type": "turn.started"},
+        {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "reasoning_output_tokens": 0}}
+      ],
+      "final": null,
+      "exit_code": 0
+    },
+    "question_null": {
+      "events": [
+        {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "reasoning_output_tokens": 0}}
+      ],
+      "final": {"status": "question", "question": null},
+      "exit_code": 0
+    },
+    "question_empty": {
+      "events": [
+        {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "reasoning_output_tokens": 0}}
+      ],
+      "final": {"status": "question", "question": ""},
+      "exit_code": 0
+    },
+    "question_short": {
+      "events": [
+        {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "reasoning_output_tokens": 0}}
+      ],
+      "final": {"status": "question", "question": "placeholder"},
+      "exit_code": 0
+    },
+    "question_long": {
+      "events": [
+        {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "reasoning_output_tokens": 0}}
+      ],
+      "final": {"status": "question", "question": "The criteria do not say which of two conflicting rulings applies here."},
+      "exit_code": 0
+    },
+    "counsel_158_forge_evidence": {
+      "events": [
+        {"type": "thread.started", "thread_id": "conformance-counsel-158"},
+        {"type": "turn.started"},
+        {"type": "turn.completed", "usage": {"input_tokens": 20, "output_tokens": 60, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "reasoning_output_tokens": 0}}
+      ],
+      "final": {
+        "class": "forge-unconcluded",
+        "verdict": "answer",
+        "citations": [
+          {"kind": "instruction", "path": "attest/specs/158/spec.md", "symbol": "Criteria", "ruling_id": null},
+          {"kind": "mechanism", "path": "bin/attavo", "symbol": "invocation_alive", "ruling_id": null},
+          {"kind": "guard", "path": "bin/attavo", "symbol": "proof_no_invocation_lacks_record", "ruling_id": null}
+        ],
+        "proposal": {
+          "ruling_text": "verify-02 read forge-unconcluded because the checks command found no conclusions for 7a2529ee349547a259dbd8b0b78043b39bbf63c2 at that moment, but the checks handed to counsel now show doctor and test both concluded failure on that same sha, and the doctor job's own log names proof 5 no-invocation-lacks-record: item 158 verify-02 started on Davids-MacBook-Pro.local and never wrote its record -- invocation_alive found no live process for the marker commit. Re-running verification will not help: the fix belongs in invocation_alive, not the forge.",
+          "patch": null,
+          "question": null,
+          "issue": null
+        }
+      },
+      "exit_code": 0
+    }
+  }
+}
