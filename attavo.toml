@@ -37,13 +37,16 @@ retires = [
 [tests]
 select = "python3 .attavo/bin/select-tests"
 call_timeout_s = 240
-run = "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed"
+run = "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed --deselect tests/test_doctor.py::test_no_attested_item_is_empty"
 
 [paths]
 specs = "attest/specs"
 records = "attest/records"
 rulings = "attest/rulings.md"
 rejections = "attest/rejections"
+
+[doctor]
+built_since = "dae6d765f3d6"
 
 [operators]
 approvers = ["dbean10"]

@@ -128,8 +128,14 @@ fi
 if [ "$should_write" = "1" ]; then
   mkdir -p "$(dirname "$write_name")"
   echo "built" > "$write_name"
-  git add "$write_name"
-  git commit -q -m "fixture: write $write_name"
+  if [ -n "${ATTAVO_FIXTURE_NO_COMMIT:-}" ]; then
+    # item 227's executor: the change written into the tree and never
+    # committed, then "done" -- for the rejection tests only.
+    :
+  else
+    git add "$write_name"
+    git commit -q -m "fixture: write $write_name"
+  fi
 fi
 
 echo '{"status":"done","question":null,"model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0}'

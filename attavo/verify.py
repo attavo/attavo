@@ -201,6 +201,10 @@ def cmd_verify(argv: list[str]) -> int:
         print(f"attavo verify: refused: latest build record is "
               f"{latest_build.get('status')!r}, not pass")
         return 1
+    if latest_build.get("sha") == latest_build.get("start_sha"):
+        print("attavo verify: refused: the latest build record names no change "
+              f"(sha equals start_sha {str(latest_build.get('sha'))[:12]}); nothing to review")
+        return 1
 
     forge_cfg = m.get("forge") or {}
     checks_command = forge_cfg.get("checks_command")

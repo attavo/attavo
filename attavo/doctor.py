@@ -823,6 +823,75 @@ def proof_every_attested_item_is_sealed(root: Path, m: dict[str, Any] | None) ->
                  not_merged=not_merged, not_read=not_read)
 
 
+def proof_no_attested_item_is_empty(root: Path, m: dict[str, Any] | None) -> Proof:
+    """Proof seven (item 227). Every merged, fully-staged item's passing
+    build names a change: its sha is not its start_sha. Item 227 was
+    specified, approved, built by one invocation, judged by another,
+    merged and sealed, and its build committed nothing -- the executor
+    left the stub in the working tree, the gate read the tree, and main
+    received the spec and none of the change. Six proofs held over it.
+
+    [doctor].built_since: merges at or before this commit are before the
+    window -- named, never failed -- so the specimen stands on every
+    doctor run without failing the tenant forever. Absent, the window is
+    proof three's. A build record with no start_sha (written before that
+    field) is named as not readable, not failed."""
+    p = Proof("no-attested-item-is-empty", "every attested item's build names a change")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
+    records_rel = m.get("paths", {}).get("records", "")
+    records_dir = root / records_rel
+    if not records_dir.is_dir():
+        return p.fail(f"no records directory under {records_dir}")
+    items = load_records(records_dir)
+    complete = [item for item, stages in sorted(items.items()) if all(s in stages for s in STAGES)]
+    since = (m.get("doctor") or {}).get("built_since")
+    if not (isinstance(since, str) and since.strip()):
+        try:
+            since = proof_window_start(root, m)[1]
+        except WindowRefused as exc:
+            return p.fail(str(exc))
+    else:
+        try:
+            since = git(root, "rev-parse", "--verify", f"{since}^{{commit}}").strip()
+        except RuntimeError:
+            return p.fail(f"[doctor] built_since {since} does not resolve to a commit")
+    merges, refusal = _merges_reachable(root)
+    if refusal:
+        return p.fail(refusal)
+    built: list[str] = []
+    before_window: list[str] = []
+    not_merged: list[str] = []
+    not_read: list[str] = []
+    empty: list[str] = []
+    for item in complete:
+        merge_sha, _ = merge_introducing_records(root, records_rel, item, STAGES, merges=merges)
+        if merge_sha is None:
+            not_merged.append(item)
+            continue
+        if _is_ancestor(root, merge_sha, since):
+            before_window.append(item)
+            continue
+        build = items[item]["build"]
+        sha, start = build.get("sha"), build.get("start_sha")
+        if not sha or not start:
+            not_read.append(item)
+            continue
+        if sha == start:
+            empty.append(f"item {item} merged at {merge_sha[:12]}: build "
+                         f"sha equals start_sha {str(sha)[:12]}; nothing was built")
+        else:
+            built.append(item)
+    if empty:
+        return p.fail("; ".join(empty), built=built, before_window=before_window,
+                      not_merged=not_merged, not_read=not_read)
+    window = f" at {since[:12]}" if before_window else ""
+    return p.hold(f"{len(built)} built, {len(before_window)} before the window{window}, "
+                  f"{len(not_read)} without start_sha, {len(not_merged)} not merged",
+                  built=built, before_window=before_window, not_merged=not_merged,
+                  not_read=not_read)
+
+
 def doctor(root: Path) -> list[Proof]:
     m = read_manifest(root)
     return [proof_every_gate_rejects(root, m),
@@ -830,7 +899,8 @@ def doctor(root: Path) -> list[Proof]:
             proof_no_commit_lacks_record(root, m),
             proof_no_stop_lacks_cause(root, m),
             proof_no_invocation_lacks_record(root, m),
-            proof_every_attested_item_is_sealed(root, m)]
+            proof_every_attested_item_is_sealed(root, m),
+            proof_no_attested_item_is_empty(root, m)]
 
 
 def cmd_doctor(argv: list[str]) -> int:

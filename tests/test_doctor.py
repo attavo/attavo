@@ -941,3 +941,69 @@ def test_doctor_refuses_a_drive_table_without_attempts(tmp_path: Path) -> None:
     p = run_doctor(root)["no-invocation-lacks-record"]
     assert not p["holds"]
     assert "attempts" in p["reason"]
+
+
+# --- proof seven: no attested item is empty (item 227). Rejection tests,
+# written red first against v0.29.0, whose doctor had six proofs and held
+# over an attested item whose build committed nothing. ---
+
+
+def _four_stage_item(root: Path, build: dict[str, Any]) -> str:
+    """One item, four records, merged --no-ff; returns the merge sha."""
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "-b", "attavo/1-x"], check=True)
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "spec-01.json").write_text(json.dumps({"status": "pass"}))
+    (records / "approval-01.json").write_text(json.dumps({"approved_by": "alice"}))
+    (records / "build-01.json").write_text(json.dumps(build))
+    (records / "verify-01.json").write_text(json.dumps({"status": "pass"}))
+    commit_all(root, "spec, approval, build, and verify records")
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "main"], check=True)
+    subprocess.run(["git", "-C", str(root), "merge", "-q", "--no-ff", "-m",
+                    "Merge branch 'attavo/1-x'", "attavo/1-x"], check=True)
+    return subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True,
+                          text=True, check=True).stdout.strip()
+
+
+def test_doctor_proof_seven_fails_on_an_attested_item_whose_build_committed_nothing(tmp_path: Path) -> None:
+    root = tmp_path / "empty_item"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+    merge = _four_stage_item(root, {"status": "pass", "sha": "abc123abc123", "start_sha": "abc123abc123"})
+    report = run_doctor(root)
+    assert "no-attested-item-is-empty" in report, sorted(report)
+    p = report["no-attested-item-is-empty"]
+    assert not p["holds"], p
+    assert "item 1" in p["reason"] and "nothing was built" in p["reason"] and merge[:12] in p["reason"], p["reason"]
+
+
+def test_doctor_proof_seven_holds_on_a_build_that_names_a_change_and_names_the_specimen_before_its_window(tmp_path: Path) -> None:
+    built = tmp_path / "built_item"
+    built.mkdir()
+    (built / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(built, "install")
+    _four_stage_item(built, {"status": "pass", "sha": "def456def456", "start_sha": "abc123abc123"})
+    p = run_doctor(built)["no-attested-item-is-empty"]
+    assert p["holds"], p["reason"]
+    assert p["built"] == ["1"], p
+
+    windowed = tmp_path / "windowed_item"
+    windowed.mkdir()
+    (windowed / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(windowed, "install")
+    merge = _four_stage_item(windowed, {"status": "pass", "sha": "abc123abc123", "start_sha": "abc123abc123"})
+    toml = windowed / "attavo.toml"
+    toml.write_text(toml.read_text() + f'\n[doctor]\nbuilt_since = "{merge[:12]}"\n')
+    commit_all(windowed, "declare the window after the specimen")
+    p = run_doctor(windowed)["no-attested-item-is-empty"]
+    assert p["holds"], p["reason"]
+    assert p["before_window"] == ["1"] and "before the window" in p["reason"], p
+
+
+def test_no_attested_item_is_empty() -> None:
+    """Proof 7, item 227. On this repository the specimen, #227, is named
+    before the window ([doctor].built_since) and every later attested
+    item's build names a change."""
+    p = run_doctor(ROOT)["no-attested-item-is-empty"]
+    assert p["holds"], p["reason"]

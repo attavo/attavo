@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import fnmatch
+import contextlib
 import json
+import shutil
 import os
 import shlex
 import subprocess
@@ -9,7 +11,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Iterator, cast
 
 from attavo.approval import approval_status
 from attavo.common import (
@@ -275,6 +277,30 @@ def _retry_seed(root: Path, m: dict[str, Any], records_dir: Path
     return prior_stem, steer_stem, "\n".join(lines) + "\n"
 
 
+@contextlib.contextmanager
+def gate_checkout(root: Path) -> Iterator[Path]:
+    """A detached worktree of root's HEAD, removed on exit: the tree the
+    build's gate reads. The executor's own directory is not it -- a file
+    written there and never committed is not part of the change, and a
+    gate that read it would pass work that does not exist on the branch
+    (item 227)."""
+    parent = Path(tempfile.mkdtemp(prefix="attavo-gate-"))
+    tree = parent / "head"
+    git(root, "worktree", "add", "--detach", "-q", str(tree), "HEAD")
+    try:
+        yield tree
+    finally:
+        try:
+            git(root, "worktree", "remove", "--force", str(tree))
+        except RuntimeError:
+            shutil.rmtree(tree, ignore_errors=True)
+            try:
+                git(root, "worktree", "prune")
+            except RuntimeError:
+                pass
+        shutil.rmtree(parent, ignore_errors=True)
+
+
 def cmd_build(argv: list[str]) -> int:
     root = Path(".").resolve()
     item_id = argv[0] if argv else derive_item_id(root)
@@ -418,6 +444,7 @@ def cmd_build(argv: list[str]) -> int:
     refusal = None
     refusal_provenance = None
     halted = None
+    empty_detail: str | None = None
     iterations_used = 0
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -498,6 +525,20 @@ def cmd_build(argv: list[str]) -> int:
                 refusal = f"commit {foreign['sha']} not authored by the executor"
                 break
 
+            # An executor that committed nothing built nothing, whatever it
+            # left in the working tree: the gate below reads the commit, so
+            # an empty iteration fails its gate on the approved tree and is
+            # told why; an empty last iteration is halted, class empty
+            # (item 227: twelve stub files copied into the tree, no commit,
+            # a pass, a review, a seal, and no change on main).
+            committed_nothing = git(root, "rev-parse", "HEAD").strip() == start_sha
+            left_uncommitted = [
+                line for line in git(root, "status", "--porcelain", "--untracked-files=all").splitlines()
+                if line.strip() and not line[3:].startswith(records_rel.rstrip("/") + "/")]
+            empty_line = (f"no commit since {start_sha[:12]}; {len(left_uncommitted)} path(s) "
+                          "modified or untracked in the working tree, which the gate does not read"
+                          if committed_nothing else None)
+
             protected = protected_path_touched(root, start_sha, records_rel, specs_rel)
             if protected:
                 status_out = "refused"
@@ -512,29 +553,34 @@ def cmd_build(argv: list[str]) -> int:
                 refusal = bad_path
                 break
 
-            criteria_results = [
-                {"name": name, "exit": run_criterion(spec_dir / "criteria" / name, root)}
-                for name in criteria_names]
-            for c in criteria_results:
-                append_event(events_path, "gate", f"{c['name']}: exit {c['exit']}")
+            # The gate reads the commit, never the executor's directory: a
+            # detached worktree of HEAD, so a file written and not committed
+            # cannot pass a criterion, a test or a check on the executor's
+            # behalf (item 227). Removed before the iteration ends.
+            with gate_checkout(root) as gate_root:
+                criteria_results = [
+                    {"name": name, "exit": run_criterion(spec_dir / "criteria" / name, gate_root)}
+                    for name in criteria_names]
+                for c in criteria_results:
+                    append_event(events_path, "gate", f"{c['name']}: exit {c['exit']}")
 
-            select_in = "".join(p + "\n" for p in touched)
-            select_run = subprocess.run(tests_cfg["select"], shell=True, cwd=str(root),
-                                        input=select_in, capture_output=True,
-                                        text=True, check=False)
-            identifiers = [l for l in select_run.stdout.splitlines() if l.strip()]
-            run_in = "".join(i + "\n" for i in identifiers)
-            test_run = subprocess.run(tests_cfg["run"], shell=True, cwd=str(root),
-                                      input=run_in, capture_output=True,
-                                      text=True, check=False)
-            selected_tests = {"select": tests_cfg["select"], "run": tests_cfg["run"],
-                              "count": len(identifiers), "exit": test_run.returncode}
+                select_in = "".join(p + "\n" for p in touched)
+                select_run = subprocess.run(tests_cfg["select"], shell=True, cwd=str(gate_root),
+                                            input=select_in, capture_output=True,
+                                            text=True, check=False)
+                identifiers = [l for l in select_run.stdout.splitlines() if l.strip()]
+                run_in = "".join(i + "\n" for i in identifiers)
+                test_run = subprocess.run(tests_cfg["run"], shell=True, cwd=str(gate_root),
+                                          input=run_in, capture_output=True,
+                                          text=True, check=False)
+                selected_tests = {"select": tests_cfg["select"], "run": tests_cfg["run"],
+                                  "count": len(identifiers), "exit": test_run.returncode}
 
-            checks_run = None
-            if checks_command:
-                checks_run = subprocess.run(checks_command, shell=True, cwd=str(root),
-                                            capture_output=True, text=True, check=False)
-                checks_result = {"command": checks_command, "exit": checks_run.returncode}
+                checks_run = None
+                if checks_command:
+                    checks_run = subprocess.run(checks_command, shell=True, cwd=str(gate_root),
+                                                capture_output=True, text=True, check=False)
+                    checks_result = {"command": checks_command, "exit": checks_run.returncode}
 
             # Issue #89, rejection test 1: the gate output that decides pass
             # or fail is appended to the build log itself, under a heading
@@ -558,17 +604,29 @@ def cmd_build(argv: list[str]) -> int:
             transcripts[-1] += (f"\n--- attavo gates, iteration {iteration} ---\n"
                                + "\n".join(gate_lines))
 
+            if empty_line:
+                transcripts[-1] += ("\nyou committed nothing: " + empty_line +
+                                    "\ncommit your work; the gate reads the commit, not the tree")
+
             failing = [c for c in criteria_results if c["exit"] != 0]
             checks_ok = checks_run is None or checks_run.returncode == 0
-            if not failing and test_run.returncode == 0 and checks_ok:
+            if not failing and test_run.returncode == 0 and checks_ok and not committed_nothing:
                 status_out = "pass"
                 break
 
             if iteration == BUILD_ITERATION_BUDGET:
-                status_out = "failed"
+                if committed_nothing:
+                    status_out = "halted"
+                    halted = {"question": None}
+                    empty_detail = f"the executor committed nothing; {empty_line}"
+                else:
+                    status_out = "failed"
                 break
 
             feedback_lines = []
+            if empty_line:
+                feedback_lines += ["you committed nothing: " + empty_line,
+                                   "commit your work; the gate reads the commit, not the tree"]
             if failing:
                 feedback_lines.append("criteria failing:")
                 feedback_lines += [f"- {c['name']}: exit {c['exit']}" for c in failing]
@@ -610,9 +668,11 @@ def cmd_build(argv: list[str]) -> int:
         "steer": steer,
         "stop": derive_stop(status_out, refusal=refusal, halted=halted,
                             log="\n".join(transcripts),
-                            report_class=(payload or {}).get("class"),
+                            report_class="empty" if empty_detail else (payload or {}).get("class"),
                             refusal_provenance=refusal_provenance),
     }
+    if record["stop"] is not None and empty_detail:
+        record["stop"] = {**record["stop"], "detail": empty_detail}
     if record["stop"] is not None:
         stop_out: dict[str, Any] = record["stop"]
         # R3: transient's own signature is the adapter's stop detail

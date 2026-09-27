@@ -510,3 +510,22 @@ def test_verify_diff_is_empty_without_an_approval_sha(tmp_path: Path) -> None:
     run = run_attavo(root, "verify", "1")
     assert run.returncode == 0
     assert diff_block(latest_verify_log(root)) == ""
+
+
+def test_verify_refuses_a_passing_build_record_that_names_no_change(tmp_path: Path) -> None:
+    """Item 227: a build record whose sha equals its start_sha reviewed and
+    passed. Red first against v0.29.0. The record is written by hand here
+    because the build no longer writes one; the refusal is verify's own
+    guard against any record shaped this way, whoever wrote it."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    approve_item(root)
+    assert run_attavo(root, "build", "1").returncode == 0
+    path = sorted((root / "records" / "1").glob("build-*.json"))[-1]
+    rec = json.loads(path.read_text())
+    rec["sha"] = rec["start_sha"]
+    path.write_text(json.dumps(rec, indent=2) + "\n")
+    run = run_attavo(root, "verify", "1")
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert "names no change" in run.stdout and "sha equals start_sha" in run.stdout, run.stdout
+    assert list((root / "records" / "1").glob("verify-*.json")) == []

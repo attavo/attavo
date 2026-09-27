@@ -50,26 +50,28 @@ def build_record(root: Path) -> dict[str, Any]:
 
 
 def test_build_runs_the_probe_and_not_the_whole_checks_before_the_executor(tmp_path: Path) -> None:
-    root = tenant(tmp_path, checks='[checks]\ncommand = "echo ran >> checks-ran.txt"\n'
-                                   'probe = "echo probed >> probe-ran.txt"\nprobe_timeout_s = 30')
-    (root / ".gitignore").write_text("checks-ran.txt\nprobe-ran.txt\n")
-    commit_all(root, "ignore the counters")
+    # The counters live outside the tree: since item 227 the gate runs the
+    # checks in a clean worktree of HEAD, not in the tenant's own directory.
+    counters = tmp_path / "counters"
+    counters.mkdir()
+    root = tenant(tmp_path, checks=f'[checks]\ncommand = "echo ran >> {counters}/checks-ran.txt"\n'
+                                   f'probe = "echo probed >> {counters}/probe-ran.txt"\nprobe_timeout_s = 30')
     approve_item(root)
     assert run_attavo(root, "build", "1").returncode == 0
-    assert (root / "probe-ran.txt").read_text().count("probed") == 1
-    assert (root / "checks-ran.txt").read_text().count("ran") == 1, "the checks ran before the build, not only at its gate"
+    assert (counters / "probe-ran.txt").read_text().count("probed") == 1
+    assert (counters / "checks-ran.txt").read_text().count("ran") == 1, "the checks ran before the build, not only at its gate"
     texts = [e["text"] for e in events(root) if e["kind"] == "gate"]
     assert texts[0] == "checking this machine can run the checks", texts
     assert texts[1] == "this machine can run the checks", texts
 
 
 def test_build_without_a_probe_asks_the_old_way_and_says_so_in_the_feed(tmp_path: Path) -> None:
-    root = tenant(tmp_path, checks='[checks]\ncommand = "echo ran >> checks-ran.txt"')
-    (root / ".gitignore").write_text("checks-ran.txt\n")
-    commit_all(root, "ignore the counter")
+    counters = tmp_path / "counters"
+    counters.mkdir()
+    root = tenant(tmp_path, checks=f'[checks]\ncommand = "echo ran >> {counters}/checks-ran.txt"')
     approve_item(root)
     assert run_attavo(root, "build", "1").returncode == 0
-    assert (root / "checks-ran.txt").read_text().count("ran") == 2
+    assert (counters / "checks-ran.txt").read_text().count("ran") == 2
     assert [e["text"] for e in events(root) if e["kind"] == "gate"][0] == "checking this machine can run the checks"
 
 

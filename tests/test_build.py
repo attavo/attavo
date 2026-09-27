@@ -912,3 +912,50 @@ def test_build_proceeds_when_checks_command_exits_1_on_the_approved_tree(tmp_pat
     assert rec["model"] == "fixture"
     assert rec["status"] == "failed"
     assert rec["checks"] == {"command": "exit 1", "exit": 1}
+
+
+# --- an empty build is not a pass (item 227): the executor copied the
+# change into the working tree, committed nothing, and answered done; the
+# gate read the tree and passed; the review passed; the merge queue sealed
+# an item whose change did not exist. Written red first against v0.29.0.
+
+
+def test_the_gate_reads_the_commit_and_an_executor_that_commits_nothing_is_halted_empty(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+    run = run_attavo(root, "build", "1", env={"ATTAVO_FIXTURE_NO_COMMIT": "1"})
+    assert run.returncode == 3, run.stdout + run.stderr
+    rec = latest_build(root)
+    assert rec["status"] == "halted", rec
+    assert rec["sha"] == rec["start_sha"], rec
+    assert (rec["stop"]["class"], rec["stop"]["provenance"]) == ("empty", "executor"), rec["stop"]
+    assert "the executor committed nothing" in rec["stop"]["detail"], rec["stop"]
+    assert "1 path(s) modified or untracked" in rec["stop"]["detail"], rec["stop"]
+    assert (root / "built.txt").is_file(), "the fixture did not leave the file in the tree"
+    assert all(c["exit"] != 0 for c in rec["criteria"]), (
+        "a criterion passed on a tree whose commit does not carry the change", rec["criteria"])
+    log = (root / "records" / "1" / "build-01.log").read_text()
+    assert "you committed nothing" in log and "the gate reads the commit, not the tree" in log, log
+    assert rec["iterations"] == 3, rec["iterations"]
+
+
+def test_an_empty_iteration_is_fed_back_and_a_later_commit_passes(tmp_path: Path) -> None:
+    """The loop is kept: an executor that answers done without a commit on
+    its first iteration is told so and iterates; a commit on the next
+    iteration passes as before."""
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+    adapter_dir = root / "attavo" / "adapters" / "fixture"
+    adapter_dir.mkdir(parents=True)
+    run_path = adapter_dir / "run"
+    run_path.write_text('#!/bin/sh\necho built > built.txt\n'
+                        'if [ -s "$ATTAVO_FEEDBACK" ]; then git add built.txt; git commit -q -m built; fi\n'
+                        'printf \'{"status":"done","question":null,"model":"fixture","model_version":null,'
+                        '"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0}\\n\'\n')
+    run_path.chmod(0o755)
+    commit_all(root, "a tenant-side adapter that commits only once told")
+    run = run_attavo(root, "build", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    rec = latest_build(root)
+    assert (rec["status"], rec["iterations"]) == ("pass", 2), rec
+    assert rec["sha"] != rec["start_sha"]

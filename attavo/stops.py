@@ -19,7 +19,7 @@ from attavo.types import CounselRecord, Stop
 
 STOP_CLASSES = ("non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
                "ceiling", "claims-boundary", "repeated-act", "unclassed", "question",
-               "environment", "gate", "died", "hung", "transient", "returned")
+               "environment", "gate", "died", "hung", "transient", "returned", "empty")
 
 # R3: the four families a pass retries with no person involved -- every
 # other class is counsel's to read first, and a person's when counsel says
