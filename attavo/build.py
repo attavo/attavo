@@ -18,6 +18,7 @@ from attavo.common import (
     MANIFEST,
     PRODUCT_ROOT,
     ShallowCheckoutError,
+    build_is_empty,
     derive_item_id,
     git,
     last_commit_touching,
@@ -349,6 +350,10 @@ def cmd_build(argv: list[str]) -> int:
     item_records_dir = root / records_rel / item_id
     spec_sha = last_commit_touching(root, str(Path(specs_rel) / item_id))
     latest_approval = latest_record(item_records_dir, "approval")
+    approval_sha = latest_approval.get("sha") if latest_approval else None
+    # approval_status already refused above unless status is "valid", which
+    # only holds when latest_approval exists and names a sha (attavo/approval.py).
+    assert approval_sha is not None, "approval status valid implies a latest approval sha"
     parsed, _ = parse_spec(spec_dir / "spec.md")
     claims = parsed["claims"] if parsed else []
     criteria_names = parsed["criteria"] if parsed else []
@@ -399,7 +404,7 @@ def cmd_build(argv: list[str]) -> int:
                 "sha": start_sha,
                 "start_sha": start_sha,
                 "spec_sha": spec_sha,
-                "approval_sha": latest_approval.get("sha") if latest_approval else None,
+                "approval_sha": approval_sha,
                 "at": now_iso(),
                 "adapter": adapter_name,
                 "adapter_config": adapter_config,
@@ -525,19 +530,30 @@ def cmd_build(argv: list[str]) -> int:
                 refusal = f"commit {foreign['sha']} not authored by the executor"
                 break
 
-            # An executor that committed nothing built nothing, whatever it
-            # left in the working tree: the gate below reads the commit, so
-            # an empty iteration fails its gate on the approved tree and is
-            # told why; an empty last iteration is halted, class empty
-            # (item 227: twelve stub files copied into the tree, no commit,
-            # a pass, a review, a seal, and no change on main).
-            committed_nothing = git(root, "rev-parse", "HEAD").strip() == start_sha
+            # An executor that committed nothing this iteration built
+            # nothing this iteration, whatever it left in the working
+            # tree: the gate below reads the commit, so an empty
+            # iteration fails its gate on the approved tree and is told
+            # why (item 227). Whether the *build* is empty is a separate
+            # question, asked against the approval below (item 229): a
+            # retried attempt whose head already carries a prior
+            # attempt's valid commits owes no commit of its own.
+            current_sha = git(root, "rev-parse", "HEAD").strip()
+            committed_nothing = current_sha == start_sha
             left_uncommitted = [
                 line for line in git(root, "status", "--porcelain", "--untracked-files=all").splitlines()
                 if line.strip() and not line[3:].startswith(records_rel.rstrip("/") + "/")]
             empty_line = (f"no commit since {start_sha[:12]}; {len(left_uncommitted)} path(s) "
                           "modified or untracked in the working tree, which the gate does not read"
                           if committed_nothing else None)
+            # A build is empty when its tree, restricted to the spec's
+            # own claims, is the approved tree there -- compared against
+            # the approval, not this attempt's own start_sha, so a build
+            # that already carries a prior attempt's valid commits is
+            # not empty just because this attempt added none of its own.
+            build_empty = build_is_empty(root, approval_sha, current_sha, claims)
+            if build_empty is None:
+                build_empty = committed_nothing
 
             protected = protected_path_touched(root, start_sha, records_rel, specs_rel)
             if protected:
@@ -610,15 +626,19 @@ def cmd_build(argv: list[str]) -> int:
 
             failing = [c for c in criteria_results if c["exit"] != 0]
             checks_ok = checks_run is None or checks_run.returncode == 0
-            if not failing and test_run.returncode == 0 and checks_ok and not committed_nothing:
+            if not failing and test_run.returncode == 0 and checks_ok and not build_empty:
                 status_out = "pass"
                 break
 
             if iteration == BUILD_ITERATION_BUDGET:
-                if committed_nothing:
+                if build_empty:
                     status_out = "halted"
                     halted = {"question": None}
-                    empty_detail = f"the executor committed nothing; {empty_line}"
+                    empty_detail = (f"the executor committed nothing; {empty_line}" if empty_line else
+                                    f"the executor committed nothing; no claimed path has changed "
+                                    f"since approval {str(approval_sha)[:12]}; "
+                                    f"{len(left_uncommitted)} path(s) modified or untracked in the "
+                                    "working tree, which the gate does not read")
                 else:
                     status_out = "failed"
                 break
@@ -645,7 +665,7 @@ def cmd_build(argv: list[str]) -> int:
         "sha": git(root, "rev-parse", "HEAD").strip(),
         "start_sha": start_sha,
         "spec_sha": spec_sha,
-        "approval_sha": latest_approval.get("sha") if latest_approval else None,
+        "approval_sha": approval_sha,
         "at": now_iso(),
         "adapter": adapter_name,
         "adapter_config": adapter_config,

@@ -13,12 +13,14 @@ from attavo.common import (
     MANIFEST,
     Proof,
     STAGES,
+    build_is_empty,
     fixture_item_id,
     git,
     product_version,
     read_manifest,
 )
 from attavo.records import RECORD_RE, load_records, parse_attempts
+from attavo.spec import parse_spec
 from attavo.stops import STOP_CLASSES, STOP_PROVENANCES, STOP_STAGES, gate_stop
 
 # --- doctor's three proofs ---
@@ -825,21 +827,31 @@ def proof_every_attested_item_is_sealed(root: Path, m: dict[str, Any] | None) ->
 
 def proof_no_attested_item_is_empty(root: Path, m: dict[str, Any] | None) -> Proof:
     """Proof seven (item 227). Every merged, fully-staged item's passing
-    build names a change: its sha is not its start_sha. Item 227 was
-    specified, approved, built by one invocation, judged by another,
-    merged and sealed, and its build committed nothing -- the executor
-    left the stub in the working tree, the gate read the tree, and main
-    received the spec and none of the change. Six proofs held over it.
+    build names a change: its tree, restricted to the item's own spec
+    claims, differs from the approved tree there (item 229 -- asked
+    against the approval, not the build's own start_sha, so a build
+    that adopted a prior attempt's valid commits is not empty just
+    because that attempt owed no commit of its own; scoped to claims,
+    not "everything outside paths.records", so a commit that lands
+    between approval and a later attempt's start but touches no
+    claimed path never rescues or defeats the comparison on its own
+    account). Item 227 was specified, approved, built by one
+    invocation, judged by another, merged and sealed, and its build
+    committed nothing -- the executor left the stub in the working tree,
+    the gate read the tree, and main received the spec and none of the
+    change. Six proofs held over it.
 
     [doctor].built_since: merges at or before this commit are before the
     window -- named, never failed -- so the specimen stands on every
     doctor run without failing the tenant forever. Absent, the window is
-    proof three's. A build record with no start_sha (written before that
-    field) is named as not readable, not failed."""
+    proof three's. A build record whose approval cannot be resolved
+    (no approval_sha at all, or one this repository cannot read) is
+    named as not readable, not failed."""
     p = Proof("no-attested-item-is-empty", "every attested item's build names a change")
     if m is None:
         return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
     records_rel = m.get("paths", {}).get("records", "")
+    specs_rel = m.get("paths", {}).get("specs", "")
     records_dir = root / records_rel
     if not records_dir.is_dir():
         return p.fail(f"no records directory under {records_dir}")
@@ -873,13 +885,21 @@ def proof_no_attested_item_is_empty(root: Path, m: dict[str, Any] | None) -> Pro
             before_window.append(item)
             continue
         build = items[item]["build"]
-        sha, start = build.get("sha"), build.get("start_sha")
-        if not sha or not start:
+        sha, approval_sha = build.get("sha"), build.get("approval_sha")
+        if not sha or not approval_sha:
             not_read.append(item)
             continue
-        if sha == start:
-            empty.append(f"item {item} merged at {merge_sha[:12]}: build "
-                         f"sha equals start_sha {str(sha)[:12]}; nothing was built")
+        spec_md = root / specs_rel / item / "spec.md"
+        claims: list[str] = []
+        if spec_md.is_file():
+            parsed, _ = parse_spec(spec_md)
+            claims = parsed["claims"] if parsed else []
+        is_empty = build_is_empty(root, approval_sha, sha, claims)
+        if is_empty is None:
+            not_read.append(item)
+        elif is_empty:
+            empty.append(f"item {item} merged at {merge_sha[:12]}: build names no "
+                         "claimed change; nothing was built")
         else:
             built.append(item)
     if empty:
@@ -887,7 +907,7 @@ def proof_no_attested_item_is_empty(root: Path, m: dict[str, Any] | None) -> Pro
                       not_merged=not_merged, not_read=not_read)
     window = f" at {since[:12]}" if before_window else ""
     return p.hold(f"{len(built)} built, {len(before_window)} before the window{window}, "
-                  f"{len(not_read)} without start_sha, {len(not_merged)} not merged",
+                  f"{len(not_read)} without a readable approval, {len(not_merged)} not merged",
                   built=built, before_window=before_window, not_merged=not_merged,
                   not_read=not_read)
 

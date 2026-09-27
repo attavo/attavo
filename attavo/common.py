@@ -88,6 +88,36 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def build_is_empty(root: Path, approval_sha: str, sha: str, claims: list[str]) -> bool | None:
+    """True when sha's tree, restricted to the paths the spec claims, is
+    identical to approval_sha's tree there: no path the spec claims has
+    changed since approval (item 227's own build). Compared against the
+    approval, not a particular attempt's start_sha (item 229), so a
+    retried attempt whose head already carries a prior attempt's valid
+    commits owes no commit of its own; an attempt that ends on the
+    approved tree, whatever it left in the working directory, is empty
+    regardless of how it got there. Scoped to claims rather than
+    "everything outside paths.records", so a commit that lands between
+    approval and this attempt's start but touches no claimed path --
+    a tenant installing an adapter, say -- never rescues or defeats the
+    comparison on its own account; every commit an executor's own loop
+    ever lands is already confined to claims (build.py's own boundary
+    check), so a real prior attempt's work is always visible here. None
+    when either commit does not resolve in this repository -- not
+    known, not asserted."""
+    for commit in (approval_sha, sha):
+        resolved = subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{commit}^{{commit}}"],
+                                  capture_output=True, text=True, check=False)
+        if resolved.returncode != 0:
+            return None
+    pathspec = claims if claims else ["."]
+    out = subprocess.run(["git", "-C", str(root), "diff", "--quiet", approval_sha, sha,
+                          "--", *pathspec], capture_output=True, text=True, check=False)
+    if out.returncode not in (0, 1):
+        return None
+    return out.returncode == 0
+
+
 def derive_item_id(root: Path) -> str | None:
     """ATTAVO_ITEM first, not last: a rejection fixture's own item id must
     win over whatever attavo/N-* branch the enclosing tenant repository

@@ -939,6 +939,35 @@ def test_the_gate_reads_the_commit_and_an_executor_that_commits_nothing_is_halte
     assert rec["iterations"] == 3, rec["iterations"]
 
 
+def test_a_retried_attempt_that_adopts_a_prior_valid_commit_needs_no_commit_of_its_own(
+        tmp_path: Path) -> None:
+    """Item 229 -- the build-01/counsel-03/build-02 race this item answers:
+    a build whose start_sha already carries a prior attempt's valid
+    commit, inherited from history rather than made by this invocation,
+    is not empty just because this attempt commits nothing of its own.
+    The comparison is against the approval, not this attempt's own
+    start_sha."""
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+    approval_sha = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                                  capture_output=True, text=True, check=True).stdout.strip()
+    # a prior attempt's own valid commit, already on the branch before
+    # this invocation's start_sha -- exactly what build-01 left behind
+    # once its own record, not its commit, was discarded.
+    (root / "built.txt").write_text("built\n")
+    subprocess.run(["git", "-C", str(root), "add", "built.txt"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "a prior attempt's own valid commit"],
+                   check=True)
+
+    run = run_attavo(root, "build", "1", env={"ATTAVO_FIXTURE_NO_COMMIT": "1"})
+    assert run.returncode == 0, run.stdout + run.stderr
+    rec = latest_build(root)
+    assert rec["status"] == "pass", rec
+    assert rec["sha"] == rec["start_sha"], rec
+    assert rec["sha"] != approval_sha, rec
+    assert rec["iterations"] == 1, rec
+
+
 def test_an_empty_iteration_is_fed_back_and_a_later_commit_passes(tmp_path: Path) -> None:
     """The loop is kept: an executor that answers done without a commit on
     its first iteration is told so and iterates; a commit on the next

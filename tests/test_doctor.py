@@ -948,21 +948,36 @@ def test_doctor_refuses_a_drive_table_without_attempts(tmp_path: Path) -> None:
 # over an attested item whose build committed nothing. ---
 
 
-def _four_stage_item(root: Path, build: dict[str, Any]) -> str:
-    """One item, four records, merged --no-ff; returns the merge sha."""
+def _head(root: Path) -> str:
+    return subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True,
+                          text=True, check=True).stdout.strip()
+
+
+def _four_stage_item(root: Path, approval_sha: str, *, change: bool) -> tuple[str, str]:
+    """One item, four records, merged --no-ff; returns (merge_sha, build_sha).
+    change=True lands a real content commit before the records, so the
+    tree genuinely differs from approval_sha outside records/; change=False
+    leaves the tree exactly as approval_sha left it -- item 227's own
+    build, and item 229's own fix for a retried attempt that adds no
+    commit of its own but already carries one."""
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "-b", "attavo/1-x"], check=True)
+    if change:
+        (root / "changed.txt").write_text("the item's own change\n")
+        commit_all(root, "the item's own change")
+    build_sha = _head(root)
     records = root / "records" / "1"
     records.mkdir(parents=True)
     (records / "spec-01.json").write_text(json.dumps({"status": "pass"}))
     (records / "approval-01.json").write_text(json.dumps({"approved_by": "alice"}))
-    (records / "build-01.json").write_text(json.dumps(build))
+    (records / "build-01.json").write_text(json.dumps(
+        {"status": "pass", "sha": build_sha, "start_sha": approval_sha,
+         "approval_sha": approval_sha}))
     (records / "verify-01.json").write_text(json.dumps({"status": "pass"}))
     commit_all(root, "spec, approval, build, and verify records")
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "main"], check=True)
     subprocess.run(["git", "-C", str(root), "merge", "-q", "--no-ff", "-m",
                     "Merge branch 'attavo/1-x'", "attavo/1-x"], check=True)
-    return subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True,
-                          text=True, check=True).stdout.strip()
+    return _head(root), build_sha
 
 
 def test_doctor_proof_seven_fails_on_an_attested_item_whose_build_committed_nothing(tmp_path: Path) -> None:
@@ -970,7 +985,8 @@ def test_doctor_proof_seven_fails_on_an_attested_item_whose_build_committed_noth
     root.mkdir()
     (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
     init_repo(root, "install")
-    merge = _four_stage_item(root, {"status": "pass", "sha": "abc123abc123", "start_sha": "abc123abc123"})
+    approval_sha = _head(root)
+    merge, _ = _four_stage_item(root, approval_sha, change=False)
     report = run_doctor(root)
     assert "no-attested-item-is-empty" in report, sorted(report)
     p = report["no-attested-item-is-empty"]
@@ -983,7 +999,7 @@ def test_doctor_proof_seven_holds_on_a_build_that_names_a_change_and_names_the_s
     built.mkdir()
     (built / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
     init_repo(built, "install")
-    _four_stage_item(built, {"status": "pass", "sha": "def456def456", "start_sha": "abc123abc123"})
+    _four_stage_item(built, _head(built), change=True)
     p = run_doctor(built)["no-attested-item-is-empty"]
     assert p["holds"], p["reason"]
     assert p["built"] == ["1"], p
@@ -992,13 +1008,72 @@ def test_doctor_proof_seven_holds_on_a_build_that_names_a_change_and_names_the_s
     windowed.mkdir()
     (windowed / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
     init_repo(windowed, "install")
-    merge = _four_stage_item(windowed, {"status": "pass", "sha": "abc123abc123", "start_sha": "abc123abc123"})
+    approval_sha = _head(windowed)
+    merge, _ = _four_stage_item(windowed, approval_sha, change=False)
     toml = windowed / "attavo.toml"
     toml.write_text(toml.read_text() + f'\n[doctor]\nbuilt_since = "{merge[:12]}"\n')
     commit_all(windowed, "declare the window after the specimen")
     p = run_doctor(windowed)["no-attested-item-is-empty"]
     assert p["holds"], p["reason"]
     assert p["before_window"] == ["1"] and "before the window" in p["reason"], p
+
+
+def test_doctor_proof_seven_treats_a_retried_attempt_that_adopts_a_prior_commit_as_not_empty(
+        tmp_path: Path) -> None:
+    """Item 229: a build record whose sha equals its own start_sha is not
+    empty when that tree already differs from the approval -- a retried
+    attempt whose head already carries a prior attempt's valid commit
+    owes no commit of its own (item 227's own counsel question)."""
+    root = tmp_path / "adopted_item"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+    approval_sha = _head(root)
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "-b", "attavo/1-x"], check=True)
+    (root / "changed.txt").write_text("a prior attempt's own valid commit\n")
+    commit_all(root, "a prior attempt's own valid commit")
+    retry_start_sha = _head(root)
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "spec-01.json").write_text(json.dumps({"status": "pass"}))
+    (records / "approval-01.json").write_text(json.dumps({"approved_by": "alice"}))
+    (records / "build-02.json").write_text(json.dumps(
+        {"status": "pass", "sha": retry_start_sha, "start_sha": retry_start_sha,
+         "approval_sha": approval_sha}))
+    (records / "verify-01.json").write_text(json.dumps({"status": "pass"}))
+    commit_all(root, "spec, approval, build, and verify records")
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "main"], check=True)
+    subprocess.run(["git", "-C", str(root), "merge", "-q", "--no-ff", "-m",
+                    "Merge branch 'attavo/1-x'", "attavo/1-x"], check=True)
+    p = run_doctor(root)["no-attested-item-is-empty"]
+    assert p["holds"], p["reason"]
+    assert p["built"] == ["1"], p
+
+
+def test_doctor_proof_seven_names_a_build_with_no_readable_approval_as_not_read(tmp_path: Path) -> None:
+    """Item 229: a build record whose approval_sha does not resolve in this
+    repository is counted as not readable, not failed -- an unprovable
+    build is not asserted empty."""
+    root = tmp_path / "unreadable_item"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "-b", "attavo/1-x"], check=True)
+    build_sha = _head(root)
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "spec-01.json").write_text(json.dumps({"status": "pass"}))
+    (records / "approval-01.json").write_text(json.dumps({"approved_by": "alice"}))
+    (records / "build-01.json").write_text(json.dumps(
+        {"status": "pass", "sha": build_sha, "start_sha": build_sha, "approval_sha": "f" * 40}))
+    (records / "verify-01.json").write_text(json.dumps({"status": "pass"}))
+    commit_all(root, "spec, approval, build, and verify records")
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "main"], check=True)
+    subprocess.run(["git", "-C", str(root), "merge", "-q", "--no-ff", "-m",
+                    "Merge branch 'attavo/1-x'", "attavo/1-x"], check=True)
+    p = run_doctor(root)["no-attested-item-is-empty"]
+    assert p["holds"], p["reason"]
+    assert p["not_read"] == ["1"], p
 
 
 def test_no_attested_item_is_empty() -> None:
