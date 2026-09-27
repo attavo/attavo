@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://attavo.dev/schema/manifest/2",
+  "title": "Attavo tenant manifest (attavo.toml)",
+  "description": "What a tenant declares to install Attavo: the release it pins, the executor it chose, where the governed path begins and ends, the gates it runs, and where its specs, records, and rulings live. Every key is read by a script; a key no script reads does not belong here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "attavo", "executor", "spec", "gates", "paths", "operators"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "attavo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "The Attavo release tag the tenant pins. The tenant holds no Attavo binary; the pinned action supplies it.",
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "executor": {
+      "type": "object",
+      "required": ["build"],
+      "properties": {
+        "build": {
+          "type": "string",
+          "description": "Adapter name for the build invocation. The contract is thin: spec, corpus, and branch in; commits and a report record out.",
+          "minLength": 1
+        },
+        "verify": {
+          "type": "string",
+          "description": "Adapter name for the verify invocation. Defaults to build's adapter; may differ.",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": {
+        "type": "object",
+        "description": "[executor.<adapter-name>]: that adapter's own configuration, passed through as ATTAVO_ADAPTER_CONFIG and copied verbatim into build-NN.json as adapter_config. The product does not know what an adapter's settings mean -- any keys, none required. Never put a secret in here: it lands in a record."
+      }
+    },
+    "tests": {
+      "type": "object",
+      "description": "How build finds and runs the tests for a touched path. Both keys are required together; a tenant with no [tests] table has not declared selection, and attavo build refuses to run on it.",
+      "additionalProperties": false,
+      "required": ["select", "run"],
+      "properties": {
+        "select": {
+          "type": "string",
+          "description": "A command that reads touched paths on stdin, one per line, and writes test identifiers on stdout, one per line.",
+          "minLength": 1
+        },
+        "exclude_in_executor": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Test identifiers attavo test leaves out when it runs inside an executor (ATTAVO_STAGE set): tests that need a live tenant, the network, or the process's own working directory. CI runs them."
+        },
+        "run": {
+          "type": "string",
+          "description": "A command that reads test identifiers on stdin, one per line; its exit code is the verdict.",
+          "minLength": 1
+        },
+        "call_timeout_s": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Seconds one `attavo test` run is given before its process group is ended and it exits 124. The executor's own test runs are bounded; the gate's are not."
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "description": "The tenant's own definition of done: a whole-tree check, as the tenant runs it locally. attavo build runs it each iteration, after the claims boundary, the criteria, and the selected tests -- pass requires its exit to be 0, and a non-zero exit reaches the executor as feedback. Optional; a tenant that declares none is not refused (unlike [tests], which build requires).",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The tenant's whole-tree check at the gate, run from the tenant root once per iteration on the committed tree. What is fast and decisive belongs here; what the forge runs as a required check need not be run twice.",
+          "minLength": 1
+        },
+        "probe": {
+          "type": "string",
+          "description": "A cheap command that answers whether this machine can run the checks at all, run once before a build's executor is invoked: exit 0 yes, anything else an environment refusal. When absent, attavo build asks by running [checks].command whole and reads exit 2 alone as cannot run.",
+          "minLength": 1
+        },
+        "probe_timeout_s": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Seconds [checks].probe is given; past it the build is refused as an environment stop. Required with probe: a bound the tenant did not write is a forecast."
+        }
+      },
+      "dependentRequired": {"probe": ["probe_timeout_s"]}
+    },
+    "forge": {
+      "type": "object",
+      "description": "The tenant's own commit-status and issue-tracking reads. The product names no vendor: both keys are commands the tenant supplies. Optional; attavo verify refuses without checks_command, and attavo file-findings refuses without file_issue_command, but neither key requires the other.",
+      "additionalProperties": false,
+      "properties": {
+        "checks_command": {
+          "type": "string",
+          "description": "Takes a full commit sha on argv; prints one line per check as \"<name> <conclusion>\". attavo verify runs it on the item's latest build record's sha before calling any adapter.",
+          "minLength": 1
+        },
+        "check_log_command": {
+          "type": "string",
+          "description": "Takes a sha and a check name on argv; prints that check's own failed-step log. attavo counsel runs it once per check checks_command reported as not \"success\" on the counseled record's sha, before handing the adapter ATTAVO_COUNSEL_CHECKS -- absent, counsel's own record says so (forge.read: false) rather than reading the forge as if it were green.",
+          "minLength": 1
+        },
+        "file_issue_command": {
+          "type": "string",
+          "description": "Reads one finding as JSON on stdin and files it as a tenant issue. attavo file-findings runs it once per finding in the item's latest verify record.",
+          "minLength": 1
+        },
+        "attestation_command": {
+          "type": "string",
+          "description": "Reads a merge commit sha on stdin and prints that merge's attestation statement as JSON on exit 0; nothing on a non-zero exit. The doctor's fifth proof runs it once per merged, fully-staged item to require a statement in the store.",
+          "minLength": 1
+        },
+        "sealed_since": {
+          "type": "string",
+          "description": "A commit. A merge at or before it is before the window: the tenant could not seal it (no queue, no signing workflow, or a store that held nothing yet). Defaults to the install commit; set it only for a repository that ran the product before it could seal, to the first parent of its first sealed merge, and say why in the commit that sets it.",
+          "minLength": 7
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["boundary"],
+      "properties": {
+        "boundary": {
+          "type": "object",
+          "description": "Which changes take the governed path. A change outside the boundary takes the tenant's ordinary pull-request flow, and the path ratio measures both.",
+          "additionalProperties": false,
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": {"type": "string", "minLength": 1},
+              "description": "Glob patterns; a change touching any of them is governed."
+            },
+            "labels": {
+              "type": "array",
+              "items": {"type": "string", "minLength": 1},
+              "description": "Issue labels; an issue carrying any of them is governed."
+            },
+            "max_ordinary_lines": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "A change above this many net lines is governed regardless of path or label."
+            }
+          }
+        }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "description": "Every gate the tenant runs, by name. The doctor's first proof is that each one rejects its fixture; a gate absent from this table does not exist.",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9-]*$"},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "retires"],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The script the gate runs, invoked with the tenant root as its working directory. Exit status is the verdict: non-zero rejects.",
+            "minLength": 1
+          },
+          "retires": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1},
+            "description": "What this gate replaced. A gate that retires nothing is not admitted to the table."
+          }
+        }
+      }
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["specs", "records", "rulings", "rejections"],
+      "properties": {
+        "specs": {"type": "string", "minLength": 1, "description": "Directory of specs, one per work item, named by issue number."},
+        "rejections": {"type": "string", "minLength": 1, "description": "Directory of rejection fixtures, one subdirectory per gate name. The doctor's first proof runs each gate against its fixture and requires a rejection."},
+        "records": {"type": "string", "minLength": 1, "description": "Directory of records, append-only, one subdirectory per work item named by issue number. Scripts write every file here."},
+        "rulings": {"type": "string", "minLength": 1, "description": "The tenant's rulings file, rendered read-only; the merge of a proposed amendment is the ruling."}
+      }
+    },
+    "operators": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approvers"],
+      "properties": {
+        "approvers": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Logins allowed to bind a spec's approval to a commit. `attavo approve` refuses a LOGIN not on this list."
+        }
+      }
+    },
+    "doctor": {
+      "type": "object",
+      "description": "Optional; the doctor's own read. Absent, proof three's window starts at the install commit, as it always has.",
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "Anything git rev-parse --verify resolves to a commit on main's first-parent line, at or after the install commit -- a full or abbreviated sha, a tag, a ref -- where proof three's window starts. A tenant that adopted the product on a repository with pre-existing history names the commit after which every push arrived through the queue. Resolved and checked against main's first-parent line, not trusted: a spelling that does not resolve, or a commit that is not on that line, is refused by name.",
+          "minLength": 1
+        },
+        "built_since": {
+          "type": "string",
+          "description": "Anything git rev-parse --verify resolves to a commit. Proof seven (no attested item is empty) names items merged at or before it as before the window instead of failing them: the specimen that produced the proof stays on the record without failing the tenant forever. Absent, proof seven's window is proof three's.",
+          "minLength": 1
+        }
+      }
+    },
+    "drive": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stall_after_s": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "seconds without a new event past which a live invocation is hung; attavo drive --recover terminates and records it"
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "R3: attempts a stage may spend before the item is a person's; 3 when absent"
+        },
+        "retry_after_s": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "R3: seconds a transient stop waits before its next attempt; 300 when absent"
+        },
+        "build": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ceiling_s": {"type": "integer", "minimum": 1, "description": "R3: wall clock past which a live build is hung by its ceiling"}
+          }
+        },
+        "verify": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ceiling_s": {"type": "integer", "minimum": 1, "description": "R3: wall clock past which a live review is hung by its ceiling"}
+          }
+        }
+      }
+    }
+  }
+}
