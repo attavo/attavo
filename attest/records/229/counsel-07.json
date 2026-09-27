@@ -1,0 +1,90 @@
+{
+  "sha": "34a5594f75023d2a8e6acfc176e7014e966cfce5",
+  "record_stage": "build",
+  "record": "build-05",
+  "at": "2026-09-27T18:17:10Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 175341,
+    "output": 2069
+  },
+  "cost_usd": null,
+  "wall_clock_s": 54.268,
+  "status": "done",
+  "class": "question",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "/Users/davidbean/Projects/attest/adapters/claude-code/run",
+      "symbol": "build_instruction",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/attavo/build.py",
+      "symbol": "cmd_build",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/attavo/stops.py",
+      "symbol": "derive_stop",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "Do not wait on build-05's background test: it was killed when the executor invocation ended, so it cannot now produce a result. Retry the build. The next executor should run `attavo test 229`, remain in the invocation until it completes or reaches its declared timeout, and answer `done` when the selected tests pass; the product will then run the gates. No new commit is owed merely because this is a retry: HEAD already contains the prior attempt's implementation, and the specification expressly permits a retried attempt to adopt valid prior-attempt commits. The question does not change the criteria, and every forge check on the stopped SHA succeeded.",
+    "patch": null,
+    "question": null,
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": [
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "question": null,
+  "record_version": 3,
+  "item": "229",
+  "product_version": "v0.29.0-10-gdae6d76",
+  "product_pin": "v0.29.0"
+}
