@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://attavo.dev/schema/records/build/9",
+  "title": "attavo build record (build-NN.json)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record_version", "item", "sha", "start_sha", "spec_sha", "approval_sha", "at", "adapter",
+    "adapter_config", "executor_identity", "reports", "adapter_version",
+    "model", "model_version", "iterations", "criteria", "selected_tests",
+    "checks", "tokens", "cost_usd", "wall_clock_s", "status", "refusal",
+    "halted", "stop", "product_version", "product_pin"
+  ],
+  "properties": {
+    "record_version": {"type": "integer", "minimum": 1},
+    "item": {"type": "string", "minLength": 1},
+    "sha": {"type": "string", "minLength": 1},
+    "start_sha": {"type": "string", "minLength": 1},
+    "spec_sha": {"type": ["string", "null"]},
+    "approval_sha": {"type": ["string", "null"]},
+    "at": {"type": "string", "minLength": 1},
+    "adapter": {"type": "string", "minLength": 1},
+    "adapter_config": {
+      "type": "object",
+      "description": "Copied verbatim from [executor.<adapter>]; shape is the adapter's own contract, not this schema's."
+    },
+    "executor_identity": {
+      "type": "object",
+      "description": "Set by the product, never the tenant's git config (issue #33); every commit between start_sha and sha must carry it.",
+      "additionalProperties": false,
+      "required": ["name", "email"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "email": {"type": "string", "minLength": 1}
+      }
+    },
+    "reports": {
+      "type": "array",
+      "description": "Field names adapters/<name>/conformance.json declares this adapter can supply with a real value (vendor independence, 2026-09-09 ruling) -- [] when the adapter declares no conformance.json. Dollars are never summed across adapters; a field absent here renders as not reported by this executor, never zero or blank.",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "adapter_version": {"type": ["string", "null"]},
+    "model": {"type": ["string", "null"]},
+    "model_version": {"type": ["string", "null"]},
+    "iterations": {"type": "integer", "minimum": 1},
+    "criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "exit"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "exit": {"type": "integer"}
+        }
+      }
+    },
+    "selected_tests": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["select", "run", "count", "exit"],
+      "properties": {
+        "select": {"type": "string", "minLength": 1},
+        "run": {"type": "string", "minLength": 1},
+        "count": {"type": "integer", "minimum": 0},
+        "exit": {"type": "integer"}
+      }
+    },
+    "checks": {
+      "type": ["object", "null"],
+      "description": "Null when the manifest declares no [checks] table.",
+      "additionalProperties": false,
+      "required": ["command", "exit"],
+      "properties": {
+        "command": {"type": "string", "minLength": 1},
+        "exit": {"type": "integer"}
+      }
+    },
+    "tokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "output"],
+      "properties": {
+        "input": {"type": "integer", "minimum": 0},
+        "output": {"type": "integer", "minimum": 0}
+      }
+    },
+    "cost_usd": {
+      "type": ["number", "null"],
+      "description": "The tool's list-price meter, from the adapter's own report. Billed only when the build ran under adapter_config.auth = \"api\"; under auth = \"subscription\" this figure is a measure, not a bill -- usage is included in the operator's plan."
+    },
+    "wall_clock_s": {"type": "number", "minimum": 0},
+    "status": {"type": "string", "enum": ["pass", "refused", "halted", "failed"]},
+    "refusal": {"type": ["string", "null"]},
+    "halted": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["question"],
+      "properties": {
+        "question": {"type": ["string", "null"]}
+      }
+    },
+    "stop": {
+      "type": ["object", "null"],
+      "description": "Non-null exactly when status is not \"pass\" (issue #89): what class of stop this is and whose it is, derived by the record writer from the refusal, halted, and log it already has -- never a fresh read of anything.",
+      "additionalProperties": false,
+      "required": ["class", "provenance", "detail"],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": ["non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
+                   "ceiling", "claims-boundary", "repeated-act", "unclassed", "question",
+                   "environment", "gate", "died", "hung", "transient", "returned", "empty"]
+        },
+        "signature": {
+          "type": ["string", "null"],
+          "description": "R3: the failure's signature, the detail or last event with every run of digits removed; equal between two attempts means the same failure"
+        },
+        "bound": {
+          "type": ["string", "null"],
+          "enum": ["stall", "ceiling", null],
+          "description": "R3: the bound a hung invocation crossed, or null"
+        },
+        "provenance": {"type": "string", "enum": ["product", "tenant", "executor", "spec"]},
+        "detail": {
+          "type": ["string", "null"],
+          "description": "Populated for class \"unclassed\" (the log's last line, capped at 200 characters), class \"question\" (the halt's own question, its first line only), class \"environment\" ([checks].command's last output line, capped at 200 characters), and class \"gate\" (a refused spec-gate record's own refusal string, issue #137 -- never persisted on an actual build record; read here only because stop_class_enum sources the enum from this schema); null for every other class, whose evidence already lives in refusal, halted, or the log itself."
+        }
+      }
+    },
+    "retry_of": {
+      "type": ["string", "null"],
+      "description": "R3: the stem of the attempt this one retries, or null on a first attempt"
+    },
+    "steer": {
+      "type": ["string", "null"],
+      "description": "R3: the counsel or ruling record whose text this attempt was handed, or null"
+    },
+    "product_version": {"type": "string", "minLength": 1},
+    "product_pin": {"type": ["string", "null"]}
+  }
+}

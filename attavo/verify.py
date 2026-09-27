@@ -12,6 +12,7 @@ from typing import Any, cast
 
 from attavo.build import (
     adapter_reports,
+    build_is_empty,
     merge_adapter_config,
     resolve_adapter,
     split_adapter_stdout,
@@ -25,6 +26,7 @@ from attavo.records import (
     parse_attempts,
     write_record,
 )
+from attavo.spec import parse_spec
 from attavo.stops import counsel_record_for, derive_stop, signature_of
 
 # --- verify: the forge's own read first, a judge only once it is green ---
@@ -201,6 +203,27 @@ def cmd_verify(argv: list[str]) -> int:
         print(f"attavo verify: refused: latest build record is "
               f"{latest_build.get('status')!r}, not pass")
         return 1
+    # A build is empty when its tree, restricted to the spec's own
+    # claims, is the approved tree there -- asked against the approval,
+    # not start_sha, so a build that adopted a prior attempt's valid
+    # commits is not empty just because this attempt owed no commit of
+    # its own (item 229). sha == start_sha (the shape a first attempt's
+    # own empty build always has, and the shape item 227's own build
+    # was) is kept as a fallback for a record with no approval_sha to
+    # ask at all.
+    build_sha, build_start_sha = latest_build.get("sha"), latest_build.get("start_sha")
+    build_approval_sha = latest_build.get("approval_sha")
+    spec_dir = root / specs_rel / item_id
+    parsed, _ = parse_spec(spec_dir / "spec.md")
+    claims = parsed["claims"] if parsed else []
+    empty = (build_is_empty(root, build_approval_sha, build_sha, claims)
+            if build_approval_sha else build_sha == build_start_sha)
+    if empty:
+        detail = (f" (sha equals start_sha {str(build_sha)[:12]})"
+                  if build_sha == build_start_sha else "")
+        print(f"attavo verify: refused: the latest build record names no change{detail}; "
+              "nothing to review")
+        return 1
 
     forge_cfg = m.get("forge") or {}
     checks_command = forge_cfg.get("checks_command")
@@ -211,7 +234,6 @@ def cmd_verify(argv: list[str]) -> int:
     build_sha = latest_build["sha"]
     build_record_path = latest_attempt_path(item_records_dir, "build")
     approval_sha = latest_build.get("approval_sha")
-    spec_dir = root / specs_rel / item_id
     started = time.monotonic()
     head_sha = git(root, "rev-parse", "HEAD").strip()
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from attavo.attest import check_attest_chain, item_time_and_cost
+from attavo.build import build_is_empty
 from attavo.common import (
     MANIFEST,
     Proof,
@@ -19,6 +20,7 @@ from attavo.common import (
     read_manifest,
 )
 from attavo.records import RECORD_RE, load_records, parse_attempts
+from attavo.spec import parse_spec
 from attavo.stops import STOP_CLASSES, STOP_PROVENANCES, STOP_STAGES, gate_stop
 
 # --- doctor's three proofs ---
@@ -823,6 +825,93 @@ def proof_every_attested_item_is_sealed(root: Path, m: dict[str, Any] | None) ->
                  not_merged=not_merged, not_read=not_read)
 
 
+def proof_no_attested_item_is_empty(root: Path, m: dict[str, Any] | None) -> Proof:
+    """Proof seven (item 227). Every merged, fully-staged item's passing
+    build names a change: its tree, restricted to the item's own spec
+    claims, differs from the approved tree there (item 229 -- asked
+    against the approval, not the build's own start_sha, so a build
+    that adopted a prior attempt's valid commits is not empty just
+    because that attempt owed no commit of its own; scoped to claims,
+    not "everything outside paths.records", so a commit that lands
+    between approval and a later attempt's start but touches no
+    claimed path never rescues or defeats the comparison on its own
+    account). Item 227 was specified, approved, built by one
+    invocation, judged by another, merged and sealed, and its build
+    committed nothing -- the executor left the stub in the working tree,
+    the gate read the tree, and main received the spec and none of the
+    change. Six proofs held over it.
+
+    [doctor].built_since: merges at or before this commit are before the
+    window -- named, never failed -- so the specimen stands on every
+    doctor run without failing the tenant forever. Absent, the window is
+    proof three's. A build record whose approval cannot be resolved
+    (no approval_sha at all, or one this repository cannot read) is
+    named as not readable, not failed."""
+    p = Proof("no-attested-item-is-empty", "every attested item's build names a change")
+    if m is None:
+        return p.fail(f"no {MANIFEST} at {root}; no records directory is declared")
+    records_rel = m.get("paths", {}).get("records", "")
+    specs_rel = m.get("paths", {}).get("specs", "")
+    records_dir = root / records_rel
+    if not records_dir.is_dir():
+        return p.fail(f"no records directory under {records_dir}")
+    items = load_records(records_dir)
+    complete = [item for item, stages in sorted(items.items()) if all(s in stages for s in STAGES)]
+    since = (m.get("doctor") or {}).get("built_since")
+    if not (isinstance(since, str) and since.strip()):
+        try:
+            since = proof_window_start(root, m)[1]
+        except WindowRefused as exc:
+            return p.fail(str(exc))
+    else:
+        try:
+            since = git(root, "rev-parse", "--verify", f"{since}^{{commit}}").strip()
+        except RuntimeError:
+            return p.fail(f"[doctor] built_since {since} does not resolve to a commit")
+    merges, refusal = _merges_reachable(root)
+    if refusal:
+        return p.fail(refusal)
+    built: list[str] = []
+    before_window: list[str] = []
+    not_merged: list[str] = []
+    not_read: list[str] = []
+    empty: list[str] = []
+    for item in complete:
+        merge_sha, _ = merge_introducing_records(root, records_rel, item, STAGES, merges=merges)
+        if merge_sha is None:
+            not_merged.append(item)
+            continue
+        if _is_ancestor(root, merge_sha, since):
+            before_window.append(item)
+            continue
+        build = items[item]["build"]
+        sha, approval_sha = build.get("sha"), build.get("approval_sha")
+        if not sha or not approval_sha:
+            not_read.append(item)
+            continue
+        spec_md = root / specs_rel / item / "spec.md"
+        claims: list[str] = []
+        if spec_md.is_file():
+            parsed, _ = parse_spec(spec_md)
+            claims = parsed["claims"] if parsed else []
+        is_empty = build_is_empty(root, approval_sha, sha, claims)
+        if is_empty is None:
+            not_read.append(item)
+        elif is_empty:
+            empty.append(f"item {item} merged at {merge_sha[:12]}: build names no "
+                         "claimed change; nothing was built")
+        else:
+            built.append(item)
+    if empty:
+        return p.fail("; ".join(empty), built=built, before_window=before_window,
+                      not_merged=not_merged, not_read=not_read)
+    window = f" at {since[:12]}" if before_window else ""
+    return p.hold(f"{len(built)} built, {len(before_window)} before the window{window}, "
+                  f"{len(not_read)} without a readable approval, {len(not_merged)} not merged",
+                  built=built, before_window=before_window, not_merged=not_merged,
+                  not_read=not_read)
+
+
 def doctor(root: Path) -> list[Proof]:
     m = read_manifest(root)
     return [proof_every_gate_rejects(root, m),
@@ -830,7 +919,8 @@ def doctor(root: Path) -> list[Proof]:
             proof_no_commit_lacks_record(root, m),
             proof_no_stop_lacks_cause(root, m),
             proof_no_invocation_lacks_record(root, m),
-            proof_every_attested_item_is_sealed(root, m)]
+            proof_every_attested_item_is_sealed(root, m),
+            proof_no_attested_item_is_empty(root, m)]
 
 
 def cmd_doctor(argv: list[str]) -> int:

@@ -1,0 +1,60 @@
+{
+  "sha": "a28cd4e2b1dbea71c499eed07d2fac9cf45d14b9",
+  "start_sha": "a28cd4e2b1dbea71c499eed07d2fac9cf45d14b9",
+  "spec_sha": "88a93d33aaa09d2f56720f64238a13c401a7eb36",
+  "approval_sha": "3dcf3698ee55b19e7998dbcef123ea4c42c5354d",
+  "at": "2026-09-27T18:26:30Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.283 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "an-executor-that-commits-nothing-does-not-pass.sh",
+      "exit": 0
+    },
+    {
+      "name": "a-passing-build-record-that-names-no-change-is-refused-by-verify-and-the-doctor.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed --deselect tests/test_doctor.py::test_no_attested_item_is_empty",
+    "count": 0,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 93703,
+    "output": 735
+  },
+  "cost_usd": 0.07336200000000001,
+  "wall_clock_s": 24.257,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "retry_of": "build-05",
+  "steer": "counsel-08",
+  "stop": null,
+  "record_version": 8,
+  "item": "229",
+  "product_version": "v0.29.0-10-gdae6d76",
+  "product_pin": "v0.29.0"
+}

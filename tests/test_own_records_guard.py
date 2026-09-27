@@ -82,7 +82,7 @@ def unmarked_own_records_readers(tests_dir: Path, skip: str,
 
 
 def test_the_test_job_deselects_the_doctor_tests_the_doctor_job_runs() -> None:
-    assert len(deselected_by_the_test_job()) == 5, deselected_by_the_test_job()
+    assert len(deselected_by_the_test_job()) == 6, deselected_by_the_test_job()
 
 
 def test_no_unmarked_test_reads_this_repositorys_own_records() -> None:

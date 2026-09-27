@@ -1,0 +1,51 @@
+{
+  "sha": "34a5594f75023d2a8e6acfc176e7014e966cfce5",
+  "start_sha": "34a5594f75023d2a8e6acfc176e7014e966cfce5",
+  "spec_sha": "88a93d33aaa09d2f56720f64238a13c401a7eb36",
+  "approval_sha": "3dcf3698ee55b19e7998dbcef123ea4c42c5354d",
+  "at": "2026-09-27T18:16:16Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.283 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [],
+  "selected_tests": null,
+  "checks": null,
+  "tokens": {
+    "input": 1118518,
+    "output": 14263
+  },
+  "cost_usd": 0.5838324000000001,
+  "wall_clock_s": 456.055,
+  "status": "halted",
+  "refusal": null,
+  "halted": {
+    "question": "The build-05 test run (attavo test 229) is still executing in the background and hasn't produced output yet. Should I continue waiting for it to finish before deciding whether to answer done, or is there something else you'd like me to check in the meantime?"
+  },
+  "retry_of": "build-04",
+  "steer": "counsel-06",
+  "stop": {
+    "class": "question",
+    "provenance": "spec",
+    "detail": "The build-05 test run (attavo test 229) is still executing in the background and hasn't produced output yet. Should I continue waiting for it to finish before deciding whether to answer done, or is there something else you'd like me to check in the meantime?",
+    "signature": "The build- test run (attavo test ) is still executing in the background and hasn't produced output yet. Should I continue waiting for it to finish before deciding whether to answer done, or is there something else you'd like me to check in the meantime?",
+    "bound": null
+  },
+  "record_version": 8,
+  "item": "229",
+  "product_version": "v0.29.0-10-gdae6d76",
+  "product_pin": "v0.29.0"
+}

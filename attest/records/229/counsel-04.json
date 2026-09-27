@@ -1,0 +1,90 @@
+{
+  "sha": "be9ac7f6ac7e0e23b8d01fb7c3bdb33b37713f60",
+  "record_stage": "build",
+  "record": "build-02",
+  "at": "2026-09-27T15:26:56Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 206875,
+    "output": 1930
+  },
+  "cost_usd": null,
+  "wall_clock_s": 50.458,
+  "status": "done",
+  "class": "question",
+  "verdict": "person",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "attest/specs/229/spec.md",
+      "symbol": "An empty build is halted",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/attavo/build.py",
+      "symbol": "cmd_build",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/tests/test_retry.py",
+      "symbol": "test_counsels_verdict_routes_the_next_pass",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": null,
+    "patch": null,
+    "question": "Should a retried build whose start_sha already contains the prior attempt\u2019s valid executor commit be allowed to adopt that commit, or must every build invocation create a new substantive commit?",
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": [
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "question": null,
+  "record_version": 3,
+  "item": "229",
+  "product_version": "v0.29.0-10-gdae6d76",
+  "product_pin": "v0.29.0"
+}

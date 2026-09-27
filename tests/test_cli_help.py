@@ -84,3 +84,13 @@ def test_help_names_the_test_modes_the_cache_and_the_transport_refusal() -> None
     assert "attavo test [N] [--all | <test>...] [--fresh]" in run.stdout, run.stdout
     for phrase in ("--fresh", "unchanged", "exclude_in_executor", "ATTAVO_STAGE", "refuse"):
         assert phrase in run.stdout, phrase
+
+
+def test_help_names_the_seventh_proof_and_the_empty_stop() -> None:
+    """Item 227: the doctor's seventh proof and the empty stop class. Red on
+    the tree and on the stub: the words are the build's."""
+    run = subprocess.run([sys.executable, str(ATTAVO), "--help"],
+                         capture_output=True, text=True, check=False)
+    assert run.returncode == 0
+    for phrase in ("no attested item is empty", "built_since", "committed nothing", "reads the commit"):
+        assert phrase in run.stdout, phrase

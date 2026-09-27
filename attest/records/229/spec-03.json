@@ -1,0 +1,24 @@
+{
+  "sha": "88a93d33aaa09d2f56720f64238a13c401a7eb36",
+  "spec_sha": "88a93d33aaa09d2f56720f64238a13c401a7eb36",
+  "at": "2026-09-27T16:45:24Z",
+  "status": "built",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "an-executor-that-commits-nothing-does-not-pass.sh",
+      "on_tree": 0,
+      "on_stub": 0
+    },
+    {
+      "name": "a-passing-build-record-that-names-no-change-is-refused-by-verify-and-the-doctor.sh",
+      "on_tree": 0,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "229",
+  "product_version": "v0.29.0",
+  "product_pin": "v0.29.0"
+}

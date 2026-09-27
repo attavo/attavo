@@ -211,6 +211,11 @@
           "type": "string",
           "description": "Anything git rev-parse --verify resolves to a commit on main's first-parent line, at or after the install commit -- a full or abbreviated sha, a tag, a ref -- where proof three's window starts. A tenant that adopted the product on a repository with pre-existing history names the commit after which every push arrived through the queue. Resolved and checked against main's first-parent line, not trusted: a spelling that does not resolve, or a commit that is not on that line, is refused by name.",
           "minLength": 1
+        },
+        "built_since": {
+          "type": "string",
+          "description": "Anything git rev-parse --verify resolves to a commit. Proof seven (no attested item is empty) names items merged at or before it as before the window instead of failing them: the specimen that produced the proof stays on the record without failing the tenant forever. Absent, proof seven's window is proof three's.",
+          "minLength": 1
         }
       }
     },

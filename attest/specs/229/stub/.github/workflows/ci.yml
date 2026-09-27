@@ -1,0 +1,186 @@
+name: CI
+
+# issue #210: push runs on main only. An item's branch always has an open
+# pull request, so every branch push was a second run of what pull_request
+# already ran. A branch with no pull request gets no CI.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+
+jobs:
+  # issue #210: on a pull request, a head whose commits since a green run
+  # touch only the records directory inherits that run's `test` instead of
+  # running the suite again; the tests that read the repository's own
+  # records (@pytest.mark.own_records) still run. scripts/ci_inherit.py
+  # decides, and every doubt (no concluded success to inherit, an API read
+  # that fails, a shallow clone, a merge commit) is run-in-full. merge_group
+  # never reaches the script: the queue's run is the law and is never
+  # inherited. The inherit step's output is 'true' only when the script
+  # says so; anything else, including the step not running, runs the suite.
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: inherit test from a records-only head
+        id: inherit
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/ci_inherit.py test
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: pip install pytest jsonschema
+      - name: pytest, only the tests that read this repository's own records
+        if: steps.inherit.outputs.inherit == 'true'
+        run: python3 -m pytest tests -q -m own_records
+      # issue #181: the suite's own clock is bounded. --durations=5 puts the
+      # five slowest tests on every run's log; the last step fails the job
+      # when the pytest step took more than 180 s (the suite's baseline is
+      # about 65 s), naming the elapsed seconds.
+      - name: pytest start
+        if: steps.inherit.outputs.inherit != 'true'
+        run: echo "PYTEST_START=$(date +%s)" >> "$GITHUB_ENV"
+      - name: pytest
+        if: steps.inherit.outputs.inherit != 'true'
+        run: >
+          python3 -m pytest tests -q --durations=5
+          --deselect tests/test_doctor.py::test_every_gate_rejects
+          --deselect tests/test_doctor.py::test_one_item_traversed_every_stage
+          --deselect tests/test_doctor.py::test_no_commit_lacks_a_record
+          --deselect tests/test_doctor.py::test_no_stop_lacks_cause
+          --deselect tests/test_doctor.py::test_every_attested_item_is_sealed
+          --deselect tests/test_doctor.py::test_no_attested_item_is_empty
+      - name: pytest end
+        if: steps.inherit.outputs.inherit != 'true'
+        run: echo "PYTEST_END=$(date +%s)" >> "$GITHUB_ENV"
+      - name: the suite's wall clock is at most 180 s
+        if: steps.inherit.outputs.inherit != 'true'
+        run: |
+          elapsed=$((PYTEST_END - PYTEST_START))
+          echo "pytest step took ${elapsed} s"
+          if [ "$elapsed" -gt 180 ]; then
+            echo "::error::the pytest step took ${elapsed} s, over the 180 s bound"
+            exit 1
+          fi
+
+  # issue #189: mypy --strict over attavo/, bin/attavo, and tests/
+  # (pyproject.toml's [tool.mypy] names the files and the interpreter; pytest
+  # and jsonschema are installed for the tests' own imports). setup-python pins the
+  # same python_version that table names; tests/test_typecheck_pin.py fails
+  # when the two disagree. mypy itself is pinned so a new release's checks
+  # never turn a required context red on a commit that did not change.
+  # issue #210: the type check reads attavo/, bin/attavo, and tests/, never
+  # the records directory, so a records-only pull request head inherits a
+  # concluded success of it the way `test` does (see the note above `test`).
+  typecheck:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: inherit typecheck from a records-only head
+        id: inherit
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/ci_inherit.py typecheck
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: install mypy and the tests' own imports
+        if: steps.inherit.outputs.inherit != 'true'
+        run: pip install mypy==2.3.1 pytest jsonschema types-jsonschema==4.26.0.20260518
+      - name: mypy
+        if: steps.inherit.outputs.inherit != 'true'
+        run: python3 -m mypy
+
+  # Since #103, this repository is Attavo's own second tenant (attavo.toml
+  # at the root) and the doctor's five proofs run for real, not under
+  # || true. #106's first item merged (fdd1981, v0.18.0), so the five
+  # proofs hold on main and this job reports on pull requests and merge
+  # groups too -- where a refusal is cheap. It does not report on a
+  # branch push: a branch's own boundary commits precede their records,
+  # so proof three (no commit lacks a record) cannot hold there (#113).
+  doctor:
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: read
+    env:
+      # issue #158, amended after build-05: every step that runs the
+      # doctor -- the pytest step and the bin/attavo invocation both --
+      # reads the attestation store through [forge].attestation_command,
+      # which shells out to `gh`. A token scoped to only the last step
+      # left the pytest step reading an unauthenticated store, which
+      # exits 2 (not read), not the 404 (unsealed) the proof expects.
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # issue #169: _merges_reachable reads refs/remotes/origin/HEAD to
+      # name the default branch without hard-coding "main"; actions/checkout
+      # does not set it, so every trigger this job runs on -- pull_request,
+      # merge_group, and push -- needs it set explicitly, after the fetch.
+      - run: git remote set-head origin -a
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest jsonschema
+      - name: doctor's five proofs
+        run: python3 -m pytest tests/test_doctor.py -q -k "every_gate_rejects or one_item_traversed_every_stage or no_commit_lacks_a_record or no_stop_lacks_cause or every_attested_item_is_sealed"
+      - run: python3 bin/attavo doctor .
+
+  action-self-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./
+      - run: test "$ATTAVO_ATTESTATION_PREDICATE_TYPE" = "$(python3 -c "import json; print(json.load(open('schema/attestation.schema.json'))['\$id'])")"
+      - run: attavo spec-gate
+        working-directory: tests/fixtures/valid
+        env:
+          ATTAVO_ITEM: "1"
+
+  # merge_group added alongside pull_request (#103): the merge queue
+  # requires every required check to report on the merge group, not only
+  # on the pull request that entered it (tenant zero's #662 was the same
+  # class of miss, on pull_request only). github.base_ref is empty on a
+  # merge_group event; the target branch comes from
+  # github.event.merge_group.base_ref there instead.
+  schema-version:
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Resolve the target branch
+        id: base
+        run: |
+          if [ "${{ github.event_name }}" = "merge_group" ]; then
+            branch="${{ github.event.merge_group.base_ref }}"
+            branch="${branch#refs/heads/}"
+          else
+            branch="${{ github.base_ref }}"
+          fi
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+      - run: git fetch --no-tags origin "${{ steps.base.outputs.branch }}"
+      - run: python3 scripts/check_record_schema_version.py "origin/${{ steps.base.outputs.branch }}"

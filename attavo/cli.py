@@ -54,6 +54,18 @@ tenant root and exits 1 until every proof holds:
                              [forge].attestation_command exiting 2 means
                              the store itself could not be read, reported
                              as not_read by item and never as unsealed
+  6. no-attested-item-is-empty
+                             no attested item is empty: every merged,
+                             fully-staged item's passing build record
+                             names a change, sha not equal to start_sha.
+                             [doctor].built_since names a commit at or
+                             before which merges are named as before the
+                             window instead of failed, so the specimen
+                             that motivated this proof stands on the
+                             record without failing the tenant forever;
+                             absent, the window is proof three's. A build
+                             record with no start_sha is counted as not
+                             readable, never as failed.
 
 Nothing in doctor is a gate. The doctor reads; it never writes and it never
 blocks a merge by itself. It is what CI runs to say whether the product
@@ -85,11 +97,21 @@ never supplies is a defect the conformance suite catches rather than a
 silent null -- then runs the criteria, the
 tests [tests].select and [tests].run name for the touched paths, and --
 when the manifest declares [checks].command -- the tenant's own
-whole-tree check, from the tenant root. pass requires every criterion,
-the test run, and the tenant's checks (if declared) to exit 0; any
-non-zero exit iterates, with the failure as feedback, up to a fixed
-budget. [checks] is optional; a tenant that declares none is not
-refused. Before the adapter is invoked it asks whether this machine can
+whole-tree check, all three run in a detached worktree of HEAD and
+never in the executor's own directory: the gate reads the commit, not
+the tree, so a path written and never committed cannot pass a
+criterion, a test, or a check on the executor's behalf. An iteration
+that ends with HEAD unchanged since start_sha is told, in the feed and
+the log, that the executor committed nothing and that the gate reads
+the commit, and iterates; the last iteration ending that way halts the
+build instead of failing it, stop class empty, provenance executor,
+detail naming that the executor committed nothing and how many paths
+it left modified or untracked. pass requires every criterion,
+the test run, and the tenant's checks (if declared) to exit 0, and HEAD
+to have moved since start_sha; any non-zero exit iterates, with the
+failure as feedback, up to a fixed budget. [checks] is optional; a
+tenant that declares none is not refused. Before the adapter is invoked
+it asks whether this machine can
 run the checks -- of [checks].probe, run once inside [checks].probe_timeout_s
 (exit 0 yes; anything else, or the bound, an environment refusal), or,
 for a tenant that declares no probe, by running [checks].command whole

@@ -1,0 +1,90 @@
+{
+  "sha": "15a774515f5aae7087031fe02c9b95297bb77ba3",
+  "record_stage": "spec",
+  "record": "spec-01",
+  "at": "2026-09-27T14:58:42Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 132845,
+    "output": 1694
+  },
+  "cost_usd": null,
+  "wall_clock_s": 42.463,
+  "status": "done",
+  "class": "unclassed",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "attest/specs/229/spec.md",
+      "symbol": "The gate reads the commit; an empty build is halted",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "attavo/build.py",
+      "symbol": "gate_checkout",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "tests/test_build.py",
+      "symbol": "test_the_gate_reads_the_commit_and_an_executor_that_commits_nothing_is_halted_empty",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "Progress is promising but the build is not complete. The executor committed the implementation at 15a774515f5a, so this invocation is not empty, and the diff contains the requested gate checkout, empty-build protections, verify refusal, seventh doctor proof, schemas, help, manifest, workflow, fixture, and tests. The spec gate passed both criteria against the stub. All seven forge checks shown are green, but they belong to the earlier invocation-marker commit 9bde19df003a; the graph reports no checks yet for the implementation commit. There is still only build-01.started\u2014no build-01.json or build log\u2014so no completed build result exists yet and verification has not begun.",
+    "patch": null,
+    "question": null,
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": [
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "question": "how is it going so far?",
+  "record_version": 3,
+  "item": "229",
+  "product_version": "v0.29.0-10-gdae6d76",
+  "product_pin": "v0.29.0"
+}

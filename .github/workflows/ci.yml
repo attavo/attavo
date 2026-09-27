@@ -57,6 +57,7 @@ jobs:
           --deselect tests/test_doctor.py::test_no_commit_lacks_a_record
           --deselect tests/test_doctor.py::test_no_stop_lacks_cause
           --deselect tests/test_doctor.py::test_every_attested_item_is_sealed
+          --deselect tests/test_doctor.py::test_no_attested_item_is_empty
       - name: pytest end
         if: steps.inherit.outputs.inherit != 'true'
         run: echo "PYTEST_END=$(date +%s)" >> "$GITHUB_ENV"

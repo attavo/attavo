@@ -58,7 +58,9 @@ def test_manifest_declares_every_key_issue_103_lists() -> None:
     # default), which already holds: the one first-parent commit after
     # it is this issue's own merge, an ordinary merge touching no
     # boundary path. Verified by simulating the merge locally.
-    assert "doctor" not in m
+    # Item 227 added [doctor].built_since, the window for proof seven; [doctor].from
+    # stays absent for the reason above.
+    assert set(m.get("doctor") or {}) == {"built_since"}, m.get("doctor")
     assert m["forge"]["checks_command"]
     assert m["forge"]["file_issue_command"]
     paths = m["spec"]["boundary"]["paths"]
@@ -76,6 +78,8 @@ DESELECT_FLAGS = (
     "--deselect tests/test_doctor.py::test_one_item_traversed_every_stage",
     "--deselect tests/test_doctor.py::test_no_commit_lacks_a_record",
     "--deselect tests/test_doctor.py::test_no_stop_lacks_cause",
+    "--deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
+    "--deselect tests/test_doctor.py::test_no_attested_item_is_empty",
 )
 
 

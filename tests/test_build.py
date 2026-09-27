@@ -912,3 +912,79 @@ def test_build_proceeds_when_checks_command_exits_1_on_the_approved_tree(tmp_pat
     assert rec["model"] == "fixture"
     assert rec["status"] == "failed"
     assert rec["checks"] == {"command": "exit 1", "exit": 1}
+
+
+# --- an empty build is not a pass (item 227): the executor copied the
+# change into the working tree, committed nothing, and answered done; the
+# gate read the tree and passed; the review passed; the merge queue sealed
+# an item whose change did not exist. Written red first against v0.29.0.
+
+
+def test_the_gate_reads_the_commit_and_an_executor_that_commits_nothing_is_halted_empty(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+    run = run_attavo(root, "build", "1", env={"ATTAVO_FIXTURE_NO_COMMIT": "1"})
+    assert run.returncode == 3, run.stdout + run.stderr
+    rec = latest_build(root)
+    assert rec["status"] == "halted", rec
+    assert rec["sha"] == rec["start_sha"], rec
+    assert (rec["stop"]["class"], rec["stop"]["provenance"]) == ("empty", "executor"), rec["stop"]
+    assert "the executor committed nothing" in rec["stop"]["detail"], rec["stop"]
+    assert "1 path(s) modified or untracked" in rec["stop"]["detail"], rec["stop"]
+    assert (root / "built.txt").is_file(), "the fixture did not leave the file in the tree"
+    assert all(c["exit"] != 0 for c in rec["criteria"]), (
+        "a criterion passed on a tree whose commit does not carry the change", rec["criteria"])
+    log = (root / "records" / "1" / "build-01.log").read_text()
+    assert "you committed nothing" in log and "the gate reads the commit, not the tree" in log, log
+    assert rec["iterations"] == 3, rec["iterations"]
+
+
+def test_a_retried_attempt_that_adopts_a_prior_valid_commit_needs_no_commit_of_its_own(
+        tmp_path: Path) -> None:
+    """Item 229 -- the build-01/counsel-03/build-02 race this item answers:
+    a build whose start_sha already carries a prior attempt's valid
+    commit, inherited from history rather than made by this invocation,
+    is not empty just because this attempt commits nothing of its own.
+    The comparison is against the approval, not this attempt's own
+    start_sha."""
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+    approval_sha = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                                  capture_output=True, text=True, check=True).stdout.strip()
+    # a prior attempt's own valid commit, already on the branch before
+    # this invocation's start_sha -- exactly what build-01 left behind
+    # once its own record, not its commit, was discarded.
+    (root / "built.txt").write_text("built\n")
+    subprocess.run(["git", "-C", str(root), "add", "built.txt"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "a prior attempt's own valid commit"],
+                   check=True)
+
+    run = run_attavo(root, "build", "1", env={"ATTAVO_FIXTURE_NO_COMMIT": "1"})
+    assert run.returncode == 0, run.stdout + run.stderr
+    rec = latest_build(root)
+    assert rec["status"] == "pass", rec
+    assert rec["sha"] == rec["start_sha"], rec
+    assert rec["sha"] != approval_sha, rec
+    assert rec["iterations"] == 1, rec
+
+
+def test_an_empty_iteration_is_fed_back_and_a_later_commit_passes(tmp_path: Path) -> None:
+    """The loop is kept: an executor that answers done without a commit on
+    its first iteration is told so and iterates; a commit on the next
+    iteration passes as before."""
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+    adapter_dir = root / "attavo" / "adapters" / "fixture"
+    adapter_dir.mkdir(parents=True)
+    run_path = adapter_dir / "run"
+    run_path.write_text('#!/bin/sh\necho built > built.txt\n'
+                        'if [ -s "$ATTAVO_FEEDBACK" ]; then git add built.txt; git commit -q -m built; fi\n'
+                        'printf \'{"status":"done","question":null,"model":"fixture","model_version":null,'
+                        '"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0}\\n\'\n')
+    run_path.chmod(0o755)
+    commit_all(root, "a tenant-side adapter that commits only once told")
+    run = run_attavo(root, "build", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    rec = latest_build(root)
+    assert (rec["status"], rec["iterations"]) == ("pass", 2), rec
+    assert rec["sha"] != rec["start_sha"]

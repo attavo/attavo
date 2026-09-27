@@ -1,0 +1,90 @@
+{
+  "sha": "98982b0acd4c7112020683a068d3bb8c34b5ec8d",
+  "record_stage": "build",
+  "record": "build-05",
+  "at": "2026-09-27T18:25:07Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 171334,
+    "output": 1816
+  },
+  "cost_usd": null,
+  "wall_clock_s": 47.943,
+  "status": "done",
+  "class": "question",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "/Users/davidbean/Projects/attest/adapters/claude-code/run",
+      "symbol": "build_instruction",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "attavo/build.py",
+      "symbol": "cmd_build",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "attavo/build.py",
+      "symbol": "build_is_empty",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "Build-06 should change nothing, should not run `attavo test 229`, should start nothing in the background, and should simply answer `done`: the implementation is already committed at 62bb414, a retry may adopt valid commits made by an earlier attempt, the executor instruction says the gate runs the criteria, selected tests, and tenant checks itself after `done`, and this attempt selects no tests; the prior whole-suite failure and build-05\u2019s background wait therefore require no executor action.",
+    "patch": null,
+    "question": null,
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": [
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "question": "build-06 will retry with your answer as its steer. Say in one paragraph what build-06 should do, given that: the implementation is complete at HEAD (62bb414 plus the record commits above it); build-04 failed only because the gate's whole-suite run included tests/test_doctor.py::test_no_invocation_lacks_record, an own-records test that reads the running build's own marker; build-05 stopped waiting on a background attavo test run that a two-minute foreground limit had pushed there; the gate selects and runs the tests itself and, against this attempt's start, selects none. Should build-06 change anything, run attavo test at all, start anything in the background, or simply answer done?",
+  "record_version": 3,
+  "item": "229",
+  "product_version": "v0.29.0-10-gdae6d76",
+  "product_pin": "v0.29.0"
+}

@@ -1,0 +1,89 @@
+{
+  "sha": "0657b17b82baf3773e355f49d942fae4e9c25906",
+  "build_sha": "a28cd4e2b1dbea71c499eed07d2fac9cf45d14b9",
+  "build_record": "build-06",
+  "approval_sha": "3dcf3698ee55b19e7998dbcef123ea4c42c5354d",
+  "at": "2026-09-27T18:34:04Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "4b1a5b38b4193b451e2d2f74ac8aa25c233bebc4",
+    "conclusions": [
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "Empty-build detection uses claimed paths instead of the approved all-paths definition",
+      "specimen": "commit 62bb4144dc49b05dab6c742651bee05fe2007777; attavo/build.py::build_is_empty, consumed by attavo/build.py, attavo/verify.py, and attavo/doctor.py",
+      "retires": "The claim-scoped replacement for the approved definition of an empty build; restores comparison of the approval tree to the recorded build tree across every path except paths.records.",
+      "rejection_test": "tests/test_build.py::test_a_change_outside_claims_but_outside_records_makes_the_build_nonempty; tests/test_verify.py::test_verify_uses_all_paths_except_records_to_decide_whether_a_build_is_empty; tests/test_doctor.py::test_proof_seven_uses_all_paths_except_records_to_decide_whether_an_attested_item_is_empty",
+      "severity": "Blocking whenever approval..build changes only paths outside the spec's claims and outside paths.records: the approved predicate reports a non-empty build, while build_is_empty reports empty and build halts, verify refuses, and proof seven fails it."
+    },
+    {
+      "title": "Criteria are executed from the executor's working tree, not from the detached gate checkout",
+      "specimen": "attavo/build.py:607, which passes spec_dir / \"criteria\" / name from the original root to run_criterion while using gate_root only as cwd",
+      "retires": "The remaining working-tree read in the build gate; closes the ability for an executor's uncommitted edit to a criterion executable to determine the gate result.",
+      "rejection_test": "tests/test_build.py::test_the_gate_executes_the_committed_criterion_not_an_uncommitted_replacement",
+      "severity": "Blocking when the executor leaves an uncommitted modification to a criterion and commits any otherwise non-empty claimed change: the detached checkout supplies the cwd, but the modified criterion outside it is executed and can turn a committed criterion failure into a pass."
+    }
+  ],
+  "tests_named": [
+    "tests/test_build.py::test_a_change_outside_claims_but_outside_records_makes_the_build_nonempty",
+    "tests/test_verify.py::test_verify_uses_all_paths_except_records_to_decide_whether_a_build_is_empty",
+    "tests/test_doctor.py::test_proof_seven_uses_all_paths_except_records_to_decide_whether_an_attested_item_is_empty",
+    "tests/test_build.py::test_the_gate_executes_the_committed_criterion_not_an_uncommitted_replacement"
+  ],
+  "commits": [],
+  "stub_ratio": 0.6114285714285714,
+  "tokens": {
+    "input": 334055,
+    "output": 3011
+  },
+  "cost_usd": null,
+  "wall_clock_s": 72.234,
+  "status": "pass",
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 7,
+  "item": "229",
+  "product_version": "v0.29.0-10-gdae6d76",
+  "product_pin": "v0.29.0"
+}
