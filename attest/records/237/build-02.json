@@ -1,0 +1,56 @@
+{
+  "sha": "cb35e66c7677273ebcf09b5f9e4449043589f20a",
+  "start_sha": "cb35e66c7677273ebcf09b5f9e4449043589f20a",
+  "spec_sha": "e5de67dbc0094fd327c01b5532a94c2770361a49",
+  "approval_sha": "0661d6813864ef6a70e670906128287c7fad85a7",
+  "at": "2026-09-27T21:21:24Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.283 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "the-own-records-tests-are-told-apart-by-the-marker-and-the-gate-refuses-an-unlisted-bucket.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q -m 'not own_records'",
+    "count": 0,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 233275,
+    "output": 1932
+  },
+  "cost_usd": 0.1375694,
+  "wall_clock_s": 162.49,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "retry_of": "build-01",
+  "steer": "counsel-01",
+  "stop": null,
+  "record_version": 9,
+  "item": "237",
+  "product_version": "v0.30.0-2-g6d4f8e1",
+  "product_pin": "v0.30.0"
+}
