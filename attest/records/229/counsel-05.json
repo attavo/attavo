@@ -1,0 +1,61 @@
+{
+  "sha": "c935649eb8a99969b1dcd976a4bced75ca765254",
+  "record_stage": "build",
+  "record": "build-03",
+  "at": "2026-09-27T16:21:08Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 320074,
+    "output": 2325
+  },
+  "cost_usd": null,
+  "wall_clock_s": 62.336,
+  "status": "done",
+  "class": "no-cause",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "attest/specs/229/spec.md",
+      "symbol": "Claims",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/attavo/build.py",
+      "symbol": "cmd_build",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/tests/test_build.py",
+      "symbol": "test_build_refuses_write_outside_claims",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "The Claims list is exhaustive. `attavo/common.py` is not claimed, so the build correctly refuses a commit that changes it. Implement the empty-build comparison within the claimed files\u2014one claimed module may expose the shared predicate for the other claimed modules to import\u2014and leave `attavo/common.py` unchanged. This does not alter the definition of done: the comparison remains against the approval tree, and a retried attempt may adopt valid prior-attempt commits.",
+    "patch": null,
+    "question": null,
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": []
+  },
+  "question": null,
+  "record_version": 3,
+  "item": "229",
+  "product_version": "v0.29.0-10-gdae6d76",
+  "product_pin": "v0.29.0"
+}
