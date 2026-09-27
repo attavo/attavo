@@ -1,0 +1,79 @@
+{
+  "sha": "4bddca1fef9652349a20774ca1c20db65028c118",
+  "build_sha": "cb35e66c7677273ebcf09b5f9e4449043589f20a",
+  "build_record": "build-02",
+  "approval_sha": "0661d6813864ef6a70e670906128287c7fad85a7",
+  "at": "2026-09-27T21:25:49Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "4a7ab2f7cbe8aa41d526add3790ef91df53c9a43",
+    "conclusions": [
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "A valid approval bypasses bucket validation",
+      "specimen": "attavo/spec.py:206",
+      "retires": "The assumption that every spec-gate invocation enforces the tenant\u2019s closed bucket list, including after approval.",
+      "rejection_test": "tests/test_spec_gate.py::test_spec_gate_rechecks_bucket_for_an_approved_spec",
+      "severity": "Blocking when buckets.md is deleted or the named bucket is removed after approval: approval_status remains valid because only spec_sha is tracked, and cmd_spec_gate returns \u201capproved\u201d before bucket_refusal runs, allowing the now-unlisted bucket through."
+    }
+  ],
+  "tests_named": [
+    "tests/test_spec_gate.py::test_spec_gate_rechecks_bucket_for_an_approved_spec"
+  ],
+  "commits": [],
+  "stub_ratio": 0.9298245614035088,
+  "tokens": {
+    "input": 149633,
+    "output": 2008
+  },
+  "cost_usd": null,
+  "wall_clock_s": 45.671,
+  "status": "pass",
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 8,
+  "item": "237",
+  "product_version": "v0.30.0-2-g6d4f8e1",
+  "product_pin": "v0.30.0"
+}
