@@ -1,0 +1,95 @@
+{
+  "sha": "24aed171c5ece27e6a13994e5a47e2b3df8aa1d9",
+  "record_stage": "build",
+  "record": "build-01",
+  "at": "2026-09-27T15:02:43Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 231398,
+    "output": 3040
+  },
+  "cost_usd": null,
+  "wall_clock_s": 73.713,
+  "status": "done",
+  "class": "no-cause",
+  "verdict": "patch",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "/Users/davidbean/Projects/attest/attavo/cli.py",
+      "symbol": "BUILD_HELP",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/attavo/counsel.py",
+      "symbol": "cmd_counsel",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/tests/test_counsel.py",
+      "symbol": "test_counsel_refuses_while_a_build_attempt_is_in_progress",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": null,
+    "patch": {
+      "file": "/Users/davidbean/Projects/attest/attavo/counsel.py",
+      "symbol": "cmd_counsel",
+      "rejection_test": "Create build-01.started without build-01.json, invoke `attavo counsel 1`, and assert exit 1 names the in-progress build, invokes no adapter, and writes no counsel record. Add build-01.json and assert counsel can then proceed normally.",
+      "diff": "diff --git a/attavo/counsel.py b/attavo/counsel.py\n--- a/attavo/counsel.py\n+++ b/attavo/counsel.py\n@@ -232,6 +232,18 @@ def cmd_counsel(argv: list[str]) -> int:\n     records_rel = m[\"paths\"][\"records\"]\n     item_records_dir = root / records_rel / item_id\n \n+    # A started marker without its corresponding record is an invocation\n+    # still in progress. Counseling an older stop while that invocation is\n+    # running can add a driver-authored record commit to the build's range;\n+    # build must then correctly refuse that foreign commit. Wait for the\n+    # stage to finish instead of manufacturing that collision.\n+    in_progress = next(\n+        (marker for stage in (\"build\", \"verify\")\n+         for marker in sorted(item_records_dir.glob(f\"{stage}-*.started\"))\n+         if not marker.with_suffix(\".json\").exists()),\n+        None,\n+    )\n+    if in_progress is not None:\n+        print(f\"attavo counsel: refused: {in_progress.stem} is still in progress\")\n+        return 1\n+\n     # issue #175: --ask reads the item's latest records regardless of\n     # status -- a question is not bound to a stop -- everything else\n     # about the evidence set and the write is shared with the stop path.\n"
+    },
+    "question": null,
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": [
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "in_progress"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "question": null,
+  "record_version": 3,
+  "item": "229",
+  "product_version": "v0.29.0-10-gdae6d76",
+  "product_pin": "v0.29.0"
+}
