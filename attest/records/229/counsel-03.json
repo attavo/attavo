@@ -1,0 +1,93 @@
+{
+  "sha": "802de82acd0d8f6809ca8ed7757c214946c4abc3",
+  "record_stage": "build",
+  "record": "build-01",
+  "at": "2026-09-27T15:10:45Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 224827,
+    "output": 2743
+  },
+  "cost_usd": null,
+  "wall_clock_s": 73.272,
+  "status": "done",
+  "class": "no-cause",
+  "verdict": "patch",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "/Users/davidbean/Projects/attest/attavo/cli.py",
+      "symbol": "counsel help: read-only; commits nothing\u2014the caller commits, as with every stage",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/attavo/build.py",
+      "symbol": "cmd_build foreign-commit check",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/tests/test_counsel.py",
+      "symbol": "test_counsel_ask_reads_the_latest_record_even_when_it_passed",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": null,
+    "patch": null,
+    "question": null,
+    "issue": {
+      "title": "A counsel status question can poison an active build with a foreign commit",
+      "body": "Severity: high / Provenance: product\n\n## Problem\n\nItem 229\u2019s executor committed the requested implementation at `15a774515f5a`. While build-01 was still active, `counsel --ask \"how is it going so far?\"` wrote counsel-01 and the driver committed it at `24aed171c5ec`. On the executor\u2019s next return, `cmd_build` correctly found that driver-authored commit between `start_sha` and HEAD and refused the build as `no-cause`.\n\nThe operator\u2019s read-only status question therefore changed the active build\u2019s HEAD and invalidated an otherwise executor-authored build. The green forge checks do not cure this race, and the selected-test failure does not explain the recorded refusal.\n\n## Retires\n\nA read-only counsel/status inquiry, or transport of its record, being able to introduce a foreign commit into an active build\u2019s commit range.\n\n## Change\n\nMake counsel/status recording and transport unable to mutate the checkout observed by an active build. Use an isolated transport worktree or defer the counsel-record commit until the active stage has produced its record. Preserve the build\u2019s foreign-author guard; driver commits must not be silently exempted from it.\n\n## Acceptance\n\n- Start a two-iteration build whose first iteration creates an executor-authored commit and whose second iteration is still running.\n- Run `attavo counsel N --ask \"how is it going so far?\"` and transport its record during that interval.\n- The active build\u2019s HEAD and executor commit range remain unchanged by the counsel operation.\n- The build is not refused for the counsel record and can pass after its gates pass.\n- The counsel record is eventually committed by the driver without being lost.\n- An actual non-executor commit introduced into the build\u2019s range remains refused by the existing authorship guard."
+    }
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": [
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "question": "what is your recommendation?",
+  "record_version": 3,
+  "item": "229",
+  "product_version": "v0.29.0-10-gdae6d76",
+  "product_pin": "v0.29.0"
+}
