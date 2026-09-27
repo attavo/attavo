@@ -18,7 +18,6 @@ from attavo.common import (
     MANIFEST,
     PRODUCT_ROOT,
     ShallowCheckoutError,
-    build_is_empty,
     derive_item_id,
     git,
     last_commit_touching,
@@ -89,6 +88,36 @@ def changed_paths(root: Path, start_sha: str, records_rel: str) -> list[str]:
 
 def matches_a_claim(path: str, claims: list[str]) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in claims)
+
+
+def build_is_empty(root: Path, approval_sha: str, sha: str, claims: list[str]) -> bool | None:
+    """True when sha's tree, restricted to the paths the spec claims, is
+    identical to approval_sha's tree there: no path the spec claims has
+    changed since approval (item 227's own build). Compared against the
+    approval, not a particular attempt's start_sha (item 229), so a
+    retried attempt whose head already carries a prior attempt's valid
+    commits owes no commit of its own; an attempt that ends on the
+    approved tree, whatever it left in the working directory, is empty
+    regardless of how it got there. Scoped to claims rather than
+    "everything outside paths.records", so a commit that lands between
+    approval and this attempt's start but touches no claimed path --
+    a tenant installing an adapter, say -- never rescues or defeats the
+    comparison on its own account; every commit an executor's own loop
+    ever lands is already confined to claims (this module's own boundary
+    check above), so a real prior attempt's work is always visible here.
+    None when either commit does not resolve in this repository -- not
+    known, not asserted."""
+    for commit in (approval_sha, sha):
+        resolved = subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{commit}^{{commit}}"],
+                                  capture_output=True, text=True, check=False)
+        if resolved.returncode != 0:
+            return None
+    pathspec = claims if claims else ["."]
+    out = subprocess.run(["git", "-C", str(root), "diff", "--quiet", approval_sha, sha,
+                          "--", *pathspec], capture_output=True, text=True, check=False)
+    if out.returncode not in (0, 1):
+        return None
+    return out.returncode == 0
 
 
 def protected_path_touched(root: Path, start_sha: str, records_rel: str,

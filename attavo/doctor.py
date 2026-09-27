@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from attavo.attest import check_attest_chain, item_time_and_cost
+from attavo.build import build_is_empty
 from attavo.common import (
     MANIFEST,
     Proof,
     STAGES,
-    build_is_empty,
     fixture_item_id,
     git,
     product_version,

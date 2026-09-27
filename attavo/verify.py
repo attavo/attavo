@@ -12,11 +12,12 @@ from typing import Any, cast
 
 from attavo.build import (
     adapter_reports,
+    build_is_empty,
     merge_adapter_config,
     resolve_adapter,
     split_adapter_stdout,
 )
-from attavo.common import MANIFEST, build_is_empty, derive_item_id, git, now_iso, read_manifest
+from attavo.common import MANIFEST, derive_item_id, git, now_iso, read_manifest
 from attavo.events import stage_events_dir
 from attavo.records import (
     latest_attempt_path,
