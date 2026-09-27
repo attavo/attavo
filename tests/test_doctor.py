@@ -31,6 +31,7 @@ def run_doctor(root: Path) -> dict[str, Any]:
     return {p["proof"]: p for p in report["proofs"]}
 
 
+@pytest.mark.own_records
 def test_every_gate_rejects() -> None:
     """Proof 1. Every gate in the manifest rejects its rejection fixture.
 
@@ -41,6 +42,7 @@ def test_every_gate_rejects() -> None:
     assert p["holds"], p["reason"]
 
 
+@pytest.mark.own_records
 def test_one_item_traversed_every_stage() -> None:
     """Proof 2. One work item carries a record for spec, approval, build,
     verify, and attestation, every one written by a script."""
@@ -48,6 +50,7 @@ def test_one_item_traversed_every_stage() -> None:
     assert p["holds"], p["reason"]
 
 
+@pytest.mark.own_records
 def test_no_commit_lacks_a_record() -> None:
     """Proof 3. Every commit on the default branch after the manifest was
     introduced is named by a record's sha or commits list."""
@@ -55,6 +58,7 @@ def test_no_commit_lacks_a_record() -> None:
     assert p["holds"], p["reason"]
 
 
+@pytest.mark.own_records
 def test_no_stop_lacks_cause() -> None:
     """Proof 4, issue #94. Every non-pass build or verify record at
     record_version 3 or later carries a stop naming its class and cause."""
@@ -71,6 +75,7 @@ def test_no_invocation_lacks_record() -> None:
     assert p["holds"], p["reason"]
 
 
+@pytest.mark.own_records
 def test_every_attested_item_is_sealed() -> None:
     """Proof 5, issue #158. Every merged, fully-staged item has a
     statement in the forge's attestation store for its merge commit --
@@ -1076,6 +1081,7 @@ def test_doctor_proof_seven_names_a_build_with_no_readable_approval_as_not_read(
     assert p["not_read"] == ["1"], p
 
 
+@pytest.mark.own_records
 def test_no_attested_item_is_empty() -> None:
     """Proof 7, item 227. On this repository the specimen, #227, is named
     before the window ([doctor].built_since) and every later attested

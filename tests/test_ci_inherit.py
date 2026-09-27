@@ -362,7 +362,6 @@ def test_main_without_a_check_name_is_a_usage_error(tmp_path: Path) -> None:
 INHERIT_STEP = {"test": "- name: inherit test from a records-only head",
                 "typecheck": "- name: inherit typecheck from a records-only head"}
 SKIP_WHEN_INHERITED = "if: steps.inherit.outputs.inherit != 'true'"
-ONLY_WHEN_INHERITED = "if: steps.inherit.outputs.inherit == 'true'"
 
 
 def job_text(job: str) -> str:
@@ -422,7 +421,7 @@ def test_every_step_after_the_inherit_step_is_skipped_on_inherit_but_the_named_f
     steps = steps_of(job)
     at = next(i for i, step in enumerate(steps) if INHERIT_STEP[job] in step)
     allowed_to_run_when_inherited = {
-        "test": ("pip install pytest jsonschema", "-m own_records"),
+        "test": ("pip install pytest jsonschema",),
         "typecheck": (),
     }[job]
     for step in steps[at + 1:]:
@@ -431,15 +430,20 @@ def test_every_step_after_the_inherit_step_is_skipped_on_inherit_but_the_named_f
         assert SKIP_WHEN_INHERITED in step, step
 
 
-def test_test_runs_only_the_own_records_tests_on_its_inherit_path() -> None:
+def test_the_test_job_runs_no_pytest_on_its_inherit_path_and_excludes_own_records_by_marker_on_the_full_path() -> None:
+    """#237: the inherit path's own copy of `-m own_records` had no `git
+    remote set-head origin -a` and no GH_TOKEN, so three of its eight tests
+    failed there (run 36351653506) while the doctor job, on the same push
+    with both, passed all eight. The doctor job runs the identical set on
+    the same events, so the inherit path runs no pytest step at all; only
+    the full path's own-records exclusion remains."""
     steps = steps_of("test")
     own = [step for step in steps if "-m own_records" in step]
-    assert len(own) == 1
-    assert ONLY_WHEN_INHERITED in own[0]
-    assert "python3 -m pytest tests -q -m own_records" in own[0]
+    assert own == [], own
     full = [step for step in steps if "python3 -m pytest tests -q --durations=5" in step]
     assert len(full) == 1 and SKIP_WHEN_INHERITED in full[0]
-    assert "-m " not in full[0].replace("-m pytest", ""), "the full path runs every test"
+    assert "-m 'not own_records'" in full[0], full[0]
+    assert "--deselect" not in full[0], "a test named by hand is a list that goes stale (#229 build-04)"
 
 
 def test_the_queue_has_no_path_to_the_script() -> None:
