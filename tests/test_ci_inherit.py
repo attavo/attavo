@@ -439,7 +439,11 @@ def test_test_runs_only_the_own_records_tests_on_its_inherit_path() -> None:
     assert "python3 -m pytest tests -q -m own_records" in own[0]
     full = [step for step in steps if "python3 -m pytest tests -q --durations=5" in step]
     assert len(full) == 1 and SKIP_WHEN_INHERITED in full[0]
-    assert "-m " not in full[0].replace("-m pytest", ""), "the full path runs every test"
+    # The two paths partition the suite by one marker: the inherit path
+    # runs the own-records tests and the full path runs everything else.
+    # Together they are the whole suite; no test is named in either.
+    assert "-m 'not own_records'" in full[0], full[0]
+    assert "--deselect" not in full[0], "a test named by hand is a list that goes stale (#229 build-04)"
 
 
 def test_the_queue_has_no_path_to_the_script() -> None:

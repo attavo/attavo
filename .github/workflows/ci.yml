@@ -51,13 +51,7 @@ jobs:
       - name: pytest
         if: steps.inherit.outputs.inherit != 'true'
         run: >
-          python3 -m pytest tests -q --durations=5
-          --deselect tests/test_doctor.py::test_every_gate_rejects
-          --deselect tests/test_doctor.py::test_one_item_traversed_every_stage
-          --deselect tests/test_doctor.py::test_no_commit_lacks_a_record
-          --deselect tests/test_doctor.py::test_no_stop_lacks_cause
-          --deselect tests/test_doctor.py::test_every_attested_item_is_sealed
-          --deselect tests/test_doctor.py::test_no_attested_item_is_empty
+          python3 -m pytest tests -q --durations=5 -m 'not own_records'
       - name: pytest end
         if: steps.inherit.outputs.inherit != 'true'
         run: echo "PYTEST_END=$(date +%s)" >> "$GITHUB_ENV"
@@ -139,8 +133,8 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install pytest jsonschema
-      - name: doctor's five proofs
-        run: python3 -m pytest tests/test_doctor.py -q -k "every_gate_rejects or one_item_traversed_every_stage or no_commit_lacks_a_record or no_stop_lacks_cause or every_attested_item_is_sealed"
+      - name: the tests that read this repository's own records, the doctor's proofs among them
+        run: python3 -m pytest tests -q -m own_records
       - run: python3 bin/attavo doctor .
 
   action-self-check:

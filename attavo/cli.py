@@ -78,9 +78,13 @@ branch (attavo/N-*). The doctor's first proof sets ATTAVO_ITEM for a
 rejection fixture's own item, so a gate's own command needs no argument
 even while the enclosing repository sits on a real item's attavo/N-*
 branch. Every run of spec-gate or approve writes the next numbered attempt
-file under paths.records/N/ and never overwrites one already written. See
-the spec contract in the project's Phase 1 issue for the full rules each
-one enforces.
+file under paths.records/N/ and never overwrites one already written. A
+fix item's spec names the root-cause bucket its change closes as one line
+in the problem, "Bucket: <slug>"; spec-gate refuses a bucket the tenant's
+buckets.md (beside paths.specs) does not list, or any bucket when that
+file does not exist, before any criterion runs -- a spec with no bucket
+line is not asked for one. See the spec contract in the project's Phase 1
+issue for the full rules each one enforces.
 
 build refuses (exit 1, naming the cause, no record) unless the manifest
 declares [executor].build and [tests].select and [tests].run, and unless
@@ -154,7 +158,11 @@ selected, the exit code, and the seconds spent (or that the answer came
 from the cache). It is the one test command an executor is given (issue
 #212); the product's own transport -- drive, worker, build, verify,
 counsel, file-stops -- refuses to run at all when ATTAVO_STAGE is set,
-since the transport is the pass's, not the executor's.
+since the transport is the pass's, not the executor's. The tests that
+read this repository's own records carry @pytest.mark.own_records, the
+only vocabulary that tells them apart from the rest of the suite;
+[tests].run and CI's full-suite step exclude them (-m 'not own_records')
+and the doctor job and CI's inherit path run only them (-m own_records).
 
 verify refuses (exit 1) unless the item's latest build record has
 status pass, and unless the manifest declares [forge].checks_command --

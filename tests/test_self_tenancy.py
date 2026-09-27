@@ -73,36 +73,28 @@ def test_manifest_declares_every_key_issue_103_lists() -> None:
     assert m["checks"]["command"]
 
 
-DESELECT_FLAGS = (
-    "--deselect tests/test_doctor.py::test_every_gate_rejects",
-    "--deselect tests/test_doctor.py::test_one_item_traversed_every_stage",
-    "--deselect tests/test_doctor.py::test_no_commit_lacks_a_record",
-    "--deselect tests/test_doctor.py::test_no_stop_lacks_cause",
-    "--deselect tests/test_doctor.py::test_every_attested_item_is_sealed",
-    "--deselect tests/test_doctor.py::test_no_attested_item_is_empty",
-)
-
-
-def test_checks_and_tests_run_deselect_the_four_dogfood_doctor_tests() -> None:
-    """[checks].command and [tests].run must never run the four doctor
-    tests that fail until an item has traversed every stage: the first
-    item's own build would fail its own checks on a doctor proof no
-    item has satisfied yet. [checks].command is ci.yml's test job
-    command verbatim, deselects included; [tests].run carries the same
-    four flags after `python3 -m pytest -q`. The doctor job in ci.yml is
-    the only place the four run without them. Written and run red once
-    by dropping one flag from [checks].command, confirmed it failed,
-    then restored."""
+def test_tests_run_and_the_test_job_exclude_the_own_records_tests_by_marker() -> None:
+    """The tests that read this repository's own records -- the doctor's
+    proofs among them -- must never run inside an item's gate or the
+    test job: a proof no item has satisfied yet, or one that reads the
+    running build's own marker, fails a build for nothing (#229
+    build-04: the gate ran the whole suite and
+    test_no_invocation_lacks_record read build-04's own .started marker
+    as a dead invocation). They are told apart by @pytest.mark.own_records
+    and by nothing else: [tests].run and ci.yml's test job carry
+    -m 'not own_records', the doctor job and the inherit path carry
+    -m own_records, and no --deselect names a test anywhere. Three
+    hand-copied lists did this before and one was missing a test."""
     m = load_manifest()
-    for flag in DESELECT_FLAGS:
-        assert flag in m["tests"]["run"], m["tests"]["run"]
-    # Since the calibration item the gate's [checks].command runs the type
-    # check and no test at all; the whole suite is ci.yml's test job, which
-    # carries the same flags. A gate command that names pytest again must
-    # carry them too.
+    assert "-m 'not own_records'" in m["tests"]["run"], m["tests"]["run"]
+    assert "--deselect" not in m["tests"]["run"], m["tests"]["run"]
+    assert "--deselect" not in m["checks"]["command"], m["checks"]["command"]
     if "pytest" in m["checks"]["command"]:
-        for flag in DESELECT_FLAGS:
-            assert flag in m["checks"]["command"], m["checks"]["command"]
+        assert "-m 'not own_records'" in m["checks"]["command"], m["checks"]["command"]
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert "--deselect" not in ci
+    assert "python3 -m pytest tests -q --durations=5 -m 'not own_records'" in ci
+    assert ci.count("python3 -m pytest tests -q -m own_records") == 2, "the inherit path and the doctor job"
 
 
 def run_select_tests(stdin_text: str) -> list[str]:

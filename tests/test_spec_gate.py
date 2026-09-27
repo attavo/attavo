@@ -426,3 +426,51 @@ def test_spec_gate_stub_verdict_after_halted_build_that_committed_nothing(tmp_pa
     assert rec["status"] == "pass"
     assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 1, "on_stub": 0}]
     assert rec["refusal"] is None
+
+
+def add_bucket_line(root: Path, bucket: str) -> None:
+    spec_md = root / "specs" / "1" / "spec.md"
+    text = spec_md.read_text().replace("## Problem\n", f"## Problem\n\nBucket: {bucket}\n", 1)
+    spec_md.write_text(text)
+    commit_all(root, f"name bucket {bucket}")
+
+
+def test_spec_gate_refuses_a_bucket_the_tenant_does_not_list_and_passes_a_listed_one(tmp_path: Path) -> None:
+    """Root-cause buckets (#229 build-04 and the convergence ruling of
+    2026-09-27): a fix item names the bucket its change closes as one
+    'Bucket: <slug>' line in its problem, and the gate refuses a slug the
+    tenant's buckets.md (beside the specs directory) does not list, or a
+    line with no such file. Written red first: on v0.30.0 the line is
+    prose and the gate passes it."""
+    root = make_tenant(tmp_path, "valid")
+    add_bucket_line(root, "shared-working-copy")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1, run.stdout + run.stderr
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused"
+    assert rec["refusal"] == "bucket: shared-working-copy named but buckets.md does not exist", rec["refusal"]
+    assert rec["criteria"] == [], "refused before any criterion ran"
+
+    (root / "buckets.md").write_text(
+        "# buckets\n\n- liveness-by-proxy: a pid stood in for the holder\n")
+    commit_all(root, "list one bucket")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+    assert latest_record(root, "1", "spec")["refusal"] == "bucket: shared-working-copy is not listed in buckets.md"
+
+    (root / "buckets.md").write_text(
+        "# buckets\n\n- liveness-by-proxy: a pid stood in for the holder\n"
+        "- shared-working-copy: one checkout, many writers\n")
+    commit_all(root, "list the bucket")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "pass" and rec["refusal"] is None
+
+
+def test_spec_gate_leaves_a_spec_with_no_bucket_line_alone(tmp_path: Path) -> None:
+    """A capability item has no bucket; the check is on the line, not on
+    every spec, and a tenant with no buckets.md is not asked for one."""
+    root = make_tenant(tmp_path, "valid")
+    assert not (root / "buckets.md").exists()
+    assert run_attavo(root, "spec-gate", "1").returncode == 0
