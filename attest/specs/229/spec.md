@@ -27,6 +27,7 @@ Retires: the working tree as what the build's gate reads; `pass` as a status a b
 - attavo/build.py
 - attavo/verify.py
 - attavo/stops.py
+- attavo/common.py
 - attavo/doctor.py
 - attavo/cli.py
 - schema/records/build.schema.json
