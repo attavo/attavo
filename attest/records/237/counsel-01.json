@@ -1,0 +1,61 @@
+{
+  "sha": "3418772d643654b00471e767969242c88a42c314",
+  "record_stage": "build",
+  "record": "build-01",
+  "at": "2026-09-27T21:08:51Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 457018,
+    "output": 2728
+  },
+  "cost_usd": null,
+  "wall_clock_s": 70.745,
+  "status": "done",
+  "class": "forge-unconcluded",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "attest/specs/237/spec.md",
+      "symbol": "Criteria",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/attavo/build.py",
+      "symbol": "cmd_build",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/tests/test_build.py",
+      "symbol": "test_a_retried_attempt_that_adopts_a_prior_valid_commit_needs_no_commit_of_its_own",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "Retry the build. Build-01 correctly gated with the approved tree\u2019s snapshotted `[tests].run`, so the item\u2019s own change to that command could not govern the invocation already in progress; that old command selected the newly marked own-records test and produced the recorded failure. The committed implementation passed its criterion and remains non-empty relative to approval. On the retry, `cmd_build` starts from commit 3418772, reads the new `-m 'not own_records'` command, and the existing retry mechanism permits the inherited valid commit to pass without requiring another commit.",
+    "patch": null,
+    "question": null,
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": []
+  },
+  "question": null,
+  "record_version": 3,
+  "item": "237",
+  "product_version": "v0.30.0-2-g6d4f8e1",
+  "product_pin": "v0.30.0"
+}

@@ -1,0 +1,62 @@
+{
+  "sha": "3418772d643654b00471e767969242c88a42c314",
+  "start_sha": "98cece7612f51d04c08fc338023c1e1de3808964",
+  "spec_sha": "e5de67dbc0094fd327c01b5532a94c2770361a49",
+  "approval_sha": "0661d6813864ef6a70e670906128287c7fad85a7",
+  "at": "2026-09-27T21:07:41Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.283 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 3,
+  "criteria": [
+    {
+      "name": "the-own-records-tests-are-told-apart-by-the-marker-and-the-gate-refuses-an-unlisted-bucket.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed --deselect tests/test_doctor.py::test_no_attested_item_is_empty",
+    "count": 1,
+    "exit": 1
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 4399591,
+    "output": 39468
+  },
+  "cost_usd": 2.0552875999999998,
+  "wall_clock_s": 2145.78,
+  "status": "failed",
+  "refusal": null,
+  "halted": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": {
+    "class": "forge-unconcluded",
+    "provenance": "executor",
+    "detail": null,
+    "signature": null,
+    "bound": null
+  },
+  "record_version": 9,
+  "item": "237",
+  "product_version": "v0.30.0-2-g6d4f8e1",
+  "product_pin": "v0.30.0"
+}
