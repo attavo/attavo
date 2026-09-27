@@ -1,0 +1,66 @@
+{
+  "sha": "62bb4144dc49b05dab6c742651bee05fe2007777",
+  "start_sha": "1f084bd65bf8b6d215168630ff808d9aaadc7de0",
+  "spec_sha": "88a93d33aaa09d2f56720f64238a13c401a7eb36",
+  "approval_sha": "3dcf3698ee55b19e7998dbcef123ea4c42c5354d",
+  "at": "2026-09-27T17:42:54Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.283 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 3,
+  "criteria": [
+    {
+      "name": "an-executor-that-commits-nothing-does-not-pass.sh",
+      "exit": 0
+    },
+    {
+      "name": "a-passing-build-record-that-names-no-change-is-refused-by-verify-and-the-doctor.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q --deselect tests/test_doctor.py::test_every_gate_rejects --deselect tests/test_doctor.py::test_one_item_traversed_every_stage --deselect tests/test_doctor.py::test_no_commit_lacks_a_record --deselect tests/test_doctor.py::test_no_stop_lacks_cause --deselect tests/test_doctor.py::test_every_attested_item_is_sealed --deselect tests/test_doctor.py::test_no_attested_item_is_empty",
+    "count": 1,
+    "exit": 1
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 6553263,
+    "output": 48845
+  },
+  "cost_usd": 2.6241069999999995,
+  "wall_clock_s": 3374.514,
+  "status": "failed",
+  "refusal": null,
+  "halted": null,
+  "retry_of": "build-03",
+  "steer": "counsel-05",
+  "stop": {
+    "class": "no-cause",
+    "provenance": "executor",
+    "detail": null,
+    "signature": null,
+    "bound": null
+  },
+  "record_version": 8,
+  "item": "229",
+  "product_version": "v0.29.0-10-gdae6d76",
+  "product_pin": "v0.29.0"
+}

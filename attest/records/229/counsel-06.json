@@ -1,0 +1,61 @@
+{
+  "sha": "62bb4144dc49b05dab6c742651bee05fe2007777",
+  "record_stage": "build",
+  "record": "build-04",
+  "at": "2026-09-27T17:43:52Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 262690,
+    "output": 2033
+  },
+  "cost_usd": null,
+  "wall_clock_s": 58.298,
+  "status": "done",
+  "class": "no-cause",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "attest/specs/229/spec.md",
+      "symbol": "The doctor's seventh proof",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/attavo/build.py",
+      "symbol": "cmd_build",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/attavo/doctor.py",
+      "symbol": "proof_no_invocation_lacks_record",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "Retry the build without changing the implementation. Both acceptance criteria and the tenant check passed; the sole selected-test failure was proof five observing build-04.started after that invocation had died but before build-04.json existed. The build record now exists, so that historical invocation no longer lacks its record. This is not a failure of item 229's detached gate or empty-build guards, and the forge supplied no contrary failing check.",
+    "patch": null,
+    "question": null,
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": []
+  },
+  "question": null,
+  "record_version": 3,
+  "item": "229",
+  "product_version": "v0.29.0-10-gdae6d76",
+  "product_pin": "v0.29.0"
+}
