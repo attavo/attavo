@@ -15,6 +15,7 @@
     attavo drive --all
     attavo worker N <build|verify> NN
     attavo ledger [N] [--json]
+    attavo claims [N] [--json]
     attavo stops [N] [--json]
     attavo test [N] [--all | <test>...] [--fresh]
 
@@ -143,6 +144,16 @@ with no structure to class it is unclassed, and only then does the log's
 last line serve as its detail. A pass record carries stop: null. See the
 build contract in the project's Phase 2 issue for the full rules it
 enforces.
+
+claims [N] [--json] reads what is in flight from git alone: every branch
+under refs/remotes/origin/ not yet on the default branch
+(refs/remotes/origin/HEAD), with the paths it changes outside
+paths.records and paths.specs and, when it carries an item's spec, that
+spec's Claims. With an item, it compares the item's Claims with every
+other branch in flight, names each overlap by branch and path, and exits
+1 when there is one. A claim is a glob; two claims overlap when either
+matches the other or their literal prefixes nest. It writes nothing and
+gates nothing: run it before filing or starting an item.
 
 test [N] runs the tests [tests].select names for every path the item has
 changed since it left the default branch (refs/remotes/origin/HEAD),
@@ -375,6 +386,7 @@ import sys
 from attavo.approval import cmd_approval_status, cmd_approve
 from attavo.attest import cmd_attest
 from attavo.build import cmd_build
+from attavo.claims import cmd_claims
 from attavo.counsel import cmd_counsel
 from attavo.doctor import cmd_doctor
 from attavo.drive import cmd_drive, cmd_worker
@@ -429,11 +441,13 @@ def main(argv: list[str]) -> int:
         return cmd_worker(argv[1:])
     if argv[0] == "ledger":
         return cmd_ledger(argv[1:])
+    if argv[0] == "claims":
+        return cmd_claims(argv[1:])
     if argv[0] == "stops":
         return cmd_stops(argv[1:])
     if argv[0] == "test":
         return cmd_test(argv[1:])
     print(f"attavo: unknown subcommand {argv[0]!r}; only doctor, spec-gate, approve, "
           f"approval-status, build, verify, file-findings, file-stops, counsel, record-only, "
-          f"attest, drive, worker, ledger, stops, test exist at this commit", file=sys.stderr)
+          f"attest, drive, worker, ledger, claims, stops, test exist at this commit", file=sys.stderr)
     return 2
