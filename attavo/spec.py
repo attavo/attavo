@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,10 @@ from attavo.records import latest_record, write_record
 
 # --- the spec contract ---
 
+ROOT_CAUSE_LINE = re.compile(r"^Root-cause:\s*([a-z0-9][a-z0-9-]*)\s*$")
+ROOT_CAUSE_ENTRY = re.compile(r"^- ([a-z0-9][a-z0-9-]*):\s+\S")
+
+
 def parse_spec(spec_md: Path) -> tuple[dict[str, Any] | None, str | None]:
     lines = spec_md.read_text().splitlines()
     heading_idx = [i for i, l in enumerate(lines) if l.startswith("## ")]
@@ -36,6 +41,15 @@ def parse_spec(spec_md: Path) -> tuple[dict[str, Any] | None, str | None]:
     idx_problem, idx_claims, idx_criteria = heading_idx
     claims = [l.strip()[2:].strip() for l in lines[idx_claims + 1:idx_criteria]
               if l.strip().startswith("- ")]
+    # A fix item names the root cause its change closes, as one line in
+    # the problem: "Root-cause: <slug>". Optional; when present the gate
+    # checks it against the tenant's closed list (root_cause_refusal).
+    root_cause = None
+    for l in lines[idx_problem + 1:idx_claims]:
+        m = ROOT_CAUSE_LINE.match(l)
+        if m:
+            root_cause = m.group(1)
+            break
     criteria = []
     for l in lines[idx_criteria + 1:]:
         s = l.strip()
@@ -43,7 +57,36 @@ def parse_spec(spec_md: Path) -> tuple[dict[str, Any] | None, str | None]:
             continue
         name = s[2:].split(":", 1)[0].strip()
         criteria.append(name)
-    return {"claims": claims, "criteria": criteria}, None
+    return {"claims": claims, "criteria": criteria, "root_cause": root_cause}, None
+
+
+def root_causes_path(root: Path, m: dict[str, Any]) -> Path:
+    """The tenant's closed list of root causes: root-causes.md beside
+    the specs directory (attest/root-causes.md when specs live in
+    attest/specs). One root cause per line, "- <slug>: <one sentence>"."""
+    return root / Path(m["paths"]["specs"]).parent / "root-causes.md"
+
+
+def listed_root_causes(path: Path) -> list[str]:
+    if not path.is_file():
+        return []
+    return [mm.group(1) for mm in (ROOT_CAUSE_ENTRY.match(l) for l in path.read_text().splitlines()) if mm]
+
+
+def root_cause_refusal(root: Path, m: dict[str, Any], root_cause: str | None) -> str | None:
+    """A spec that names a root cause must name one the tenant lists.
+    Symptom counts do not converge; root-cause counts can, and only if
+    every root cause a fix item names is one the list already carries or
+    an item added on purpose. No root-cause line, no check: a capability
+    item has no root cause."""
+    if root_cause is None:
+        return None
+    path = root_causes_path(root, m)
+    if not path.is_file():
+        return f"root cause: {root_cause} named but {path.relative_to(root)} does not exist"
+    if root_cause not in listed_root_causes(path):
+        return f"root cause: {root_cause} is not listed in {path.relative_to(root)}"
+    return None
 
 
 def run_criterion(exe: Path, cwd: Path) -> int:
@@ -194,6 +237,9 @@ def cmd_spec_gate(argv: list[str]) -> int:
     results: list[dict[str, Any]] = []
     if refusal is None:
         # parse_spec returns a refusal exactly when it returns no spec.
+        parsed = cast(dict[str, Any], parsed)
+        refusal = root_cause_refusal(root, m, parsed.get("root_cause"))
+    if refusal is None:
         parsed = cast(dict[str, Any], parsed)
         if built:
             refusal = stub_removed_refusal(root, spec_dir)

@@ -13,12 +13,16 @@ jobs:
   # issue #210: on a pull request, a head whose commits since a green run
   # touch only the records directory inherits that run's `test` instead of
   # running the suite again; the tests that read the repository's own
-  # records (@pytest.mark.own_records) still run. scripts/ci_inherit.py
-  # decides, and every doubt (no concluded success to inherit, an API read
-  # that fails, a shallow clone, a merge commit) is run-in-full. merge_group
-  # never reaches the script: the queue's run is the law and is never
-  # inherited. The inherit step's output is 'true' only when the script
-  # says so; anything else, including the step not running, runs the suite.
+  # records (@pytest.mark.own_records) are the doctor job's alone, which
+  # runs on the same events and does not inherit (#237: the inherit path's
+  # own copy of that run had no `git remote set-head origin -a` and no
+  # GH_TOKEN, so three of the eight failed there while the doctor job, on
+  # the same push, passed all eight). scripts/ci_inherit.py decides, and
+  # every doubt (no concluded success to inherit, an API read that fails,
+  # a shallow clone, a merge commit) is run-in-full. merge_group never
+  # reaches the script: the queue's run is the law and is never inherited.
+  # The inherit step's output is 'true' only when the script says so;
+  # anything else, including the step not running, runs the suite.
   test:
     runs-on: ubuntu-latest
     permissions:
@@ -38,36 +42,33 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       - run: pip install pytest jsonschema
-      - name: pytest, only the tests that read this repository's own records
-        if: steps.inherit.outputs.inherit == 'true'
-        run: python3 -m pytest tests -q -m own_records
-      # issue #181: the suite's own clock is bounded. --durations=5 puts the
-      # five slowest tests on every run's log; the last step fails the job
-      # when the pytest step took more than 180 s (the suite's baseline is
-      # about 65 s), naming the elapsed seconds.
+      # issue #181, raised by #237: the suite's own clock is bounded.
+      # --durations=5 puts the five slowest tests on every run's log; the
+      # last step fails the job when the pytest step took more than 300 s
+      # (the suite's baseline is about 180 s; its five slowest tests are
+      # test_retry.py::test_identical_failures_stop_early_and_the_budget_holds
+      # 15.75 s, test_retry.py::test_counsels_verdict_routes_the_next_pass
+      # 8.58 s, test_retry.py::test_every_marker_spends_the_budget 6.39 s,
+      # test_retry.py::test_again_resets_a_spent_budget_only 4.86 s, and
+      # test_drive.py::test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_start_line_before_the_stage_ends
+      # 4.54 s), naming the elapsed seconds.
       - name: pytest start
         if: steps.inherit.outputs.inherit != 'true'
         run: echo "PYTEST_START=$(date +%s)" >> "$GITHUB_ENV"
       - name: pytest
         if: steps.inherit.outputs.inherit != 'true'
         run: >
-          python3 -m pytest tests -q --durations=5
-          --deselect tests/test_doctor.py::test_every_gate_rejects
-          --deselect tests/test_doctor.py::test_one_item_traversed_every_stage
-          --deselect tests/test_doctor.py::test_no_commit_lacks_a_record
-          --deselect tests/test_doctor.py::test_no_stop_lacks_cause
-          --deselect tests/test_doctor.py::test_every_attested_item_is_sealed
-          --deselect tests/test_doctor.py::test_no_attested_item_is_empty
+          python3 -m pytest tests -q --durations=5 -m 'not own_records'
       - name: pytest end
         if: steps.inherit.outputs.inherit != 'true'
         run: echo "PYTEST_END=$(date +%s)" >> "$GITHUB_ENV"
-      - name: the suite's wall clock is at most 180 s
+      - name: the suite's wall clock is at most 300 s
         if: steps.inherit.outputs.inherit != 'true'
         run: |
           elapsed=$((PYTEST_END - PYTEST_START))
           echo "pytest step took ${elapsed} s"
-          if [ "$elapsed" -gt 180 ]; then
-            echo "::error::the pytest step took ${elapsed} s, over the 180 s bound"
+          if [ "$elapsed" -gt 300 ]; then
+            echo "::error::the pytest step took ${elapsed} s, over the 300 s bound"
             exit 1
           fi
 
@@ -139,8 +140,8 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install pytest jsonschema
-      - name: doctor's five proofs
-        run: python3 -m pytest tests/test_doctor.py -q -k "every_gate_rejects or one_item_traversed_every_stage or no_commit_lacks_a_record or no_stop_lacks_cause or every_attested_item_is_sealed"
+      - name: the tests that read this repository's own records, the doctor's proofs among them
+        run: python3 -m pytest tests -q -m own_records
       - run: python3 bin/attavo doctor .
 
   action-self-check:

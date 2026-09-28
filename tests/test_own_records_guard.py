@@ -2,11 +2,14 @@
 no test in the ordinary suite reads this repository's own records
 directory, the one thing such a commit changes. The tests that do are
 marked @pytest.mark.own_records and are the only ones `test` runs on the
-inherit path. This guard is what keeps that list true: an unmarked test
-that names this repository as the tenant a product reader is pointed at,
-or joins ROOT to the records directory, fails here. The doctor tests the
-`test` job deselects are exempt: they never run in `test`, they run for
-real in the `doctor` job, which does not inherit.
+inherit path, the only ones the doctor job runs, and the ones every
+other run excludes (-m 'not own_records'). This guard is what keeps the
+marker true: an unmarked test that names this repository as the tenant
+a product reader is pointed at, or joins ROOT to the records directory,
+fails here. Nothing is exempt: the doctor's own proofs carry the marker
+since #229 build-04, when a hand-kept deselect list that stood in for
+it was missing one test and the gate ran that test against the running
+build's own marker.
 
 The guard reads test source for the vocabulary by which a test in this
 suite reaches the repository's own tree (ROOT handed to a product reader,
@@ -27,9 +30,7 @@ from pathlib import Path
 import pytest
 
 TESTS = Path(__file__).resolve().parent
-CI_YML = TESTS.parent / ".github" / "workflows" / "ci.yml"
 MARK = "pytest.mark.own_records"
-DESELECT = re.compile(r"--deselect\s+tests/(test_\w+\.py::test_\w+)")
 READERS = (
     re.compile(r"\b(?:run_doctor|drive_report|read_manifest|run_attavo)\(\s*ROOT\b"),
     re.compile(r"\bROOT\s*/\s*[\"']attest[\"']"),
@@ -42,22 +43,10 @@ def _is_marked(node: ast.AST) -> bool:
     return any(ast.unparse(d) == MARK for d in decorators)
 
 
-def deselected_by_the_test_job() -> frozenset[str]:
-    """`file::test` for each test ci.yml's `test` job deselects."""
-    lines = CI_YML.read_text().splitlines()
-    start = lines.index("  test:")
-    end = next((i for i in range(start + 1, len(lines))
-                if lines[i].startswith("  ") and not lines[i].startswith("    ")
-                and lines[i].strip().endswith(":") and lines[i].strip() != "test:"), len(lines))
-    return frozenset(DESELECT.findall("\n".join(lines[start:end])))
-
-
-def unmarked_own_records_readers(tests_dir: Path, skip: str,
-                                 exempt: frozenset[str] = frozenset()) -> list[str]:
+def unmarked_own_records_readers(tests_dir: Path, skip: str) -> list[str]:
     """`file::test` for every test in tests_dir that reads the repository's
     own records without the marker. `skip` is a file name not scanned: this
-    file states the patterns as strings and would name itself. `exempt`
-    names tests, as `file::test`, that never run where the marker matters."""
+    file states the patterns as strings and would name itself."""
     found: list[str] = []
     for path in sorted(tests_dir.glob("test_*.py")):
         if path.name == skip:
@@ -76,18 +65,27 @@ def unmarked_own_records_readers(tests_dir: Path, skip: str,
                 continue
             body = ast.get_source_segment(source, node) or ""
             name = f"{path.name}::{node.name}"
-            if name not in exempt and any(pattern.search(body) for pattern in READERS):
+            if any(pattern.search(body) for pattern in READERS):
                 found.append(name)
     return found
 
 
-def test_the_test_job_deselects_the_doctor_tests_the_doctor_job_runs() -> None:
-    assert len(deselected_by_the_test_job()) == 6, deselected_by_the_test_job()
-
-
 def test_no_unmarked_test_reads_this_repositorys_own_records() -> None:
-    assert unmarked_own_records_readers(
-        TESTS, skip=Path(__file__).name, exempt=deselected_by_the_test_job()) == []
+    assert unmarked_own_records_readers(TESTS, skip=Path(__file__).name) == []
+
+
+def test_every_doctor_proof_test_carries_the_marker() -> None:
+    """The doctor's proofs read this repository's own records by
+    construction (run_doctor(ROOT)); the guard above names any that lose
+    the marker, and this names the set so a new proof's test is written
+    marked (#229 build-04)."""
+    source = (TESTS / "test_doctor.py").read_text()
+    tree = ast.parse(source)
+    proofs = [n.name for n in tree.body if isinstance(n, ast.FunctionDef)
+              and n.name.startswith("test_") and "run_doctor(ROOT)" in (ast.get_source_segment(source, n) or "")]
+    assert len(proofs) >= 7, proofs
+    unmarked = [n.name for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in proofs and not _is_marked(n)]
+    assert unmarked == [], unmarked
 
 
 @pytest.mark.parametrize("reader", [
