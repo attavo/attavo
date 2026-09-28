@@ -1,0 +1,79 @@
+{
+  "sha": "8eabc166146a86c3a1668168a058bfbf1e833a07",
+  "build_sha": "7a10f2cbe401b676fbe3ec1c2202aaac3dca2500",
+  "build_record": "build-01",
+  "approval_sha": "b028792218ca7dc406b23137457085f016f093b4",
+  "at": "2026-09-28T17:25:02Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "6916b0b34c1fcbc02237d10050fa4a7e37c3138a",
+    "conclusions": [
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "An unparsable in-flight spec is silently treated as declaring no claims",
+      "specimen": "attavo/claims.py",
+      "retires": "A false-clear claims report when a pushed branch carries a malformed or unreadable item spec.",
+      "rejection_test": "test_claims_refuses_when_an_in_flight_branch_spec_does_not_parse",
+      "severity": "Blocking when an in-flight branch\u2019s spec fails `parse_spec` and its undeclared-by-output claim overlaps the queried item; harmless while every in-flight spec parses successfully."
+    }
+  ],
+  "tests_named": [
+    "test_claims_refuses_when_an_in_flight_branch_spec_does_not_parse"
+  ],
+  "commits": [],
+  "stub_ratio": 1.0,
+  "tokens": {
+    "input": 126120,
+    "output": 2022
+  },
+  "cost_usd": null,
+  "wall_clock_s": 51.637,
+  "status": "pass",
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 9,
+  "item": "251",
+  "product_version": "v0.30.0-30-g00a22d0",
+  "product_pin": "v0.30.0"
+}
