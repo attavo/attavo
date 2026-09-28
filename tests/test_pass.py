@@ -53,8 +53,8 @@ def git_dir(root: Path) -> Path:
     return Path(git(root, "rev-parse", "--absolute-git-dir").strip())
 
 
-def report(root: Path) -> dict[str, Any]:
-    run = run_attavo(root, "drive", "1", "--report", env=FAST)
+def report(root: Path, env: dict[str, str] | None = None) -> dict[str, Any]:
+    run = run_attavo(root, "drive", "1", "--report", env={**FAST, **(env or {})})
     assert run.returncode == 0, run.stdout + run.stderr
     out: dict[str, Any] = json.loads(run.stdout)
     return out
@@ -72,6 +72,29 @@ def wait_for(pred: Any, seconds: float = 20) -> None:
             return
         time.sleep(0.2)
     raise AssertionError("condition not met in time")
+
+
+def passes_until(root: Path, pred: Any, seconds: float = 40, env: dict[str, str] | None = None) -> None:
+    """Passes, spaced, until pred holds: how an operator's loop, the
+    screen's poll, or a scheduler line would drive the item."""
+    deadline = time.monotonic() + seconds
+    full = dict(FAST)
+    full.update(env or {})
+    while time.monotonic() < deadline:
+        run_attavo(root, "drive", "1", env=full)
+        if pred():
+            return
+        time.sleep(0.5)
+    raise AssertionError("condition not met in time")
+
+
+def clock_ahead(tmp_path: Path, seconds: float) -> dict[str, str]:
+    """The environment that puts every bound the product judges `seconds`
+    past the machine's now (#257): a clock file, named by ATTAVO_CLOCK_FILE,
+    that the next pass reads instead of waiting."""
+    path = tmp_path / "attavo-clock"
+    path.write_text(str(time.time() + seconds))
+    return {"ATTAVO_CLOCK_FILE": str(path)}
 
 
 def built_tenant(tmp_path: Path, seconds: float = 3) -> tuple[Path, Path]:

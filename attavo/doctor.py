@@ -5,10 +5,10 @@ import json
 import os
 import re
 import subprocess
-import time
 from pathlib import Path
 from typing import Any
 
+from attavo import clock
 from attavo.attest import check_attest_chain, item_time_and_cost
 from attavo.build import build_is_empty
 from attavo.common import (
@@ -197,7 +197,7 @@ def heartbeat_age_s(path: Path) -> float | None:
     """Seconds since the heartbeat file was last touched; None when there
     is no such file."""
     try:
-        return time.time() - path.stat().st_mtime
+        return clock.now() - path.stat().st_mtime
     except OSError:
         return None
 
@@ -239,7 +239,7 @@ def invocation_age_s(info: dict[str, Any]) -> float | None:
         stamp = datetime.strptime(at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     except ValueError:
         return None
-    return (datetime.now(timezone.utc) - stamp).total_seconds()
+    return clock.now() - stamp.timestamp()
 
 
 def invocations_without_record(item_records_dir: Path) -> list[tuple[Path, dict[str, Any]]]:

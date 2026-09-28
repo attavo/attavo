@@ -43,6 +43,7 @@ MODULE_TESTS: dict[str, tuple[str, ...]] = {
     "attavo/attest.py": ("tests/test_attest.py", "tests/test_attest_time.py"),
     "attavo/build.py": ("tests/test_build.py", "tests/test_testtool.py"),
     "attavo/claims.py": ("tests/test_claims.py",),
+    "attavo/clock.py": ("tests/test_clock.py", "tests/test_retry.py"),
     "attavo/cli.py": ("tests/test_cli_help.py", "tests/test_testtool.py"),
     "attavo/counsel.py": ("tests/test_counsel.py",),
     "attavo/doctor.py": ("tests/test_doctor.py", "tests/test_doctor_sealed.py",

@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import time
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +32,7 @@ from test_drive import (
     records_dir,
     run_attavo,
 )
-from test_pass import FAST, pushed, report, wait_for
+from test_pass import FAST, clock_ahead, passes_until, pushed, report, wait_for
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE_RUN = ROOT / "adapters" / "fixture" / "run"
@@ -95,20 +94,6 @@ def approved_tenant(tmp_path: Path, build_prelude: str = "", **drive: Any) -> tu
     return root, bare
 
 
-def passes_until(root: Path, pred: Any, seconds: float = 40, env: dict[str, str] | None = None) -> None:
-    """Passes, spaced, until pred holds: how an operator's loop, the
-    screen's poll, or a scheduler line would drive the item."""
-    deadline = time.monotonic() + seconds
-    full = dict(FAST)
-    full.update(env or {})
-    while time.monotonic() < deadline:
-        run_attavo(root, "drive", "1", env=full)
-        if pred():
-            return
-        time.sleep(0.5)
-    raise AssertionError("condition not met in time")
-
-
 def stop_of(root: Path, stage: str, nn: int) -> dict[str, Any]:
     rec = json.loads((records_dir(root) / f"{stage}-{nn:02d}.json").read_text())
     return dict(rec.get("stop") or {})
@@ -136,7 +121,9 @@ def test_a_transient_stop_retries_plainly_after_the_wait(tmp_path: Path) -> None
     assert early.returncode == 0 and "retrying" in early.stdout.lower(), early.stdout
     assert not (records_dir(root) / "build-02.started").exists()
 
-    passes_until(root, lambda: len(record_files(root, "build")) == 2, seconds=40)
+    # past the wait: the clock says so, and the pass starts the next attempt at once
+    passes_until(root, lambda: len(record_files(root, "build")) == 2, seconds=40,
+                 env=clock_ahead(tmp_path, 10))
     rec = latest_record(root, "build")
     assert rec["status"] == "pass" and rec["retry_of"] == "build-01", rec
     assert counsel_records(root) == []
@@ -262,11 +249,13 @@ def test_counsels_verdict_routes_the_next_pass(tmp_path: Path) -> None:
         git(root, "push", "-q", "origin", "HEAD:main")
         env = {"ATTAVO_FIXTURE_QUESTION": "which overlay wins?",
                "ATTAVO_FIXTURE_COUNSEL_RESPONSE": str(responses / f"{verdict}.json")}
-        passes_until(root, lambda: pushed(bare, "build record for item 1 (build-01)"), seconds=40, env=env)
+        # one pass starts the worker; the record's push is the fact to wait on, with no
+        # further pass running git beside the worker's own commit
+        assert run_attavo(root, "drive", "1", env={**FAST, **env}).returncode == 0
+        wait_for(lambda: pushed(bare, "build record for item 1 (build-01)"), seconds=40)
         assert latest_record(root, "counsel")["verdict"] == verdict
-        for _ in range(3):
-            run_attavo(root, "drive", "1", env={**FAST, **env})
-            time.sleep(0.5)
+        wait_for(lambda: report(root, env)["state"] != "running")
+        run_attavo(root, "drive", "1", env={**FAST, **env})
         if expect_attempt == 2:
             passes_until(root, lambda: len(record_files(root, "build")) == 2, seconds=30, env={**env, "ATTAVO_FIXTURE_QUESTION": ""})
             assert latest_record(root, "build")["steer"] == "counsel-01"
@@ -297,7 +286,6 @@ def test_a_persons_stop_is_never_retried(tmp_path: Path) -> None:
         assert first["status"] != "pass", (name, first)
         for _ in range(3):
             run_attavo(root, "drive", "1", env=full)
-            time.sleep(0.3)
         assert len(record_files(root, "build")) == 1, name
         assert not (records_dir(root) / "build-02.started").exists(), name
         assert report(root)["state"] == "stopped"
@@ -314,7 +302,6 @@ def test_identical_failures_stop_early_and_the_budget_holds(tmp_path: Path) -> N
     passes_until(root, lambda: len(record_files(root, "build")) == 2, seconds=60)
     for _ in range(6):
         run_attavo(root, "drive", "1", env=FAST)
-        time.sleep(0.5)
     assert len(record_files(root, "build")) == 2
     assert not (records_dir(root) / "build-03.started").exists()
     assert stop_of(root, "build", 1)["signature"] == stop_of(root, "build", 2)["signature"]
@@ -327,7 +314,6 @@ def test_identical_failures_stop_early_and_the_budget_holds(tmp_path: Path) -> N
     passes_until(root2, lambda: len(record_files(root2, "build")) == 3, seconds=90)
     for _ in range(6):
         run_attavo(root2, "drive", "1", env=FAST)
-        time.sleep(0.5)
     assert len(record_files(root2, "build")) == 3
     assert not (records_dir(root2) / "build-04.started").exists()
     out = report(root2)
@@ -345,7 +331,6 @@ def test_every_marker_spends_the_budget(tmp_path: Path) -> None:
     passes_until(root, lambda: len(record_files(root, "build")) == 2, seconds=60)
     for _ in range(6):
         run_attavo(root, "drive", "1", env=FAST)
-        time.sleep(0.5)
     assert len(record_files(root, "build")) == 2
     assert not (records_dir(root) / "build-03.started").exists()
     out = report(root)
@@ -363,11 +348,13 @@ def test_a_stage_past_its_ceiling_is_hung_by_the_ceiling(tmp_path: Path) -> None
     commit_all(root, "an adapter that does not stream")
     git(root, "push", "-q", "origin", "HEAD:main")
     assert run_attavo(root, "drive", "1", env=FAST).returncode == 0
-    time.sleep(3)
-    out = report(root)
+    wait_for(lambda: report(root)["state"] == "running")
+    # the worker is inside its ceiling now; the clock, not a wait, puts it past
+    past = clock_ahead(tmp_path, 3)
+    out = report(root, past)
     assert out["state"] == "owes-recovery", out
     assert "event" not in out["says"], out["says"]
-    passes_until(root, lambda: pushed(bare, "build record for item 1 (build-01)"), seconds=20)
+    passes_until(root, lambda: pushed(bare, "build record for item 1 (build-01)"), seconds=20, env=past)
     stop = stop_of(root, "build", 1)
     assert stop["class"] == "hung" and stop["bound"] == "ceiling", stop
 
@@ -386,7 +373,6 @@ def test_again_resets_a_spent_budget_only(tmp_path: Path) -> None:
     passes_until(root, lambda: len(record_files(root, "build")) == 2, seconds=60)
     for _ in range(3):
         run_attavo(root, "drive", "1", env=FAST)
-        time.sleep(0.5)
     assert len(record_files(root, "build")) == 2
     again = run_attavo(root, "drive", "1", "--again", "--by", "alice", env=FAST)
     assert again.returncode == 0 and "Build started" in again.stdout, again.stdout
@@ -412,3 +398,9 @@ def test_adapters_class_transient() -> None:
     run = subprocess.run(["sh", str(FIXTURE_RUN)], capture_output=True, text=True, env=env, cwd=str(ROOT))
     line = [l for l in run.stdout.splitlines() if l.startswith("{")][-1]
     assert json.loads(line).get("class") == "transient", run.stdout
+
+
+def test_this_file_waits_on_facts_never_on_the_clock() -> None:
+    """The bounds the product judges are set through ATTAVO_CLOCK_FILE, and
+    every other wait is on a condition: no real sleep in this file (#257)."""
+    assert "time.sleep" not in Path(__file__).read_text().replace('"time.sleep"', "")
