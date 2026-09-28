@@ -125,3 +125,11 @@ def test_help_names_foreign_commit_and_says_the_class_comes_from_the_record() ->
     assert run.returncode == 0
     for phrase in ("foreign-commit", "never from the transcript", "the record's own fields"):
         assert phrase in run.stdout, phrase
+
+
+def test_help_says_the_gate_refuses_a_stub_outside_the_claims() -> None:
+    """Item 229. Red on the tree and on the stub: the words are the build's."""
+    run = subprocess.run([sys.executable, str(ATTAVO), "--help"],
+                         capture_output=True, text=True, check=False)
+    assert run.returncode == 0
+    assert "stub touches a path the claims do not name" in run.stdout, run.stdout

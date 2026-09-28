@@ -7,6 +7,7 @@ The stub overlay does not actually satisfy the criterion it claims to.
 ## Claims
 
 - src/**
+- other.txt
 
 ## Criteria
 

@@ -109,8 +109,8 @@ def base_env(tmp_path: Path) -> dict[str, Any]:
     return env
 
 
-def dry_run(tmp_path: Path, config: dict[str, Any] | None = None,
-           extra_env: dict[str, Any] | None = None) -> list[str]:
+def dry_run_envelope(tmp_path: Path, config: dict[str, Any] | None = None,
+                     extra_env: dict[str, Any] | None = None) -> dict[str, Any]:
     env = base_env(tmp_path)
     env["ATTAVO_ADAPTER_DRY_RUN"] = "1"
     env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(config or {})
@@ -120,7 +120,12 @@ def dry_run(tmp_path: Path, config: dict[str, Any] | None = None,
     run = subprocess.run([str(CLAUDE_CODE_RUN)], capture_output=True, text=True,
                          check=False, env=env)
     assert run.returncode == 0, run.stderr
-    return cast(list[str], json.loads(run.stdout)["argv"])
+    return cast(dict[str, Any], json.loads(run.stdout))
+
+
+def dry_run(tmp_path: Path, config: dict[str, Any] | None = None,
+           extra_env: dict[str, Any] | None = None) -> list[str]:
+    return cast(list[str], dry_run_envelope(tmp_path, config, extra_env)["argv"])
 
 
 def run_with_response(tmp_path: Path, response: dict[str, Any] | list[dict[str, Any]],
@@ -149,8 +154,11 @@ def test_claude_code_api_mode_is_default(tmp_path: Path) -> None:
     assert cmd[cmd.index("--output-format") + 1] == "stream-json"
     assert "--verbose" in cmd
     assert "--json-schema" in cmd
-    assert cmd[cmd.index("--permission-mode") + 1] == "acceptEdits"
-    assert cmd[cmd.index("--allowedTools") + 1] == "Read,Edit,Write,Bash"
+    # Item 229: with a spec that names claims, Edit and Write are allowed on
+    # the claimed paths only and the mode is default so an unclaimed edit
+    # asks (and, headless, is refused) instead of being accepted.
+    assert cmd[cmd.index("--permission-mode") + 1] == "default"
+    assert cmd[cmd.index("--allowedTools") + 1] == "Read,Bash,Edit(built.txt),Write(built.txt)"
     assert "--model" not in cmd
     assert "--setting-sources" not in cmd
     assert "--strict-mcp-config" not in cmd
@@ -186,7 +194,7 @@ def test_claude_code_build_sandbox_settings(tmp_path: Path) -> None:
     assert settings["sandbox"]["allowUnsandboxedCommands"] is False
     assert settings["sandbox"]["network"]["allowedDomains"] == []
     allowed_tools = cmd[cmd.index("--allowedTools") + 1]
-    assert allowed_tools == "Read,Edit,Write,Bash"
+    assert allowed_tools == "Read,Bash,Edit(built.txt),Write(built.txt)"
     assert not any(t.startswith("Bash(") for t in allowed_tools.split(","))
 
 
@@ -763,3 +771,44 @@ def test_claude_code_verify_instruction_says_nothing_about_a_stub_when_absent(tm
     instruction = cmd[cmd.index("-p") + 1]
     assert "stub" not in instruction.lower()
 
+
+
+def test_claude_code_build_allows_edits_on_the_claimed_paths_only_and_denies_the_outliving_tools(tmp_path: Path) -> None:
+    """Item 229: the boundary is told at the edit. Edit and Write are
+    permission rules built from the spec's Claims; the mode is default so
+    an unclaimed edit asks and a headless run refuses it; Monitor and
+    ScheduleWakeup join Agent and Workflow as tools that let the invocation
+    outlive its answer (items 227 and 229). Red first against v0.29.0."""
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    (spec_dir / "spec.md").write_text(
+        "## Problem\n\nx\n\n## Claims\n\n- attavo/build.py\n- docs/\n- tests/test_build.py\n\n"
+        "## Criteria\n\n- a.sh: x\n")
+    cmd = dry_run(tmp_path, extra_env={"ATTAVO_SPEC_DIR": str(spec_dir)})
+    allowed = cmd[cmd.index("--allowedTools") + 1].split(",")
+    assert allowed == ["Read", "Bash",
+                       "Edit(attavo/build.py)", "Write(attavo/build.py)",
+                       "Edit(docs/**)", "Write(docs/**)",
+                       "Edit(tests/test_build.py)", "Write(tests/test_build.py)"], allowed
+    assert "Edit" not in allowed and "Write" not in allowed
+    assert cmd[cmd.index("--permission-mode") + 1] == "default"
+    denied = cmd[cmd.index("--disallowedTools") + 1].split(",")
+    for tool in ("Agent", "Workflow", "Monitor", "ScheduleWakeup"):
+        assert tool in denied, denied
+    verify = dry_run(tmp_path, extra_env={"ATTAVO_SPEC_DIR": str(spec_dir), "ATTAVO_STAGE": "verify"})
+    assert verify[verify.index("--allowedTools") + 1] == "Read,Bash"
+    conformance = json.loads((ROOT / "adapters" / "claude-code" / "conformance.json").read_text())
+    assert {"Monitor", "ScheduleWakeup"} <= set(conformance["denied_commands"]["patterns"])
+
+
+def test_claude_code_foreground_fits_one_test_run_when_a_bound_is_exported(tmp_path: Path) -> None:
+    """Item 229: the executor's Bash foreground was Claude Code's two
+    minutes against a 240 s test call, so it backgrounded the run. With
+    ATTAVO_TEST_TIMEOUT_S exported the adapter sets both Bash timeouts to
+    that bound plus a 60 s margin, in milliseconds; with none it sets
+    neither. Red first against v0.29.0."""
+    given = dry_run_envelope(tmp_path, extra_env={"ATTAVO_TEST_TIMEOUT_S": "240"})
+    assert given["env"] == {"BASH_DEFAULT_TIMEOUT_MS": "300000",
+                            "BASH_MAX_TIMEOUT_MS": "300000"}, given["env"]
+    without = dry_run_envelope(tmp_path)
+    assert without["env"] == {}, without["env"]

@@ -557,3 +557,26 @@ def test_an_approved_and_built_item_whose_spec_declares_no_class_still_regates_b
     assert run.returncode == 0, run.stdout + run.stderr
     rec = latest_record(root, "1", "spec")
     assert rec["status"] == "built" and rec["class"] is None, rec
+
+
+def test_spec_gate_refuses_a_stub_that_touches_a_path_the_claims_do_not_name(tmp_path: Path) -> None:
+    """Item 229's third attempt: the change needed attavo/common.py, the
+    Claims list did not name it, and the gate found out 2,754 s later. The
+    stub is the change's floor, so a stub path outside the claims is a
+    wrong Claims list before any build runs. Red first against v0.29.0."""
+    root = make_tenant(tmp_path, "valid")
+    stub = root / "specs" / "1" / "stub"
+    (stub / "lib").mkdir(parents=True)
+    (stub / "lib" / "helper.py").write_text("x = 1\n")
+    commit_all(root, "a stub file the claims do not name")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert "stub touches a path the claims do not name: lib/helper.py" in run.stdout, run.stdout
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused" and "lib/helper.py" in rec["refusal"], rec
+    spec_md = root / "specs" / "1" / "spec.md"
+    spec_md.write_text(spec_md.read_text().replace("- src/**\n", "- src/**\n- lib/\n"))
+    commit_all(root, "claim the directory")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert latest_record(root, "1", "spec")["status"] == "pass"

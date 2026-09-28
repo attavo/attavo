@@ -83,8 +83,11 @@ fix item's spec may name the root cause its change closes as one
 "Root-cause: <slug>" line in the problem; spec-gate refuses a slug the
 tenant's root-causes.md (beside paths.specs) does not list, or any slug
 when that file is absent, before any criterion runs -- a spec with no
-root-cause line is untouched. See the spec contract in the project's
-Phase 1 issue for the full rules each one enforces.
+root-cause line is untouched. spec-gate also refuses, before any
+criterion runs, "stub touches a path the claims do not name: <path>" for
+the first path under stub/ (or in stub/.removed) that no claim matches.
+See the spec contract in the project's Phase 1 issue for the full rules
+each one enforces.
 
 build refuses (exit 1, naming the cause, no record) unless the manifest
 declares [executor].build and [tests].select and [tests].run, and unless
@@ -122,7 +125,11 @@ for a tenant that declares no probe, by running [checks].command whole
 (exit 2 no) -- and says both the question and the answer in the feed
 (issue #212). The adapter is given ATTAVO_TEST_COMMAND, `attavo test N`,
 and ATTAVO_TEST_TIMEOUT_S when [tests].call_timeout_s is declared; it
-is not given the tenant's checks. It writes the next build-NN.json under paths.records/N/, with
+is not given the tenant's checks. The claude-code adapter tells the
+executor the claims at the edit: its Edit and Write are allowed on the
+spec's claimed paths only (a trailing-slash claim covers its subtree) and
+an edit outside them is refused when tried, and its Bash foreground is
+that bound plus 60 s. It writes the next build-NN.json under paths.records/N/, with
 the adapter's transcript -- each iteration's gate output (criteria
 exits, the selected tests' stdout, the tenant's checks' tail) appended
 under an "--- attavo gates, iteration N ---" heading, issue #89 -- beside
