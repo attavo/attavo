@@ -57,6 +57,16 @@ if [ "${ATTAVO_STAGE:-build}" = "counsel" ]; then
   echo "--- end diff ---"
   echo "manifest: ${ATTAVO_MANIFEST:-}"
   echo "product root: ${ATTAVO_PRODUCT_ROOT:-}"
+  if [ -n "${ATTAVO_FIXTURE_COUNSEL_WAIT_FOR:-}" ]; then
+    # holds the run open until a test creates this path (at most 30 s), so
+    # a test can read the worker while counsel is in progress without
+    # sleeping a fixed time for it.
+    waited=0
+    while [ ! -e "${ATTAVO_FIXTURE_COUNSEL_WAIT_FOR}" ] && [ "$waited" -lt 300 ]; do
+      sleep 0.1
+      waited=$((waited + 1))
+    done
+  fi
   if [ -n "${ATTAVO_FIXTURE_COUNSEL_RESPONSE:-}" ]; then
     cat "${ATTAVO_FIXTURE_COUNSEL_RESPONSE}"
     echo
