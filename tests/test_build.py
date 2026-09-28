@@ -148,8 +148,9 @@ def test_build_refuses_an_executor_commit_under_records(tmp_path: Path) -> None:
     rec = latest_build(root)
     assert rec["status"] == "refused"
     assert rec["refusal"] == "records/1/sneaky.txt"
-    assert rec["stop"] == {"class": "claims-boundary", "provenance": "executor", "detail": None,
-                       "signature": None, "bound": None}
+    assert rec["stop"] == {"class": "claims-boundary", "provenance": "executor",
+                       "detail": "records/1/sneaky.txt", "signature": "records//sneaky.txt",
+                       "bound": None}
 
 
 def test_build_refuses_an_executor_commit_under_specs(tmp_path: Path) -> None:
@@ -164,8 +165,9 @@ def test_build_refuses_an_executor_commit_under_specs(tmp_path: Path) -> None:
     rec = latest_build(root)
     assert rec["status"] == "refused"
     assert rec["refusal"] == "specs/1/sneaky.txt"
-    assert rec["stop"] == {"class": "claims-boundary", "provenance": "executor", "detail": None,
-                       "signature": None, "bound": None}
+    assert rec["stop"] == {"class": "claims-boundary", "provenance": "executor",
+                       "detail": "specs/1/sneaky.txt", "signature": "specs//sneaky.txt",
+                       "bound": None}
 
 
 def test_fixture_adapter_traverses_build(tmp_path: Path) -> None:
@@ -566,14 +568,14 @@ def test_build_refused_on_a_claims_violation_carries_claims_boundary_stop(tmp_pa
 
     rec = latest_build(root)
     assert rec["status"] == "refused"
-    assert rec["stop"] == {"class": "claims-boundary", "provenance": "spec", "detail": None,
-                       "signature": None, "bound": None}
+    assert rec["stop"] == {"class": "claims-boundary", "provenance": "spec",
+                       "detail": "unclaimed.txt", "signature": "unclaimed.txt", "bound": None}
 
 
-def test_build_refused_on_a_foreign_commit_is_unclassed(tmp_path: Path) -> None:
-    """A refusal that is not a claims path -- "commit ... not authored by
-    the executor" -- carries no rule of its own in this lane; it falls to
-    unclassed/product, with the log's last line as its detail."""
+def test_build_refused_on_a_foreign_commit_is_foreign_commit_tenant(tmp_path: Path) -> None:
+    """A refusal for a commit the executor did not author is class
+    foreign-commit, provenance tenant, the refusal string (which names the
+    commit) its detail (issue #241, #229 build-01)."""
     root = make_tenant(tmp_path, "build_valid")
     approve_item(root)
 
@@ -582,15 +584,17 @@ def test_build_refused_on_a_foreign_commit_is_unclassed(tmp_path: Path) -> None:
 
     rec = latest_build(root)
     assert rec["status"] == "refused"
-    assert rec["stop"]["class"] == "unclassed"
-    assert rec["stop"]["provenance"] == "product"
-    assert rec["stop"]["detail"]
+    assert rec["stop"]["class"] == "foreign-commit"
+    assert rec["stop"]["provenance"] == "tenant"
+    assert rec["stop"]["detail"] == rec["refusal"]
+    assert "not authored by the executor" in rec["stop"]["detail"]
 
 
-def test_build_ceiling_error_line_carries_ceiling_stop(tmp_path: Path) -> None:
-    """Issue #89, rejection test 3: an adapter exit with a tool error line
-    matching a declared ceiling is ceiling/product -- issue #86's own
-    specimen, codex's "input_too_large" on a diff too large to judge."""
+def test_build_a_tool_error_line_naming_a_ceiling_is_not_a_ceiling(tmp_path: Path) -> None:
+    """Issue #241: the log's words decide nothing. A tool's own
+    "input_too_large" error line, with no report line beside it, is
+    unclassed/product, the line itself the detail; a ceiling is what an
+    adapter reports (below), never what the product reads."""
     root = make_tenant(tmp_path, "build_valid")
     approve_item(root)
 
@@ -599,8 +603,9 @@ def test_build_ceiling_error_line_carries_ceiling_stop(tmp_path: Path) -> None:
 
     rec = latest_build(root)
     assert rec["status"] == "failed"
-    assert rec["stop"] == {"class": "ceiling", "provenance": "product", "detail": None,
-                       "signature": None, "bound": None}
+    assert rec["stop"]["class"] == "unclassed"
+    assert rec["stop"]["provenance"] == "product"
+    assert rec["stop"]["detail"] == "[adapter exited 1]"
     log = (root / "records" / "1" / "build-01.log").read_text()
     assert "input_too_large" in log
 
@@ -614,9 +619,9 @@ def test_build_adapter_ceiling_refusal_on_a_declared_limit_carries_ceiling_stop(
     enough to exceed it, standing in for a real oversized one). Unlike
     issue #86's specimen -- a raw tool error line ("input_too_large")
     caught by CEILING_MARKERS -- this refusal is the adapter's own text,
-    which must still derive ceiling/product through the real
-    derive_stop, not executor (issue #88's classes are executor
-    judgments; a ceiling is a fact about the tool, not one).
+    which now arrives as a report line carrying "class": "ceiling"
+    (issue #241) and classes ceiling/executor: the adapter reported what
+    it refused, and the product read no words to find out.
     """
     root = make_tenant(tmp_path, "build_valid")
     use_claude_code_adapter(root)
@@ -628,7 +633,7 @@ def test_build_adapter_ceiling_refusal_on_a_declared_limit_carries_ceiling_stop(
 
     rec = latest_build(root)
     assert rec["status"] == "failed"
-    assert rec["stop"] == {"class": "ceiling", "provenance": "product", "detail": None,
+    assert rec["stop"] == {"class": "ceiling", "provenance": "executor", "detail": None,
                        "signature": None, "bound": None}
     log = (root / "records" / "1" / "build-01.log").read_text()
     assert "ceiling" in log
@@ -838,9 +843,9 @@ def test_build_halt_report_line_class_field_sets_stop_class(tmp_path: Path) -> N
 
 def test_build_refuses_a_commit_not_authored_by_the_executor(tmp_path: Path) -> None:
     """Issue #33, acceptance 2. A commit whose author is not the executor
-    identity build exported -- however it got there -- refuses the build
-    the same class as a write outside the claims: the identity is only
-    evidence if a foreign commit cannot pass through build unremarked.
+    identity build exported -- however it got there -- refuses the build:
+    the identity is only evidence if a foreign commit cannot pass through
+    build unremarked.
     """
     root = make_tenant(tmp_path, "build_valid")
     approve_item(root)
@@ -912,6 +917,32 @@ def test_build_proceeds_when_checks_command_exits_1_on_the_approved_tree(tmp_pat
     assert rec["model"] == "fixture"
     assert rec["status"] == "failed"
     assert rec["checks"] == {"command": "exit 1", "exit": 1}
+    assert rec["stop"]["class"] == "gate"
+    assert rec["stop"]["provenance"] == "executor"
+    assert rec["stop"]["detail"] == "checks: exit 1"
+
+
+def test_build_a_red_selected_tests_run_classes_gate_executor_with_exit_and_count(tmp_path: Path) -> None:
+    """Issue #241, #229 build-04 and #237 build-01: a build failed at the
+    gate on the selected tests' exit is gate/executor, naming the exit and
+    how many tests were selected -- read from the record's own
+    selected_tests, whatever the transcript says."""
+    root = make_tenant(tmp_path, "build_valid")
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace('run = "true"', 'run = "false"'))
+    commit_all(root, "a selected-tests run that is red")
+    approve_item(root)
+
+    run = run_attavo(root, "build", "1")
+    assert run.returncode == 1
+
+    rec = latest_build(root)
+    assert rec["status"] == "failed"
+    assert rec["selected_tests"]["exit"] == 1
+    assert rec["checks"] is None
+    assert rec["stop"]["class"] == "gate"
+    assert rec["stop"]["provenance"] == "executor"
+    assert rec["stop"]["detail"] == f"selected tests: exit 1, {rec['selected_tests']['count']} selected"
 
 
 # --- an empty build is not a pass (item 227): the executor copied the

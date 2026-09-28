@@ -385,7 +385,8 @@ def cmd_verify(argv: list[str]) -> int:
                                        "signature": signature_of(" ".join(blocking)), "bound": None}
     else:
         stop = cast("dict[str, Any] | None",
-                   derive_stop(status_out, log=transcript, report_class=(payload or {}).get("class")))
+                   derive_stop(status_out, log=transcript, report_class=(payload or {}).get("class"),
+                               gate=None))
         if stop is not None:
             stop_detail: str | None = ((payload or {}).get("detail") if stop["class"] == "transient"
                                        else stop.get("detail"))

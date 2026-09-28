@@ -127,8 +127,13 @@ the adapter's transcript -- each iteration's gate output (criteria
 exits, the selected tests' stdout, the tenant's checks' tail) appended
 under an "--- attavo gates, iteration N ---" heading, issue #89 -- beside
 it as build-NN.log. Every record whose status is not pass carries stop:
-{class, provenance, detail}, derived from the refusal, halted, and log
-already on hand (issue #89); a pass record carries stop: null. See the
+{class, provenance, detail}, derived from the record's own fields (the
+adapter's report-line class, a halt's question, the refusal's kind, the
+gate's results), never from the transcript: a refusal for a commit the
+executor did not author is class foreign-commit, provenance tenant; a
+build whose own gate is red is class gate, provenance executor; a stop
+with no structure to class it is unclassed, and only then does the log's
+last line serve as its detail. A pass record carries stop: null. See the
 build contract in the project's Phase 2 issue for the full rules it
 enforces.
 

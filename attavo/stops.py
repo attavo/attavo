@@ -11,15 +11,17 @@ from attavo.records import parse_attempts, stage_schema
 from attavo.types import CounselRecord, Stop
 
 # --- stop: every non-pass build or verify record's class and cause (issue
-# #89) -- derived here, at write time, from the refusal, halted, and log
-# the caller already has. Never a fresh read of anything: the tenant zero
-# specimens this retires (#576 build-11, #659 build-01 and verify-01) are
-# exactly a stop the product wrote with nothing beside it to explain
-# itself after the fact. ---
+# #89) -- derived here, at write time, from the record's own structured
+# fields and what the caller knows structurally (issue #241). The
+# transcript decides neither class nor provenance: the executor reads this
+# repository's records and docs, which name every class. ---
 
+# no-cause is the doctor's phrase for a record that predates `stop`; nothing
+# derives it.
 STOP_CLASSES = ("non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
                "ceiling", "claims-boundary", "repeated-act", "unclassed", "question",
-               "environment", "gate", "died", "hung", "transient", "returned", "empty")
+               "environment", "gate", "died", "hung", "transient", "returned", "empty",
+               "foreign-commit")
 
 # R3: the four families a pass retries with no person involved -- every
 # other class is counsel's to read first, and a person's when counsel says
@@ -40,67 +42,6 @@ def signature_of(text: str | None) -> str | None:
 
 STOP_PROVENANCES = ("product", "tenant", "executor", "spec")
 
-# Beyond the enum spelling itself, the prose issue #88 actually shipped
-# (adapters/claude-code/run and adapters/codex/run, on main since
-# v0.16.0) once put a class's own name, or a real specimen's wording of
-# it, in the transcript for the generic match below to find. Issue #94
-# moves non-question and outlived-invocation onto report_class instead
-# (below): non-question's own halt line ("halted: class non-question")
-# would otherwise still satisfy the bare-name match here with no adapter
-# report-line field involved at all, and outlived-invocation's refusal
-# never named its class in text to begin with, so both are disabled here
-# -- the same pattern issue #93 established for ceiling, just below,
-# rather than removed outright.
-CLASS_TEXT_MARKERS: dict[str, tuple[str, ...]] = {
-    "non-question": (),
-    "outlived-invocation": (),
-    # R3: transient is read from the adapter's own report line
-    # (report_class) below; returned is written directly by the pass or
-    # cmd_verify, never derived from a log's text -- a retried attempt's
-    # feedback file names the prior stop's class in prose, and that text
-    # reaches the next attempt's own transcript, which must not then be
-    # misread as a fresh instance of either class.
-    "transient": (),
-    "returned": (),
-    # Issue #93: ceiling's own text-based check is CEILING_MARKERS, below,
-    # with provenance "product" -- a fact about the tool, not an executor
-    # judgment like non-question/outlived-invocation are. Left at the
-    # default (the class's own name, "ceiling"), the generic match above
-    # would instead catch adapters/codex/run's and
-    # adapters/claude-code/run's own pre-emptive refusal -- which must
-    # carry the word "ceiling" by the same issue's own brief -- as
-    # provenance "executor", before CEILING_MARKERS is ever consulted.
-    "ceiling": (),
-    # A genuine question (issue #100's own followups) is read structurally
-    # -- status "halted" carrying a non-empty halted.question -- not by
-    # scanning for the literal word "question", which the question's own
-    # text very often contains regardless of what it is actually asking.
-    # Left at the default, the generic match above would misclassify any
-    # question that happens to use the word "question" as executor
-    # provenance, before the structural check in derive_stop is reached.
-    "question": (),
-    # environment/tenant (issue #115) is set directly by cmd_build's own
-    # preflight -- the one caller who knows a [checks].command exited 2
-    # on the approved tree -- never derived from adapter text. Left at
-    # the default, the generic match above would catch the word
-    # "environment" anywhere in a log or refusal (e.g. codex's own
-    # OPENAI_API_KEY auth-mismatch refusal, adapters/codex/run's
-    # check_auth) as an environment/executor stop that never happened.
-    "environment": (),
-}
-
-# Known tool error text for a declared ceiling -- issue #86's own specimen
-# (codex's "Input exceeds..." line on a diff too large to judge) is
-# "input_too_large"; a matching line anywhere in the log, not only its
-# last line, since cmd_build and cmd_verify both append "[adapter exited
-# N]" after whatever the tool itself printed. "ceiling exceeded" is issue
-# #93's own addition: both adapters now refuse pre-emptively, before the
-# tool is ever invoked, against a declared or fixed input limit, and
-# their refusal text is not caught by any of the three markers above.
-CEILING_MARKERS = ("input_too_large", "exceeds the maximum context length",
-                  "context_length_exceeded", "ceiling exceeded")
-
-
 # Issue #100's followups: an unclassed detail is the log's last line
 # verbatim, and that line is sometimes an adapter's own event JSON or a
 # tool's full error text -- thousands of characters wide. Capped here,
@@ -117,79 +58,45 @@ def _log_last_line(log: str | None) -> str:
     return last[:UNCLASSED_DETAIL_MAX_CHARS]
 
 
-def _carries_a_known_class(text: str | None) -> str | None:
-    """Whichever of STOP_CLASSES this text names -- its own spelling, or
-    one of CLASS_TEXT_MARKERS' real-world phrasings of it, when that
-    class is not disabled there -- or None. Issue #88 is where an
-    adapter's own halt or refusal first named its class this way; issue
-    #93 added ceiling's own pre-emptive refusal to that set and disabled
-    its bare-name match (CEILING_MARKERS covers it instead); issue #94
-    disables non-question and outlived-invocation the same way, reading
-    both from the adapter's own report line (derive_stop's report_class)
-    now instead."""
-    text = text or ""
-    for name in STOP_CLASSES:
-        markers = CLASS_TEXT_MARKERS.get(name, (name,))
-        if any(marker in text for marker in markers):
-            return name
+def _first_red(gate: dict[str, Any] | None) -> str | None:
+    """The first red element of a build's gate, named: a criterion, then the
+    selected tests, then the checks; None when the gate is absent or green."""
+    if not gate:
+        return None
+    for c in gate.get("criteria") or []:
+        if c["exit"] != 0:
+            return f"criterion {c['name']}: exit {c['exit']}"
+    tests = gate.get("selected_tests")
+    if tests and tests["exit"] != 0:
+        return f"selected tests: exit {tests['exit']}, {tests['count']} selected"
+    checks = gate.get("checks")
+    if checks and checks["exit"] != 0:
+        return f"checks: exit {checks['exit']}"
     return None
 
 
-def derive_stop(status: str, *, refusal: str | None = None, halted: dict[str, Any] | None = None,
-                log: str | None = None, report_class: str | None = None,
-                refusal_provenance: str | None = None) -> Stop | None:
+def derive_stop(status: str, *, report_class: str | None = None,
+                halted: dict[str, Any] | None = None, refusal_kind: str | None = None,
+                refusal: str | None = None, gate: dict[str, Any] | None = None,
+                log: str | None = None) -> Stop | None:
     """The stop field for a build or verify record: None for status "pass",
-    else {class, provenance, detail} from what the caller already knows.
+    else {class, provenance, detail} from the record's own structure and
+    what the caller knows of it, in this order, and nothing else decides:
 
-      - report_class -- payload.get("class") off the adapter's own report
-        line (issue #88, #94), when it names a STOP_CLASSES member -- is
-        that class, provenance "executor". build.schema.json and
-        verify.schema.json stay untouched by issue #88 on purpose, so the
-        class lives only on the report line, never a structured field
-        cmd_build or cmd_verify forwards on its own account; the caller
-        reads payload itself and passes this in, since only it still has
-        payload once an iteration ends. This is non-question's and
-        outlived-invocation's only path to a record now (issue #94):
-        CLASS_TEXT_MARKERS disables both for the text scan below, the
-        same way issue #93 disabled ceiling's bare-name match there. A
-        class an adapter does not yet put on its report line --
-        outlived-invocation today, since that refusal path prints no
-        report line at all -- falls to unclassed below, same as any
-        other unnamed cause, until the adapter that raises it puts a
-        class on the line the way non-question already does.
-      - a halt carrying a non-empty halted.question, once it is not a
-        non-question caught above, is a genuine question -- question/spec,
-        with the question's own first line as detail (issue #100's
-        followups). This is the specimen issue #100 itself was built to
-        retire: tenant zero's #663 build-01, a proper question, classed
-        unclassed/product and filed as a product defect with the wrong
-        provenance -- a question is about the definition of done, which is
-        a person's or a ruling's to answer, never the product's own
-        mechanism.
-      - failing that, a refusal or the log itself that already names its
-        class in text (issue #88, #93 for ceiling's own pre-emptive
-        refusal) is that class, provenance "executor" -- the log is
-        checked because neither adapter's refusal *field* carries the
-        class today; the class-naming line each adapter prints reaches
-        only the transcript
-      - a refusal that is not that -- the write-outside-claims path
-        itself, not the "commit ... not authored by the executor" shape
-        -- is claims-boundary/spec, unless the caller already knows this
-        refusal touched paths.records or paths.specs (issue #140:
-        protected_path_touched, checked ahead of the ordinary claims
-        match in cmd_build) and passes refusal_provenance="executor" --
-        the product's own directories are not a claim a spec makes, so a
-        refusal there is not the spec's boundary to answer for
-      - a returned verify (the forge was not green; no adapter ran) is
-        forge-unconcluded/tenant
-      - an adapter exit whose log carries a declared-ceiling error line is
-        ceiling/product
-      - anything else is unclassed/product, with the log's last line
-        (capped at UNCLASSED_DETAIL_MAX_CHARS) as its detail -- the other
-        class that carries a detail, since every remaining class's
-        evidence already lives in refusal, halted, forge_checks, or the
-        log itself.
-    """
+      - returned: forge-unconcluded/tenant (verify's own declaration)
+      - report_class, the adapter's report-line class, when it names a
+        STOP_CLASSES member: that class/executor
+      - a halt carrying a non-empty question: question/spec, detail the
+        question's first line
+      - refused, by refusal_kind: claims -> claims-boundary/spec; protected
+        (paths.records or paths.specs) -> claims-boundary/executor;
+        foreign-commit -> foreign-commit/tenant; detail the refusal
+      - failed with a red gate element: gate/executor, detail naming the
+        first red one
+      - anything else: unclassed/product, detail the log's last line
+        (capped at UNCLASSED_DETAIL_MAX_CHARS)
+
+    The log supplies the detail of unclassed and nothing more."""
     if status == "pass":
         return None
     if status == "returned":
@@ -200,14 +107,17 @@ def derive_stop(status: str, *, refusal: str | None = None, halted: dict[str, An
     if status == "halted" and question:
         return {"class": "question", "provenance": "spec",
                "detail": question.splitlines()[0]}
-    known = _carries_a_known_class(refusal) or _carries_a_known_class(log)
-    if known:
-        return {"class": known, "provenance": "executor", "detail": None}
-    if status == "refused" and refusal is not None and not refusal.startswith("commit "):
-        return {"class": "claims-boundary", "provenance": refusal_provenance or "spec",
-               "detail": None}
-    if log and any(marker in log.lower() for marker in CEILING_MARKERS):
-        return {"class": "ceiling", "provenance": "product", "detail": None}
+    if status == "refused":
+        if refusal_kind == "claims":
+            return {"class": "claims-boundary", "provenance": "spec", "detail": refusal}
+        if refusal_kind == "protected":
+            return {"class": "claims-boundary", "provenance": "executor", "detail": refusal}
+        if refusal_kind == "foreign-commit":
+            return {"class": "foreign-commit", "provenance": "tenant", "detail": refusal}
+    if status == "failed":
+        red = _first_red(gate)
+        if red:
+            return {"class": "gate", "provenance": "executor", "detail": red}
     return {"class": "unclassed", "provenance": "product", "detail": _log_last_line(log)}
 
 
