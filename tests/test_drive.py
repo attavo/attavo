@@ -693,7 +693,7 @@ def test_drive_halts_on_a_question_and_again_resumes_at_build_after_a_ruling(tmp
     assert "Needs you" in left.stdout
     assert len(record_files(root, "build")) == 1
 
-    run2 = drive(root, "1", "--again")
+    run2 = drive(root, "1", "--again", "--by", "alice")
     assert run2.returncode == 0, run2.stdout + run2.stderr
 
     assert len(record_files(root, "build")) == 2
@@ -808,7 +808,7 @@ def test_drive_files_a_stop_it_reports_exactly_once(tmp_path: Path) -> None:
     # The next attempt (`--again`) halts again -- build-02 -- and files
     # exactly one more issue for that new record; file-stops' own .filed
     # marker means build-01's issue is never filed twice.
-    run2 = drive(root, "1", "--again", env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
+    run2 = drive(root, "1", "--again", "--by", "alice", env={"ATTAVO_FIXTURE_QUESTION": "which overlay wins?"})
     assert run2.returncode == 0, run2.stdout + run2.stderr
     assert len(record_files(root, "build")) == 2
 
@@ -1024,7 +1024,7 @@ def test_drive_commits_and_pushes_an_invocation_marker_before_the_stage_runs(tmp
     assert marker.is_file()
     info = json.loads(marker.read_text())
     assert info["host"] == socket.gethostname()
-    assert isinstance(info["pid"], int)
+    assert "pid" not in info, info
 
     marker_commit = git(root, "log", "--format=%H", "--", str(marker.relative_to(root))).split()[-1]
     build_commit = head_of(root)
@@ -1122,3 +1122,167 @@ def test_drive_forge_poll_defaults_are_a_real_forges_clock() -> None:
     module = attavo_module()
     assert module.DRIVE_FORGE_POLL_BOUND_DEFAULT_S >= 300
     assert module.DRIVE_FORGE_POLL_INTERVAL_DEFAULT_S >= 10
+
+
+# --- the holder writes the fact of holding: the worker's own pid is the
+# heartbeat file's content, and every reader of liveness reads that file
+# (root cause 4, issue #245). ---
+
+LIVE_BEAT = {"ATTAVO_HEARTBEAT_S": "15"}
+
+
+def heartbeat_file(root: Path, stage: str = "build", nn: int = 1) -> Path:
+    return Path(git(root, "rev-parse", "--absolute-git-dir").strip()) / "attavo" / f"{stage}-{nn:02d}.heartbeat"
+
+
+def write_held_marker(root: Path, stage: str, nn: int, holder_pid: str, *, marker_pid: int | None = None,
+                      event_age_s: int = 600, beat_age_s: float = 0) -> Path:
+    """A marker with no record whose heartbeat is `beat_age_s` old and
+    holds `holder_pid` as its content (empty for none), the adapter's
+    last event `event_age_s` old, committed and pushed."""
+    from datetime import datetime, timedelta, timezone
+
+    def stamp(ago: int) -> str:
+        return (datetime.now(timezone.utc) - timedelta(seconds=ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    d = records_dir(root)
+    d.mkdir(parents=True, exist_ok=True)
+    marker = d / f"{stage}-{nn:02d}.started"
+    info: dict[str, Any] = {"at": stamp(event_age_s), "host": socket.gethostname(),
+                            "sha": head_of(root), "product_version": "fixture"}
+    if marker_pid is not None:
+        info["pid"] = marker_pid
+    marker.write_text(json.dumps(info))
+    git(root, "add", str(marker.relative_to(root)))
+    git(root, "commit", "-q", "-m", "invocation marker for item 1")
+    beat = heartbeat_file(root, stage, nn)
+    beat.parent.mkdir(parents=True, exist_ok=True)
+    beat.write_text(holder_pid)
+    os.utime(beat, (time.time() - beat_age_s, time.time() - beat_age_s))
+    (beat.parent / f"{stage}-{nn:02d}.events.jsonl").write_text(
+        json.dumps({"at": stamp(event_age_s), "kind": "tool_call", "text": "fixture-tool"}) + "\n")
+    return marker
+
+
+def test_the_worker_writes_its_own_pid_as_the_heartbeat_content(tmp_path: Path) -> None:
+    """The driver returns seconds after it starts the worker; the worker
+    is the process that holds the stage, so its pid, not the driver's, is
+    what the heartbeat file says -- one line, unchanged by later beats."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_bare_remote(root, tmp_path)
+    slow_build_adapter(root, 3)
+    approve_item(root)
+
+    run = run_attavo(root, "drive", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    import re
+    worker_pid = int(re.search(r"worker pid (\d+)", run.stdout).group(1))  # type: ignore[union-attr]
+    beat = heartbeat_file(root)
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline and not (beat.exists() and beat.read_text().strip()):
+        time.sleep(0.1)
+    assert beat.read_text() == f"{worker_pid}\n"
+    first = beat.stat().st_mtime
+    time.sleep(0.6)
+    assert beat.stat().st_mtime > first, "the heartbeat did not move"
+    assert beat.read_text() == f"{worker_pid}\n"
+    marker = json.loads((records_dir(root) / "build-01.started").read_text())
+    assert "pid" not in marker and marker["host"] == socket.gethostname()
+    while time.monotonic() < deadline:
+        try:
+            os.kill(worker_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.2)
+
+
+def test_hung_recovery_signals_the_pid_the_heartbeat_names(tmp_path: Path) -> None:
+    """The hung recovery used to signal the marker's pid -- the driver's,
+    long gone -- and report "terminated" over a live hung worker. It
+    signals the holder: the pid in the heartbeat file."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_drive_stall_bound(root, 60)
+    bare = add_bare_remote(root, tmp_path)
+    approve_item(root)
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    holder = subprocess.Popen(["sleep", "60"])
+    try:
+        write_held_marker(root, "build", 1, f"{holder.pid}\n", marker_pid=_dead_pid())
+        git(root, "push", "origin", f"HEAD:{branch}")
+
+        run = drive(root, "1", env=LIVE_BEAT)
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert holder.wait(timeout=10) == -15, "the holder was not sent SIGTERM"
+        assert "recovered build-01 as hung" in run.stdout
+        stop = latest_record(root, "build")["stop"]
+        assert stop["class"] == "hung" and stop["bound"] == "stall", stop
+        assert f"pid {holder.pid}" in stop["detail"] and "terminated" in stop["detail"], stop
+    finally:
+        if holder.poll() is None:
+            holder.kill()
+            holder.wait()
+
+
+def test_hung_recovery_says_there_is_no_holder_to_signal_when_the_heartbeat_names_none(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "build_valid")
+    add_drive_stall_bound(root, 60)
+    add_bare_remote(root, tmp_path)
+    approve_item(root)
+    bystander = subprocess.Popen(["sleep", "60"])
+    try:
+        # the marker's stale pid field must not be read: this process lives and must be left alone
+        write_held_marker(root, "build", 1, "", marker_pid=bystander.pid)
+        git(root, "push", "origin", f"HEAD:{git(root, 'rev-parse', '--abbrev-ref', 'HEAD').strip()}")
+
+        run = drive(root, "1", env=LIVE_BEAT)
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert "recovered build-01 as hung" in run.stdout
+        assert "no holder to signal" in run.stdout, run.stdout
+        assert bystander.poll() is None, "a pid nobody holds the stage with was signalled"
+        assert latest_record(root, "build")["stop"]["class"] == "hung"
+    finally:
+        bystander.kill()
+        bystander.wait()
+
+
+def test_a_marker_with_no_heartbeat_on_this_host_reads_died_though_its_pid_lives(tmp_path: Path) -> None:
+    """read_invocation has no pid fallback: this test's own process lives
+    and the marker names it (a marker from before this release), yet no
+    heartbeat file means no holder."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_drive_stall_bound(root, 60)
+    approve_item(root)
+    write_held_marker(root, "build", 1, "", marker_pid=os.getpid(), event_age_s=1)
+    heartbeat_file(root).unlink()
+
+    run = run_attavo(root, "drive", "1", "--report", env=LIVE_BEAT)
+    assert run.returncode == 0, run.stdout + run.stderr
+    out = json.loads(run.stdout)
+    assert (out["state"], out["stop_class"]) == ("owes-recovery", "died"), out
+
+
+def test_again_without_by_refuses_even_inside_the_budget(tmp_path: Path) -> None:
+    """--again names who pressed it, as `attavo approve` names its
+    approver: refused before anything is read, whether or not it would
+    have done anything."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    approve_item(root)
+
+    run = run_attavo(root, "drive", "1", "--again")
+    assert run.returncode == 2, run.stdout + run.stderr
+    assert "attavo drive: --again requires --by LOGIN" in run.stderr
+    assert not (records_dir(root) / "build-01.started").exists()
+
+    empty = run_attavo(root, "drive", "1", "--again", "--by")
+    assert empty.returncode == 2 and "--by LOGIN" in empty.stderr, empty.stderr
+
+
+def test_by_without_again_refuses(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+    run = run_attavo(root, "drive", "1", "--by", "alice")
+    assert run.returncode == 2 and "--by is only for --again" in run.stderr, run.stderr
+    assert not (records_dir(root) / "build-01.started").exists()

@@ -19,7 +19,11 @@ from attavo.doctor import (
     _parse_json_line,
     attempts_budget,
     ceiling_s,
-    invocation_alive,
+    heartbeat_age_s,
+    heartbeat_path,
+    heartbeat_pid,
+    heartbeat_s,
+    invocation_age_s,
     invocations_without_record,
     retry_after_s,
     stall_bound_s,
@@ -189,17 +193,10 @@ def drive_state(root: Path, m: dict[str, Any], item_id: str) -> tuple[str, str |
     return "ready", None, records_dir
 
 
-# --- the heartbeat, the worker log, and the forge-checks handoff: local
+# --- the heartbeat (its helpers live in attavo/doctor.py, where proof five
+# reads it too), the worker log, and the forge-checks handoff: local
 # facts under the checkout's own git directory (issue #140's precedent),
 # never committed and never among the paths commit_record ever names. ---
-
-def heartbeat_s() -> float:
-    return float(os.environ.get("ATTAVO_HEARTBEAT_S", 15))
-
-
-def heartbeat_path(root: Path, stage: str, nn: int) -> Path:
-    return stage_events_dir(root) / f"{stage}-{nn:02d}.heartbeat"
-
 
 def worker_log_path(root: Path, stage: str, nn: int) -> Path:
     return stage_events_dir(root) / f"{stage}-{nn:02d}.worker.log"
@@ -291,16 +288,17 @@ def _streams_events(root: Path, m: dict[str, Any], stage: str) -> bool:
 
 def read_invocation(root: Path, bound: int | None, marker: Path, info: dict[str, Any]) -> InvocationReading:
     """Whether an invocation that began and wrote no record is running,
-    hung, or died -- read from its own heartbeat first (R2): a heartbeat
-    file fresh within three beats of ATTAVO_HEARTBEAT_S is alive; a stale
-    one is died, whether or not the pid still lives -- a worker stuck
-    somewhere that never reaches its own heartbeat loop again is exactly
-    what this is for. Only with no heartbeat file at all -- an invocation
-    from before this release, or one that died before touching its
-    first beat -- does this fall back to the pid: alive and, with a
-    stall bound declared, past it is hung; alive with no bound, or
-    within it, is running for as long as it lives; not alive is died.
-    The stall bound decides hung, never died.
+    hung, or died -- read from the heartbeat its holder writes and from
+    nothing else (root cause 4). A heartbeat fresh within three beats of
+    ATTAVO_HEARTBEAT_S is a live holder: running, or, with a stall bound
+    declared and the last event (the marker's own `at` when there is
+    none) older than it, hung. A stale heartbeat is died, whether or not
+    any pid lives -- a worker stuck somewhere that never reaches its own
+    heartbeat loop again is exactly what this is for. With no heartbeat
+    file a marker from this host is died -- the holder never touched its
+    first beat, or is gone -- and one from another host follows the stall
+    bound as proof five does: running while younger, died after. The
+    stall bound decides hung, never died.
 
     R3: the stage's own ceiling (wall clock from the marker's own `at`)
     is judged first, before any of that -- alive past it is hung by the
@@ -308,6 +306,7 @@ def read_invocation(root: Path, bound: int | None, marker: Path, info: dict[str,
     streams no events is judged by the ceiling alone: bound is read as
     None for it, so the stall check below never fires on an event age it
     never had."""
+    import socket
     stage, nn_text = marker.stem.rsplit("-", 1)
     nn = int(nn_text)
     log, last_at = _events_tail(_events_path_for(root, stage, nn))
@@ -316,22 +315,22 @@ def read_invocation(root: Path, bound: int | None, marker: Path, info: dict[str,
     since_start = _seconds_since(info.get("at"))
     if ceiling is not None and since_start is not None and since_start > ceiling:
         return InvocationReading(stage, nn, log, last_at, since_start, "hung", "ceiling")
+    stall_bound = bound
     if not _streams_events(root, m, stage):
         bound = None
-    beat = heartbeat_path(root, stage, nn)
-    if beat.is_file():
-        try:
-            beat_age = time.time() - beat.stat().st_mtime
-        except OSError:
-            beat_age = None
-        cls = "running" if beat_age is not None and beat_age <= heartbeat_s() * 3 else "died"
-        return InvocationReading(stage, nn, log, last_at, beat_age, cls)
-    age = _seconds_since(last_at or info.get("at"))
-    if not invocation_alive(info):
-        return InvocationReading(stage, nn, log, last_at, age, "died")
-    if bound is None or age is None or age <= bound:
-        return InvocationReading(stage, nn, log, last_at, age, "running")
-    return InvocationReading(stage, nn, log, last_at, age, "hung", "stall")
+    beat_age = heartbeat_age_s(heartbeat_path(root, stage, nn))
+    if beat_age is not None:
+        if beat_age > heartbeat_s() * 3:
+            return InvocationReading(stage, nn, log, last_at, beat_age, "died")
+        age = _seconds_since(last_at or info.get("at"))
+        if bound is None or age is None or age <= bound:
+            return InvocationReading(stage, nn, log, last_at, beat_age, "running")
+        return InvocationReading(stage, nn, log, last_at, age, "hung", "stall")
+    if info.get("host") != socket.gethostname():
+        marker_age = invocation_age_s(info)
+        if stall_bound is not None and marker_age is not None and marker_age < stall_bound:
+            return InvocationReading(stage, nn, log, last_at, marker_age, "running")
+    return InvocationReading(stage, nn, log, last_at, _seconds_since(last_at or info.get("at")), "died")
 
 
 def uncommitted_record(root: Path, records_dir: Path, stage: str) -> Path | None:
@@ -422,7 +421,7 @@ def _stage_body(item_id: str, stage: str, nn: int) -> int:
 
     beat = heartbeat_path(root, stage, nn)
     beat.parent.mkdir(parents=True, exist_ok=True)
-    beat.touch()
+    beat.write_text(f"{os.getpid()}\n")
     stop_beat = threading.Event()
 
     def _tick() -> None:
@@ -523,7 +522,7 @@ def cmd_worker(argv: list[str]) -> int:
 # exactly the one invocation the report names owed one. ---
 
 def _start_stage(root: Path, m: dict[str, Any], item_id: str, stage: str,
-                 forge_checks: dict[str, Any] | None, again_by: bool = False) -> int:
+                 forge_checks: dict[str, Any] | None, again_by: str | None = None) -> int:
     """The lease (ruling A): the marker, committed and pushed as a plain
     fast-forward with no merge and no retry (push_lease). Lost to another
     pass, or refused outright by the remote, both undo the marker commit
@@ -533,10 +532,10 @@ def _start_stage(root: Path, m: dict[str, Any], item_id: str, stage: str,
     the pre-marker head (ruling B) -- written to
     <git-dir>/attavo/verify-NN.forge-checks.json and named in
     ATTAVO_FORGE_CHECKS, so the worker's own `attavo verify` reads it
-    instead of polling. again_by (R3) is true only when `--again` is what
-    started this attempt, past a budget already spent or an early stop
-    -- named in the marker, never on an ordinary or plainly-retried
-    attempt."""
+    instead of polling. again_by (R3) is the login that pressed `--again`, set
+    only when it is what started this attempt, past a budget already spent
+    or an early stop -- named in the marker, never on an ordinary or
+    plainly-retried attempt."""
     records_dir = root / m["paths"]["records"] / item_id
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
     nn = next_attempt_number(records_dir, stage)
@@ -576,10 +575,10 @@ def _start_stage(root: Path, m: dict[str, Any], item_id: str, stage: str,
 def _recover_one(root: Path, m: dict[str, Any], item_id: str, records_dir: Path) -> int:
     """The pass's own recovery act (what `--recover` did): exactly the one
     invocation the report just read as owing one -- died or hung -- ends
-    here. class died when the heartbeat is stale (or absent and the pid
-    is gone), class hung when there is no heartbeat, the pid lives, and a
-    declared [drive].stall_after_s has passed with no newer event, and
-    terminated. Provenance product; the events tail as the log. Committed
+    here. class died when the heartbeat is stale or absent, class hung
+    when the heartbeat is fresh and a declared [drive].stall_after_s has
+    passed with no newer event (or the stage's ceiling has passed), the
+    holder terminated by the pid its own heartbeat names. Provenance product; the events tail as the log. Committed
     and pushed the way any stage record is (push_record_commit, with its
     own merge retry) -- this is not a race for a lease, since no new
     attempt marker is written."""
@@ -595,7 +594,7 @@ def _recover_one(root: Path, m: dict[str, Any], item_id: str, records_dir: Path)
         return 0
     marker, info, reading = candidate
     stage, nn, log, last_at, age, cls, crossed = reading
-    pid, host = info.get("pid"), info.get("host")
+    host = info.get("host")
 
     if next_attempt_number(records_dir, stage) != nn:
         print(f"attavo drive: stopped: {marker.name} names attempt {nn} but the next "
@@ -604,19 +603,26 @@ def _recover_one(root: Path, m: dict[str, Any], item_id: str, records_dir: Path)
         return 1
 
     if cls == "hung":
-        try:
-            os.kill(cast(int, pid), signal.SIGTERM)
-            ended = "terminated"
-        except OSError as exc:
-            ended = f"not terminated ({exc})"
+        holder = heartbeat_pid(heartbeat_path(root, stage, nn))
+        if holder is None:
+            print(f"attavo drive: no holder to signal for {marker.stem}: its heartbeat names no pid")
+            ended = "no holder to signal"
+            who = f"no holder on {host}"
+        else:
+            who = f"pid {holder} on {host} alive"
+            try:
+                os.kill(holder, signal.SIGTERM)
+                ended = "terminated"
+            except OSError as exc:
+                ended = f"not terminated ({exc})"
         if crossed == "ceiling":
-            detail = (f"pid {pid} on {host} alive {int(cast(float, age))} s after its marker, "
+            detail = (f"{who} {int(cast(float, age))} s after its marker, "
                       f"past the {stage} ceiling of {ceiling_s(m, stage)} s; {ended}")
         else:
-            detail = (f"pid {pid} on {host} alive with no event for {int(cast(float, age))} s "
+            detail = (f"{who} with no event for {int(cast(float, age))} s "
                       f"(bound {bound} s); {ended}")
     else:
-        detail = (f"pid {pid} on {host} is not running and wrote no {marker.stem}.json; "
+        detail = (f"{marker.stem} on {host} has no live heartbeat and wrote no {marker.stem}.json; "
                   f"started {info.get('at')}, last event {last_at or 'none'}")
 
     signature_text = log.strip().splitlines()[-1] if log.strip() else detail
@@ -658,7 +664,7 @@ def _recover_one(root: Path, m: dict[str, Any], item_id: str, records_dir: Path)
 
 
 def _advance_again(root: Path, m: dict[str, Any], item_id: str, stage: str, head: str | None,
-                   again_by: bool = False) -> int:
+                   again_by: str | None = None) -> int:
     """The next attempt of a stopped stage, bypassing the level a plain
     pass leaves alone for the operator: what a plain retry (R3, inside
     the budget) starts on its own, and what `--again` starts by force
@@ -767,7 +773,7 @@ def retry_state(root: Path, m: dict[str, Any], records_dir: Path, stage: str,
     return RetryState(False, None, None, target_stage)
 
 
-def _pass_once(root: Path, m: dict[str, Any], item_id: str, again: bool) -> tuple[int, "DriveReport"]:
+def _pass_once(root: Path, m: dict[str, Any], item_id: str, again: str | None) -> tuple[int, "DriveReport"]:
     """One pass: fast-forward to origin (never while a worker holds the
     copy), read the report, act at most once, return. owes-recovery
     recovers; next-build and next-review start their stage, handing a
@@ -778,7 +784,7 @@ def _pass_once(root: Path, m: dict[str, Any], item_id: str, again: bool) -> tupl
     stopped stage inside its budget (RetryState.eligible) retries itself,
     with no flag needed; `--again` is a no-op that says so when the plain
     mechanism would already act or is only waiting out retry_after_s, and
-    forces the next attempt, named again_by in its marker, when it would
+    forces the next attempt, naming who pressed it as again_by in its marker, when it would
     not. Every other level is printed in the report's own words and left."""
     from attavo.report import drive_report
     fast_forward_to_origin(root, m, item_id)
@@ -800,7 +806,7 @@ def _pass_once(root: Path, m: dict[str, Any], item_id: str, again: bool) -> tupl
                 print("attavo drive: --again inside the budget is a no-op; the pass retries "
                       "on its own")
                 return 0, r
-            return _advance_again(root, m, item_id, state.target_stage, r["head"], again_by=True), r
+            return _advance_again(root, m, item_id, state.target_stage, r["head"], again_by=again), r
         if state.eligible:
             return _advance_again(root, m, item_id, state.target_stage, r["head"]), r
 
@@ -811,7 +817,7 @@ def _pass_once(root: Path, m: dict[str, Any], item_id: str, again: bool) -> tupl
 _TERMINAL_STATES = ("waiting-on-approval", "stopped", "ready-to-merge", "merged")
 
 
-def _until_ready(root: Path, m: dict[str, Any], item_id: str, again: bool) -> int:
+def _until_ready(root: Path, m: dict[str, Any], item_id: str, again: str | None) -> int:
     """--until-ready: the pass, repeated in one process, sleeping
     ATTAVO_DRIVE_POLL_INTERVAL_S between passes, until the level is the
     operator's or done (exit 0), a concluded check is red (exit 1), or
@@ -890,12 +896,29 @@ def cmd_drive(argv: list[str]) -> int:
 
     until_ready = "--until-ready" in argv
     report = "--report" in argv
-    again = "--again" in argv
+    again_flag = "--again" in argv
     all_flag = "--all" in argv
-    positional = [a for a in argv if not a.startswith("--")]
+    by: str | None = None
+    positional: list[str] = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--by":
+            by = argv[i + 1] if i + 1 < len(argv) else None
+            i += 2
+        else:
+            if not argv[i].startswith("--"):
+                positional.append(argv[i])
+            i += 1
+    if again_flag and not by:
+        print("attavo drive: --again requires --by LOGIN", file=sys.stderr)
+        return 2
+    if "--by" in argv and not again_flag:
+        print("attavo drive: --by is only for --again", file=sys.stderr)
+        return 2
+    again = by if again_flag else None
 
     if all_flag:
-        if until_ready or report or again or positional:
+        if until_ready or report or again_flag or positional:
             print("attavo drive: --all runs one pass in every worktree beside this checkout; "
                   "drop N and every other flag", file=sys.stderr)
             return 2
@@ -913,7 +936,7 @@ def cmd_drive(argv: list[str]) -> int:
         return 2
 
     if report:
-        if until_ready or again:
+        if until_ready or again_flag:
             print("attavo drive: --report reads and does nothing else; drop --until-ready "
                   "and --again", file=sys.stderr)
             return 2

@@ -11,7 +11,7 @@
     attavo counsel [N]
     attavo record-only
     attavo attest [--partial] [N]
-    attavo drive [N] [--until-ready] [--again] [--report]
+    attavo drive [N] [--until-ready] [--again --by LOGIN] [--report]
     attavo drive --all
     attavo worker N <build|verify> NN
     attavo ledger [N] [--json]
@@ -307,8 +307,12 @@ unconcluded one has not concluded within ATTAVO_DRIVE_POLL_BOUND_S (exit
 constant, only time spent waiting on the forge is. Without the flag,
 drive is one pass, then stop.
 
---again starts the next attempt of a stopped stage -- the operator's own
-resume, until a later reconciler ruling drives a retry itself. --recover
+--again --by LOGIN starts the next attempt of a stopped stage -- the
+operator's own resume, until a later reconciler ruling drives a retry
+itself; --by names who pressed it, as approve's does, and the marker
+carries it. A stage's liveness is read from the worker's heartbeat, the
+file the process holding it writes, never from a pid someone else
+recorded. --recover
 is gone: `attavo drive --recover` now exits 2 saying so; recovery is
 what a pass does on its own, the moment the report owes one.
 

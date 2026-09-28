@@ -381,17 +381,17 @@ def test_again_resets_a_spent_budget_only(tmp_path: Path) -> None:
             "  kill -9 $PPID\n  sleep 3")
     root, _ = approved_tenant(tmp_path, same)
     passes_until(root, lambda: len(record_files(root, "build")) == 1, seconds=30)
-    inside = run_attavo(root, "drive", "1", "--again", env=FAST)
+    inside = run_attavo(root, "drive", "1", "--again", "--by", "alice", env=FAST)
     assert inside.returncode == 0 and "retries on its own" in inside.stdout, inside.stdout
     passes_until(root, lambda: len(record_files(root, "build")) == 2, seconds=60)
     for _ in range(3):
         run_attavo(root, "drive", "1", env=FAST)
         time.sleep(0.5)
     assert len(record_files(root, "build")) == 2
-    again = run_attavo(root, "drive", "1", "--again", env=FAST)
+    again = run_attavo(root, "drive", "1", "--again", "--by", "alice", env=FAST)
     assert again.returncode == 0 and "Build started" in again.stdout, again.stdout
     marker = json.loads((records_dir(root) / "build-03.started").read_text())
-    assert marker.get("again_by"), marker
+    assert marker.get("again_by") == "alice", marker
 
 
 def test_adapters_class_transient() -> None:

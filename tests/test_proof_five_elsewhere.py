@@ -27,6 +27,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -64,20 +65,26 @@ def _proof_five_fixture(tmp_path: Path, name: str) -> Path:
     return root
 
 
-def _write_marker(root: Path, host: str, pid: int, at: str, stage: str = "verify",
+def _write_marker(root: Path, host: str, at: str, stage: str = "verify",
                   nn: int = 1, item: str = "1") -> None:
     records = root / "records" / item
     records.mkdir(parents=True, exist_ok=True)
     (records / f"{stage}-{nn:02d}.started").write_text(json.dumps({
-        "at": at, "host": host, "pid": pid, "sha": "0" * 40,
+        "at": at, "host": host, "sha": "0" * 40,
         "product_version": "fixture"}))
     commit_all(root, f"invocation marker for item {item}")
 
 
-def _dead_pid() -> int:
-    proc = subprocess.Popen([sys.executable, "-c", "pass"])
-    proc.wait()
-    return proc.pid
+def _write_heartbeat(root: Path, age_s: float, stage: str = "verify", nn: int = 1) -> None:
+    """The holder's own fact: <git-dir>/attavo/<stage>-NN.heartbeat, its
+    content the holder's pid, its mtime age_s seconds ago."""
+    git_dir = Path(subprocess.run(["git", "-C", str(root), "rev-parse", "--absolute-git-dir"],
+                                  capture_output=True, text=True, check=True).stdout.strip())
+    beat = git_dir / "attavo" / f"{stage}-{nn:02d}.heartbeat"
+    beat.parent.mkdir(parents=True, exist_ok=True)
+    beat.write_text(f"{os.getpid()}\n")
+    stamp = time.time() - age_s
+    os.utime(beat, (stamp, stamp))
 
 
 def test_proof_five_holds_a_young_marker_from_another_host_as_in_flight(tmp_path: Path) -> None:
@@ -86,7 +93,7 @@ def test_proof_five_holds_a_young_marker_from_another_host_as_in_flight(tmp_path
     elsewhere -- proof five holds and names it in in_flight, not among
     the failures."""
     root = _proof_five_fixture(tmp_path, "young_elsewhere")
-    _write_marker(root, OTHER_HOST, 4242, iso_ago(STALL_BOUND_S / 4))
+    _write_marker(root, OTHER_HOST, iso_ago(STALL_BOUND_S / 4))
 
     p = run_doctor(root)["no-invocation-lacks-record"]
     assert p["holds"], p["reason"]
@@ -100,7 +107,7 @@ def test_proof_five_fails_an_old_marker_from_another_host_past_the_bound(tmp_pat
     is failed by absence exactly as a marker with no host at all would
     be -- naming it."""
     root = _proof_five_fixture(tmp_path, "old_elsewhere")
-    _write_marker(root, OTHER_HOST, 4242, iso_ago(STALL_BOUND_S * 10))
+    _write_marker(root, OTHER_HOST, iso_ago(STALL_BOUND_S * 10))
 
     p = run_doctor(root)["no-invocation-lacks-record"]
     assert not p["holds"]
@@ -110,12 +117,12 @@ def test_proof_five_fails_an_old_marker_from_another_host_past_the_bound(tmp_pat
 
 def test_proof_five_still_fails_a_dead_invocation_on_this_host(tmp_path: Path) -> None:
     """Acceptance 2 (half), a regression guard: a marker naming this
-    host's own hostname and a dead pid fails exactly as before -- the
-    age judgement is for another host only, and must not loosen the
+    host's own hostname and no heartbeat file fails exactly as before --
+    the age judgement is for another host only, and must not loosen the
     local reading into holding on a dead local invocation just because
     it is still young."""
     root = _proof_five_fixture(tmp_path, "dead_local")
-    _write_marker(root, socket.gethostname(), _dead_pid(), iso_ago(1))
+    _write_marker(root, socket.gethostname(), iso_ago(1))
 
     p = run_doctor(root)["no-invocation-lacks-record"]
     assert not p["holds"]
@@ -125,11 +132,12 @@ def test_proof_five_still_fails_a_dead_invocation_on_this_host(tmp_path: Path) -
 
 def test_proof_five_still_holds_a_live_invocation_on_this_host_as_running(tmp_path: Path) -> None:
     """Acceptance 2 (other half), a regression guard: a marker naming
-    this host and a live pid holds as running_invocations, not
-    in_flight -- the two lists stay distinct by what invocation_alive
-    itself can confirm."""
+    this host and a fresh heartbeat holds as running_invocations, not
+    in_flight -- the two lists stay distinct by what the holder's own
+    heartbeat can confirm."""
     root = _proof_five_fixture(tmp_path, "live_local")
-    _write_marker(root, socket.gethostname(), os.getpid(), iso_ago(1))
+    _write_marker(root, socket.gethostname(), iso_ago(1))
+    _write_heartbeat(root, age_s=1)
 
     p = run_doctor(root)["no-invocation-lacks-record"]
     assert p["holds"], p["reason"]
