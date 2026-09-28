@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/verify/9",
+  "$id": "https://attavo.dev/schema/records/verify/10",
   "title": "attavo verify record (verify-NN.json)",
   "type": "object",
   "additionalProperties": false,
@@ -9,7 +9,7 @@
     "adapter_config", "adapter_version", "model", "model_version", "reports",
     "forge_checks", "findings", "tests_named", "commits",
     "stub_ratio", "tokens", "cost_usd", "wall_clock_s", "status",
-    "stop", "product_version", "product_pin"
+    "report_class", "stop", "product_version", "product_pin"
   ],
   "properties": {
     "record_version": {"type": "integer", "minimum": 1},
@@ -94,6 +94,10 @@
     "cost_usd": {"type": ["number", "null"]},
     "wall_clock_s": {"type": "number", "minimum": 0},
     "status": {"type": "string", "enum": ["pass", "returned", "failed"]},
+    "report_class": {
+      "type": ["string", "null"],
+      "description": "Issue #254: the adapter's report-line \"class\" derive_stop was handed; null when the adapter reported none or no adapter ran. Stored as handed, so a later reader re-derives the stop from the record alone."
+    },
     "stop": {
       "type": ["object", "null"],
       "description": "Non-null exactly when status is not \"pass\" (issue #89): what class of stop this is and whose it is, derived by the record writer from the forge_checks and log it already has -- never a fresh read of anything.",

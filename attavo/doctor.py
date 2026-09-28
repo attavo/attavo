@@ -23,7 +23,16 @@ from attavo.common import (
 from attavo.events import stage_events_dir
 from attavo.records import RECORD_RE, load_records, parse_attempts
 from attavo.spec import parse_spec
-from attavo.stops import STOP_CLASSES, STOP_PROVENANCES, STOP_STAGES, gate_stop
+from attavo.stops import (
+    STOP_CLASSES,
+    STOP_PROVENANCES,
+    STOP_REDERIVABLE_FROM,
+    STOP_STAGES,
+    gate_stop,
+    is_recovery_stop,
+    recovery_fault,
+    rederive_stop,
+)
 
 # --- doctor's three proofs ---
 
@@ -594,6 +603,7 @@ def proof_no_stop_lacks_cause(root: Path, m: dict[str, Any] | None) -> Proof:
     # versions 1 and 2 predate it) -- counted here, never refused.
     older = 0
     checked = 0
+    before_rederivable = 0
     problems: list[str] = []
     for item_dir in sorted(d for d in records_dir.iterdir() if d.is_dir()):
         for stage in STOP_STAGES:
@@ -605,6 +615,9 @@ def proof_no_stop_lacks_cause(root: Path, m: dict[str, Any] | None) -> Proof:
                     continue
                 checked += 1
                 name = f"{stage}-{n:02d}"
+                rederivable = rec.get("record_version", 1) >= STOP_REDERIVABLE_FROM[stage]
+                if not rederivable:
+                    before_rederivable += 1
                 stop = rec.get("stop")
                 if not stop:
                     problems.append(f"item {item_dir.name} {name} carries no stop")
@@ -618,6 +631,22 @@ def proof_no_stop_lacks_cause(root: Path, m: dict[str, Any] | None) -> Proof:
                     problems.append(f"item {item_dir.name} {name} stop.provenance "
                                     f"{provenance!r} names no enumerated provenance")
                     continue
+                # Issue #254: at the version that stores what the stop was
+                # derived from, the stop is that function's value -- the
+                # pass's own recovery records by their own rule.
+                if rederivable and is_recovery_stop(rec):
+                    fault = recovery_fault(rec)
+                    if fault:
+                        problems.append(f"item {item_dir.name} {name} {fault}")
+                        continue
+                elif rederivable:
+                    derived = rederive_stop(stage, rec)
+                    if derived is None or (derived["class"], derived["provenance"]) != (cls, provenance):
+                        problems.append(
+                            f"item {item_dir.name} {name} stop is {cls}/{provenance} but its "
+                            f"own fields derive "
+                            f"{'no stop' if derived is None else derived['class'] + '/' + derived['provenance']}")
+                        continue
                 if cls == "unclassed" and not stop.get("detail"):
                     problems.append(f"item {item_dir.name} {name} is unclassed with no detail")
                     continue
@@ -663,12 +692,14 @@ def proof_no_stop_lacks_cause(root: Path, m: dict[str, Any] | None) -> Proof:
             if not stop.get("detail"):
                 problems.append(f"item {item_dir.name} {name} is a gate stop with no cause")
 
-    older_note = f"{older} record(s) before stop was recorded"
+    older_note = (f"{older} record(s) before stop was recorded; {before_rederivable} non-pass "
+                 f"record(s) before their stop could be re-derived")
     if problems:
-        return p.fail("; ".join(problems), older_records=older)
+        return p.fail("; ".join(problems), older_records=older,
+                     before_rederivable=before_rederivable)
     return p.hold(f"{checked} checked ({older_note})" if checked == 0
                  else f"{checked} non-pass record(s) carry stop with a cause ({older_note})",
-                 older_records=older)
+                 older_records=older, before_rederivable=before_rederivable)
 
 
 def attestation_command(m: dict[str, Any]) -> str | None:

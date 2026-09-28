@@ -27,7 +27,7 @@ from attavo.common import (
 from attavo.events import append_event, stage_events_dir
 from attavo.records import latest_record, next_attempt_number, parse_attempts, write_record
 from attavo.spec import parse_spec, run_criterion
-from attavo.stops import _log_last_line, derive_stop, signature_of
+from attavo.stops import _log_last_line, derive_stop, gate_of, signature_of
 from attavo.testtool import run_bounded, without_records
 
 # --- build: adapter, claims boundary, criteria, and the tenant's tests ---
@@ -452,6 +452,8 @@ def cmd_build(argv: list[str]) -> int:
                 "status": "refused",
                 "refusal": refusal_text,
                 "halted": None,
+                "refusal_kind": "environment",
+                "report_class": None,
                 "retry_of": None,
                 "steer": None,
                 # R3: environment is never retried by this item (recorded
@@ -692,10 +694,10 @@ def cmd_build(argv: list[str]) -> int:
                                    "--- checks output (tail) ---", *tail]
             feedback_path.write_text("\n".join(feedback_lines) + "\n")
 
-    gate = {"criteria": [{"name": c["name"], "exit": c["exit"]} for c in criteria_results],
-            "selected_tests": ({"count": selected_tests["count"], "exit": selected_tests["exit"]}
-                               if selected_tests else None),
-            "checks": {"exit": checks_result["exit"]} if checks_result else None}
+    # Issue #254: the class derive_stop is handed, stored as handed.
+    reported = (payload or {}).get("class")
+    report_class = "empty" if empty_detail else (reported if isinstance(reported, str) else None)
+    gate = gate_of(criteria_results, selected_tests, checks_result)
     record = {
         "sha": git(root, "rev-parse", "HEAD").strip(),
         "start_sha": start_sha,
@@ -719,11 +721,12 @@ def cmd_build(argv: list[str]) -> int:
         "status": status_out,
         "refusal": refusal,
         "halted": halted,
+        "refusal_kind": refusal_kind,
+        "report_class": report_class,
         "retry_of": retry_of,
         "steer": steer,
         "stop": derive_stop(status_out, refusal=refusal, refusal_kind=refusal_kind, halted=halted,
-                            gate=gate, log="\n".join(transcripts),
-                            report_class="empty" if empty_detail else (payload or {}).get("class")),
+                            gate=gate, log="\n".join(transcripts), report_class=report_class),
     }
     if record["stop"] is not None and empty_detail:
         record["stop"] = {**record["stop"], "detail": empty_detail}

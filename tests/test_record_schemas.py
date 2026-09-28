@@ -442,3 +442,17 @@ def test_only_load_record_parses_record_file_content() -> None:
         body = text[start:end]
         assert "json.loads(" not in body, f"{fn} should read through _load_record, not parse directly"
         assert "_load_record(" in body
+
+
+def test_build_and_verify_schemas_carry_what_a_stop_is_derived_from() -> None:
+    """Issue #254: refusal_kind (build) and report_class (both) are required
+    nullable keys, and the schema's version has moved past the last one
+    that lacked them -- record_version is how the doctor tells them apart."""
+    build, verify = load_schema("build"), load_schema("verify")
+    for schema, keys, first in ((build, ("refusal_kind", "report_class"), 11),
+                                (verify, ("report_class",), 10)):
+        for key in keys:
+            assert key in schema["required"], key
+            assert "null" in schema["properties"][key]["type"], key
+        assert int(schema["$id"].rsplit("/", 1)[-1]) >= first
+    assert "refusal_kind" not in verify["properties"]

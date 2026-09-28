@@ -85,7 +85,7 @@ def test_verify_records_the_ratio_and_no_longer_carries_the_two_fields_nothing_c
     assert record["stub_ratio"] == 0.0, record["stub_ratio"]
     assert "weak_stub" not in record and "mutation" not in record, sorted(record)
     schema = json.loads((ROOT / "schema" / "records" / "verify.schema.json").read_text())
-    assert schema["$id"].endswith("/verify/9"), schema["$id"]
+    assert schema["$id"].endswith("/verify/10"), schema["$id"]
     assert "weak_stub" not in schema["properties"] and "mutation" not in schema["properties"]
 
 

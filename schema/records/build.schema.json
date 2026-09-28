@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/build/10",
+  "$id": "https://attavo.dev/schema/records/build/11",
   "title": "attavo build record (build-NN.json)",
   "type": "object",
   "additionalProperties": false,
@@ -9,7 +9,7 @@
     "adapter_config", "executor_identity", "reports", "adapter_version",
     "model", "model_version", "iterations", "criteria", "selected_tests",
     "checks", "tokens", "cost_usd", "wall_clock_s", "status", "refusal",
-    "halted", "stop", "product_version", "product_pin"
+    "halted", "refusal_kind", "report_class", "stop", "product_version", "product_pin"
   ],
   "properties": {
     "record_version": {"type": "integer", "minimum": 1},
@@ -99,6 +99,15 @@
       "properties": {
         "question": {"type": ["string", "null"]}
       }
+    },
+    "refusal_kind": {
+      "type": ["string", "null"],
+      "enum": ["claims", "protected", "foreign-commit", "environment", null],
+      "description": "Issue #254: which guard refused this build -- the input derive_stop reads to class a refusal (environment: the [checks].command preflight, which builds its own stop). null unless status is \"refused\"."
+    },
+    "report_class": {
+      "type": ["string", "null"],
+      "description": "Issue #254: the class derive_stop was handed -- the adapter's report line's \"class\", or \"empty\" where the build itself found the executor committed nothing; null when neither. Stored as handed, so a later reader re-derives the stop from the record alone."
     },
     "stop": {
       "type": ["object", "null"],

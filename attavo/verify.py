@@ -28,20 +28,19 @@ from attavo.records import (
     write_record,
 )
 from attavo.spec import parse_spec
-from attavo.stops import counsel_record_for, derive_stop, signature_of
+# The forge constants moved to attavo.stops with the stop derivation that reads them;
+# report.py still imports them from here.
+from attavo.stops import (
+    FORGE_OK_CONCLUSIONS as FORGE_OK_CONCLUSIONS,
+    FORGE_UNCONCLUDED_STATUSES as FORGE_UNCONCLUDED_STATUSES,
+    blocking_titles,
+    counsel_record_for,
+    derive_stop,
+    returned_stop,
+    signature_of,
+)
 
 # --- verify: the forge's own read first, a judge only once it is green ---
-
-FORGE_OK_CONCLUSIONS = {"success", "neutral", "skipped"}
-
-# issue #84: a concluded check's second token is a conclusion --
-# FORGE_OK_CONCLUSIONS, or another concluded one such as failure,
-# cancelled, or timed_out; an unconcluded check's is a status instead,
-# one of these. drive's own poll (poll_forge_checks) is the one reader
-# that needs to tell a still-running check apart from a concluded, not-ok
-# one -- read_forge_checks itself only ever needed "green or not".
-FORGE_UNCONCLUDED_STATUSES = {"queued", "in_progress", "pending", "waiting"}
-
 
 def read_forge_checks(root: Path, checks_command: str, sha: str) -> tuple[dict[str, Any], bool]:
     """Runs the tenant's [forge].checks_command on sha; the product does
@@ -170,28 +169,6 @@ def stub_ratio(diff_text: str, stub_dir: Path, excluded: tuple[str, ...],
         elif line.startswith("@@"):
             in_hunk = True
     return shipped / added if added else None
-
-
-def _returned_stop(forge_checks: dict[str, Any]) -> dict[str, Any]:
-    """R3 (ruling C amended): a review the forge returned because a
-    required check concluded red is class returned, retryable -- the
-    next build attempt is handed the evidence -- signed by the sorted
-    names of the checks that concluded red. A review returned because
-    the checks have not concluded at all yet (nothing to sign) stays
-    forge-unconcluded, as before -- there is no rejection to hand a
-    build, only a wait that already has its own bound (the drive
-    forge-poll bound, unchanged by this item)."""
-    conclusions = forge_checks.get("conclusions") or []
-    red = sorted(c["name"] for c in conclusions
-                if c["conclusion"] not in FORGE_OK_CONCLUSIONS
-                and c["conclusion"] not in FORGE_UNCONCLUDED_STATUSES)
-    unconcluded = [c for c in conclusions if c["conclusion"] in FORGE_UNCONCLUDED_STATUSES]
-    if red and not unconcluded:
-        detail = ", ".join(f"{c['name']} {c['conclusion']}" for c in conclusions if c["name"] in red)
-        return {"class": "returned", "provenance": "tenant", "detail": detail,
-               "signature": signature_of(" ".join(red)), "bound": None}
-    stop = dict(derive_stop("returned") or {})
-    return {**stop, "signature": None, "bound": None}
 
 
 def _verify_retry_seed(records_dir: Path, build_sha: str) -> tuple[str | None, str | None]:
@@ -324,8 +301,9 @@ def cmd_verify(argv: list[str]) -> int:
             "tokens": {"input": 0, "output": 0}, "cost_usd": None,
             "wall_clock_s": round(time.monotonic() - started, 3),
             "status": "returned",
+            "report_class": None,
             "retry_of": None, "steer": None,
-            "stop": _returned_stop(forge_checks),
+            "stop": returned_stop(forge_checks),
         }
         record_path = write_record(item_records_dir, "verify", record, m, item_id)
         print(f"attavo verify: returned ({record_path.name}); the forge checks are not green")
@@ -411,7 +389,7 @@ def cmd_verify(argv: list[str]) -> int:
     # by the sorted titles of the blocking findings themselves. Every
     # other severity leaves the review a pass, filed as today (issue
     # #46's own findings channel, untouched).
-    blocking = sorted(f["title"] for f in (findings or []) if str(f.get("severity")) == "blocking")
+    blocking = blocking_titles(findings)
     if blocking:
         status_out = "failed"
         # write_record refuses a "failed" record with no trail at all
@@ -422,13 +400,17 @@ def cmd_verify(argv: list[str]) -> int:
             transcript = "blocking finding(s): " + "; ".join(blocking)
 
     retry_of, steer = _verify_retry_seed(item_records_dir, build_sha)
+    # Issue #254: the class the adapter's report line carried, stored as
+    # handed to derive_stop so a later reader re-derives the stop.
+    reported = (payload or {}).get("class")
+    report_class = reported if isinstance(reported, str) else None
     if blocking:
         stop: dict[str, Any] | None = {"class": "returned", "provenance": "tenant",
                                        "detail": "; ".join(blocking),
                                        "signature": signature_of(" ".join(blocking)), "bound": None}
     else:
         stop = cast("dict[str, Any] | None",
-                   derive_stop(status_out, log=transcript, report_class=(payload or {}).get("class"),
+                   derive_stop(status_out, log=transcript, report_class=report_class,
                                gate=None))
         if stop is not None:
             stop_detail: str | None = ((payload or {}).get("detail") if stop["class"] == "transient"
@@ -457,6 +439,7 @@ def cmd_verify(argv: list[str]) -> int:
         "cost_usd": cost_usd,
         "wall_clock_s": round(time.monotonic() - started, 3),
         "status": status_out,
+        "report_class": report_class,
         "retry_of": retry_of,
         "steer": steer,
         "stop": stop,
