@@ -18,6 +18,7 @@ from attavo.build import (
     split_adapter_stdout,
 )
 from attavo.common import MANIFEST, derive_item_id, git, now_iso, read_manifest
+from attavo.testtool import run_bounded
 from attavo.events import stage_events_dir
 from attavo.records import (
     latest_attempt_path,
@@ -94,15 +95,54 @@ def diff_since_approval(root: Path, approval_sha: str | None) -> tuple[str, str 
     return git(root, "diff", diff_base, "HEAD"), None
 
 
-def stub_ratio(diff_text: str, stub_dir: Path, excluded: tuple[str, ...]) -> float | None:
+STUB_TEST_SELECT_TIMEOUT_S = 60
+
+
+def stub_test_paths(root: Path, stub_dir: Path, select_command: str | None
+                    ) -> frozenset[str] | None:
+    """The stub's files that are tests, by the tenant's own definition: a
+    stub path is a test when [tests].select, given that path alone on
+    stdin, selects it (the path itself, or an identifier under it such as
+    path::name). The product never names a test directory or a file
+    pattern. None when it cannot be known -- no selector declared, or the
+    selector exits non-zero or outlasts its bound -- which the ratio
+    reports as not measured."""
+    if not stub_dir.is_dir():
+        return frozenset()
+    if not select_command:
+        return None
+    tests: set[str] = set()
+    for f in sorted(stub_dir.rglob("*")):
+        if not f.is_file() or f.name == ".removed":
+            continue
+        rel = f.relative_to(stub_dir).as_posix()
+        code, out, _err, _timed_out = run_bounded(select_command, root, rel + "\n",
+                                                  STUB_TEST_SELECT_TIMEOUT_S)
+        if code != 0:
+            return None
+        if any(line.strip().split("::")[0] == rel for line in out.splitlines()):
+            tests.add(rel)
+    return frozenset(tests)
+
+
+def stub_ratio(diff_text: str, stub_dir: Path, excluded: tuple[str, ...],
+               tests: frozenset[str] | None = frozenset()) -> float | None:
     """The share of the lines diff_text adds that are a line of the stub's
     file at the same path: near 1 the build shipped the spec author's stub,
     near 0 the builder wrote the change. Lines under the excluded
     directories (the specs and records, where the stub itself and the
     item's records are committed) and blank lines are not counted. None
     when there is no stub or the diff adds no counted line -- nothing was
-    measured, which is not 0.0."""
+    measured, which is not 0.0.
+
+    The stub's own test files (tests, from stub_test_paths) are not
+    counted on either side: the build is expected to ship them as they
+    are, so copying them is not the build choosing the stub's code. None
+    for tests means the tests could not be told apart, and the ratio is
+    not measured."""
     if not stub_dir.is_dir():
+        return None
+    if tests is None:
         return None
     skipped = tuple(e.strip("/") for e in excluded)
     stub_lines: dict[str, set[str]] = {}
@@ -119,7 +159,8 @@ def stub_ratio(diff_text: str, stub_dir: Path, excluded: tuple[str, ...]) -> flo
         elif line.startswith("+++ "):
             name = line[4:].split("\t")[0]
             path = name[2:] if name.startswith("b/") else None
-            if path is not None and any(path == e or path.startswith(e + "/") for e in skipped):
+            if path is not None and (any(path == e or path.startswith(e + "/") for e in skipped)
+                                     or path in tests):
                 path = None
             if path is not None and path not in stub_lines:
                 stub_file = stub_dir / path
@@ -231,6 +272,7 @@ def cmd_verify(argv: list[str]) -> int:
         print("attavo verify: refused: no [forge].checks_command in the manifest")
         return 1
 
+    select_command = (m.get("tests") or {}).get("select")
     build_sha = latest_build["sha"]
     build_record_path = latest_attempt_path(item_records_dir, "build")
     approval_sha = latest_build.get("approval_sha")
@@ -277,7 +319,8 @@ def cmd_verify(argv: list[str]) -> int:
             "findings": None,
             "tests_named": [],
             "commits": [],
-            "stub_ratio": stub_ratio(diff_text, spec_dir / "stub", (specs_rel, records_rel)),
+            "stub_ratio": stub_ratio(diff_text, spec_dir / "stub", (specs_rel, records_rel),
+                                  stub_test_paths(root, spec_dir / "stub", select_command)),
             "tokens": {"input": 0, "output": 0}, "cost_usd": None,
             "wall_clock_s": round(time.monotonic() - started, 3),
             "status": "returned",
@@ -408,7 +451,8 @@ def cmd_verify(argv: list[str]) -> int:
         "findings": findings,
         "tests_named": tests_named,
         "commits": commits,
-        "stub_ratio": stub_ratio(diff_text, spec_dir / "stub", (specs_rel, records_rel)),
+        "stub_ratio": stub_ratio(diff_text, spec_dir / "stub", (specs_rel, records_rel),
+                                  stub_test_paths(root, spec_dir / "stub", select_command)),
         "tokens": tokens,
         "cost_usd": cost_usd,
         "wall_clock_s": round(time.monotonic() - started, 3),
