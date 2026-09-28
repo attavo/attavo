@@ -48,9 +48,18 @@ def test_help_names_the_drive_report_and_the_states_it_prints() -> None:
     run = subprocess.run([sys.executable, str(ATTAVO), "--help"],
                          capture_output=True, text=True, check=False)
     assert run.returncode == 0
-    assert "attavo drive [N] [--until-ready] [--again] [--report]" in run.stdout
+    assert "attavo drive [N] [--until-ready] [--again --by LOGIN] [--report]" in run.stdout
     assert "schema/drive-report.schema.json" in run.stdout
     assert "(yours, waits, acts, done)" in " ".join(run.stdout.split())
+
+
+def test_help_names_by_for_again_and_the_heartbeat_as_liveness() -> None:
+    run = subprocess.run([sys.executable, str(ATTAVO), "--help"],
+                         capture_output=True, text=True, check=False)
+    assert run.returncode == 0
+    flat = " ".join(run.stdout.split())
+    assert "--again --by LOGIN" in flat
+    assert "liveness is read from the worker's heartbeat" in flat
 
 
 def test_unknown_subcommand_message_names_attest_and_record_only() -> None:

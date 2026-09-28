@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from attavo.common import (
     product_version,
     read_manifest,
 )
+from attavo.events import stage_events_dir
 from attavo.records import RECORD_RE, load_records, parse_attempts
 from attavo.spec import parse_spec
 from attavo.stops import STOP_CLASSES, STOP_PROVENANCES, STOP_STAGES, gate_stop
@@ -160,48 +162,60 @@ def invocation_marker_path(records_dir: Path, stage: str, nn: int) -> Path:
     return records_dir / f"{stage}-{nn:02d}{INVOCATION_MARKER_SUFFIX}"
 
 
+def heartbeat_s() -> float:
+    return float(os.environ.get("ATTAVO_HEARTBEAT_S", 15))
+
+
+def heartbeat_path(root: Path, stage: str, nn: int) -> Path:
+    return stage_events_dir(root) / f"{stage}-{nn:02d}.heartbeat"
+
+
+def heartbeat_pid(path: Path) -> int | None:
+    """The pid the worker wrote as its heartbeat file's one line on its
+    first beat -- the holder's own, the only pid anyone signals. None when
+    the file is absent, unreadable, empty (a worker from before this
+    release touched it and wrote nothing), or not a positive integer."""
+    try:
+        text = path.read_text().strip()
+    except OSError:
+        return None
+    if not text.isdigit() or int(text) <= 0:
+        return None
+    return int(text)
+
+
+def heartbeat_age_s(path: Path) -> float | None:
+    """Seconds since the heartbeat file was last touched; None when there
+    is no such file."""
+    try:
+        return time.time() - path.stat().st_mtime
+    except OSError:
+        return None
+
+
 def write_invocation_marker(root: Path, records_dir: Path, stage: str, nn: int,
-                            again_by: bool = False) -> Path:
+                            again_by: str | None = None) -> Path:
     """The fact that an invocation began, written before it does: at,
-    host, pid, the sha it starts on, and the product that started it.
-    Its record's arrival is what retires it; a marker with no record is
-    an invocation that died or hangs, and proof five names it. R3:
-    again_by is true only on a marker `--again` wrote to reset a stage
-    whose budget was spent (or whose last two signatures matched) --
-    absent on every ordinary marker, never a bare false."""
-    import os
+    host, the sha it starts on, and the product that started it. No pid:
+    the writer is `attavo drive`, which returns seconds later, and the
+    process that holds the stage is the worker, whose own heartbeat is
+    the fact of holding it. Its record's arrival is what retires a
+    marker; a marker with no record is an invocation that died or hangs,
+    and proof five names it. again_by is the login that pressed `--again`
+    to reset a stage whose budget was spent (or whose last two signatures
+    matched) -- absent on every ordinary marker, never a bare false."""
     import socket
     from datetime import datetime, timezone
     records_dir.mkdir(parents=True, exist_ok=True)
     path = invocation_marker_path(records_dir, stage, nn)
     sha = git(root, "rev-parse", "HEAD").strip()
     info: dict[str, Any] = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            "host": socket.gethostname(), "pid": os.getpid(), "sha": sha,
+                            "host": socket.gethostname(), "sha": sha,
                             "product_version": product_version()}
     if again_by:
-        info["again_by"] = True
+        info["again_by"] = again_by
     path.write_text(json.dumps(info, indent=2) + "\n")
     return path
-
-
-def invocation_alive(info: dict[str, Any]) -> bool:
-    """Whether the marker's pid is a live process on this host. Another
-    host's pid is unknowable from here and reads as not alive: a drive
-    that ran elsewhere and wrote no record is died by absence."""
-    import os
-    import socket
-    if info.get("host") != socket.gethostname():
-        return False
-    pid = info.get("pid")
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 def invocation_age_s(info: dict[str, Any]) -> float | None:
@@ -315,21 +329,28 @@ def proof_no_invocation_lacks_record(root: Path, m: dict[str, Any] | None) -> Pr
                 recorded += 1
         for marker, info in invocations_without_record(item_dir):
             name = f"item {item_dir.name} {marker.stem}"
-            if invocation_alive(info):
-                running.append(f"{name} (pid {info.get('pid')} since {info.get('at')})")
-                continue
-            # A marker from another host is not alive by invocation_alive's
-            # own reckoning (its pid is unknowable from here) but is not
-            # yet a failure either: an invocation younger than the tenant's
-            # own stall bound may simply be running elsewhere, still
-            # writing toward its own record.
-            if info.get("host") != this_host:
+            stage, nn_text = marker.stem.rsplit("-", 1)
+            try:
+                beat_age = heartbeat_age_s(heartbeat_path(root, stage, int(nn_text)))
+            except (RuntimeError, ValueError):
+                beat_age = None
+            if beat_age is not None:
+                # The holder's own fact: fresh within three beats is
+                # running, older is a holder that stopped touching it.
+                if beat_age <= heartbeat_s() * 3:
+                    running.append(f"{name} (heartbeat {int(beat_age)} s old, since {info.get('at')})")
+                    continue
+            elif info.get("host") != this_host:
+                # No heartbeat file readable from here for a marker from
+                # another host: not yet a failure. An invocation younger
+                # than the tenant's own stall bound may simply be running
+                # elsewhere, still writing toward its own record.
                 age = invocation_age_s(info)
                 if age is not None and age < bound:
                     in_flight.append(f"{name} (host {info.get('host')} since {info.get('at')})")
                     continue
             problems.append(f"{name} started {info.get('at')} on {info.get('host')} "
-                            f"pid {info.get('pid')} and never wrote its record")
+                            f"and never wrote its record")
     if problems:
         return p.fail("; ".join(problems), unrecorded_invocations=len(problems),
                       running_invocations=running, in_flight=in_flight)

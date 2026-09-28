@@ -13,6 +13,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -864,27 +865,66 @@ def test_doctor_proof_five_holds_once_the_record_arrives(tmp_path: Path) -> None
     assert p["holds"], p["reason"]
 
 
-def test_doctor_proof_five_reports_a_live_invocation_as_running_not_failed(tmp_path: Path) -> None:
-    """A marker naming this test's own pid, on this host, with no
-    record: alive, so proof five holds and names it running rather than
-    failing the tenant for a drive that has not had the chance to finish
-    yet."""
-    root = tmp_path / "live_invocation"
+def _heartbeat(root: Path, stage: str, nn: int, age_s: float, content: str = "") -> Path:
+    """The worker's heartbeat file under the tenant's git dir, its mtime
+    age_s seconds ago -- the fact a holder writes, the only one proof
+    five reads."""
+    beat_dir = Path(subprocess.run(["git", "-C", str(root), "rev-parse", "--absolute-git-dir"],
+                                   capture_output=True, text=True, check=True).stdout.strip()) / "attavo"
+    beat_dir.mkdir(parents=True, exist_ok=True)
+    beat = beat_dir / f"{stage}-{nn:02d}.heartbeat"
+    beat.write_text(content)
+    stamp = time.time() - age_s
+    os.utime(beat, (stamp, stamp))
+    return beat
+
+
+def _pidless_marker_tenant(root: Path) -> Path:
     root.mkdir()
     (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n\n' + FULL_DRIVE_TABLE)
     init_repo(root, "install")
-
     records = root / "records" / "1"
     records.mkdir(parents=True)
     (records / "build-01.started").write_text(json.dumps({
-        "at": "2026-09-17T13:16:08Z", "host": socket.gethostname(), "pid": os.getpid(),
+        "at": "2026-09-17T13:16:08Z", "host": socket.gethostname(),
         "sha": "0" * 40, "product_version": "fixture"}))
-    commit_all(root, "invocation marker for a still-running invocation")
+    commit_all(root, "invocation marker for item 1")
+    return root
+
+
+def test_doctor_proof_five_reads_a_fresh_heartbeat_as_running_though_the_marker_has_no_pid(
+        tmp_path: Path) -> None:
+    """#229 build-04, build-05 and #237 build-01: the marker names no live
+    process (here, none at all), the worker's heartbeat is fresh -- the
+    build is running and proof five holds and says so."""
+    root = _pidless_marker_tenant(tmp_path / "fresh_heartbeat")
+    _heartbeat(root, "build", 1, age_s=1, content=f"{os.getpid()}\n")
 
     p = run_doctor(root)["no-invocation-lacks-record"]
     assert p["holds"], p["reason"]
     assert len(p["running_invocations"]) == 1
     assert "build-01" in p["running_invocations"][0]
+
+
+def test_doctor_proof_five_reads_a_stale_heartbeat_as_died_though_a_pid_lives(tmp_path: Path) -> None:
+    """A heartbeat older than three beats is a holder that stopped
+    touching it: died, whatever process the marker or the file names."""
+    root = _pidless_marker_tenant(tmp_path / "stale_heartbeat")
+    _heartbeat(root, "build", 1, age_s=600, content=f"{os.getpid()}\n")
+
+    p = run_doctor(root)["no-invocation-lacks-record"]
+    assert not p["holds"]
+    assert "build-01" in p["reason"] and "never wrote its record" in p["reason"]
+    assert p["running_invocations"] == []
+
+
+def test_doctor_proof_five_reads_no_heartbeat_on_this_host_as_died(tmp_path: Path) -> None:
+    root = _pidless_marker_tenant(tmp_path / "no_heartbeat")
+
+    p = run_doctor(root)["no-invocation-lacks-record"]
+    assert not p["holds"]
+    assert "build-01" in p["reason"] and "never wrote its record" in p["reason"]
+    assert p["running_invocations"] == []
 
 
 def test_doctor_proof_five_fails_without_stall_after_s_in_the_manifest(tmp_path: Path) -> None:

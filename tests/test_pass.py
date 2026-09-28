@@ -220,7 +220,7 @@ def test_a_died_stage_retries_plainly_and_again_is_a_no_op_inside_the_budget(tmp
     write_dead_marker(root, "build", 1)
     assert run_attavo(root, "drive", "1", env=FAST).returncode == 0
     assert latest_record(root, "build")["stop"]["class"] == "died"
-    again = run_attavo(root, "drive", "1", "--again", env=FAST)
+    again = run_attavo(root, "drive", "1", "--again", "--by", "alice", env=FAST)
     assert again.returncode == 0 and "retries on its own" in again.stdout, again.stdout
     assert not (records_dir(root) / "build-02.started").exists()
     plain = run_attavo(root, "drive", "1", env=FAST)

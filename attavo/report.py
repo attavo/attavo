@@ -84,7 +84,7 @@ def _stopped(root: Path, m: dict[str, Any], r: DriveReport, records_dir: Path, s
     signatures_match = bool(len(last_two) == 2 and last_two[0] is not None and last_two[0] == last_two[1])
     r["signatures_match"] = signatures_match
     r["rulings_available"] = [
-        "attavo drive N --again: reset the budget and start the next attempt"
+        "attavo drive N --again --by LOGIN: reset the budget and start the next attempt"
         + (" (unlikely to help: the last two attempts failed the same way)" if signatures_match else ""),
         "amend the spec (moves the approval)"]
 

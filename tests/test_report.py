@@ -155,15 +155,27 @@ def test_report_compares_attempts_at_exhaustion(tmp_path: Path) -> None:
     assert any("again" in r for r in out["rulings_available"]), out["rulings_available"]
 
 
-def write_live_marker(root: Path, stage: str, nn: int, age_s: int) -> None:
-    """A marker whose pid is this test's own process: alive, on this host,
-    begun age_s seconds ago, with no events file."""
-    at = (datetime.now(timezone.utc) - timedelta(seconds=age_s)).strftime("%Y-%m-%dT%H:%M:%SZ")
+LIVE_HEARTBEAT = {"ATTAVO_HEARTBEAT_S": "15"}
+
+
+def write_live_marker(root: Path, stage: str, nn: int, age_s: int, event_age_s: int | None = None) -> None:
+    """A marker begun age_s seconds ago on this host, held by a worker
+    whose heartbeat file is fresh and names this test's process; when
+    event_age_s is given, the adapter's last event is that old."""
+    def stamp(ago: int) -> str:
+        return (datetime.now(timezone.utc) - timedelta(seconds=ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     marker = records_dir(root) / f"{stage}-{nn:02d}.started"
     marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(json.dumps({"at": at, "host": socket.gethostname(), "pid": os.getpid(),
+    marker.write_text(json.dumps({"at": stamp(age_s), "host": socket.gethostname(),
                                   "sha": head_of(root), "product_version": "fixture"}))
     commit_all(root, "invocation marker for item 1")
+    attavo_dir = Path(git(root, "rev-parse", "--absolute-git-dir").strip()) / "attavo"
+    attavo_dir.mkdir(parents=True, exist_ok=True)
+    (attavo_dir / f"{stage}-{nn:02d}.heartbeat").write_text(f"{os.getpid()}\n")
+    if event_age_s is not None:
+        (attavo_dir / f"{stage}-{nn:02d}.events.jsonl").write_text(
+            json.dumps({"at": stamp(event_age_s), "kind": "tool_call", "text": "fixture-tool"}) + "\n")
 
 
 def test_report_reads_an_expired_approval_as_yours_and_says_why(tmp_path: Path) -> None:
@@ -186,21 +198,47 @@ def test_report_reads_a_live_invocation_inside_the_bound_as_running(tmp_path: Pa
     add_drive_stall_bound(root, 60)
     approve_item(root)
     write_live_marker(root, "build", 1, age_s=5)
-    out = report(root)
+    out = report(root, env=LIVE_HEARTBEAT)
     assert (out["state"], out["kind"], out["stage"], out["attempt"]) == ("running", "waits", "build", 1), out
     assert out["since"] and isinstance(out["last_event_age_s"], int), out
     assert out["says"].startswith("Build running since "), out
 
 
-def test_report_reads_a_live_invocation_past_the_bound_as_hung_and_ends_nothing(tmp_path: Path) -> None:
+def test_report_reads_a_fresh_heartbeat_with_events_inside_the_bound_as_running(tmp_path: Path) -> None:
+    """The marker is old, the holder is alive and its last event is
+    recent: running, not hung -- the bound is on silence, not on age."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     add_drive_stall_bound(root, 60)
     approve_item(root)
-    write_live_marker(root, "build", 1, age_s=600)
-    out = report(root)
+    write_live_marker(root, "build", 1, age_s=600, event_age_s=5)
+    out = report(root, env=LIVE_HEARTBEAT)
+    assert (out["state"], out["kind"]) == ("running", "waits"), out
+
+
+def test_report_reads_a_fresh_heartbeat_with_stale_events_as_hung_and_ends_nothing(tmp_path: Path) -> None:
+    """Hung is "the holder is alive and has stalled", read without a pid:
+    a heartbeat within three beats, the last event older than the bound."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_drive_stall_bound(root, 60)
+    approve_item(root)
+    write_live_marker(root, "build", 1, age_s=600, event_age_s=600)
+    out = report(root, env=LIVE_HEARTBEAT)
     assert (out["state"], out["kind"], out["stop_class"]) == ("owes-recovery", "acts", "hung"), out
-    os.kill(os.getpid(), 0)  # the report terminated nothing: this process is its "hung" pid
+    os.kill(os.getpid(), 0)  # the report terminated nothing: this process is the heartbeat's pid
+
+
+def test_report_reads_a_stale_heartbeat_as_died_whatever_the_events_say(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_drive_stall_bound(root, 60)
+    approve_item(root)
+    write_live_marker(root, "build", 1, age_s=600, event_age_s=5)
+    beat = Path(git(root, "rev-parse", "--absolute-git-dir").strip()) / "attavo" / "build-01.heartbeat"
+    os.utime(beat, (time.time() - 600, time.time() - 600))
+    out = report(root, env=LIVE_HEARTBEAT)
+    assert (out["state"], out["kind"], out["stop_class"]) == ("owes-recovery", "acts", "died"), out
 
 
 def test_report_reads_a_review_of_an_earlier_build_as_review_next(tmp_path: Path) -> None:
