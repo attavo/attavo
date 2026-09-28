@@ -13,6 +13,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from attavo.stops import STOP_CLASSES, derive_stop
 from helpers import make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -225,3 +228,110 @@ def test_stops_json_is_one_object_matching_rows_and_totals(tmp_path: Path) -> No
     assert isinstance(data["rows"], list)
     assert isinstance(data["totals"], dict)
     assert set(data["totals"]) == {"by_class", "by_answerer", "before_stop_was_recorded"}
+
+
+# --- derive_stop: a stop's class comes from the record's own fields, never
+# from reading the transcript (issue #241, root cause classification-by-
+# reading-prose). Written and run red first: on main the class was found by
+# scanning the whole transcript for the bare name of any class. ---
+
+EVERY_CLASS_QUOTED = "\n".join(
+    f"a quoted record says {name} here" for name in STOP_CLASSES) + "\n"
+
+GREEN_GATE: dict[str, Any] = {"criteria": [{"name": "a.sh", "exit": 0}],
+                              "selected_tests": {"count": 1, "exit": 0}, "checks": None}
+RED_TESTS_GATE: dict[str, Any] = {"criteria": [{"name": "a.sh", "exit": 0}],
+                                  "selected_tests": {"count": 1, "exit": 1}, "checks": None}
+
+
+SPECIMENS: list[Any] = [
+    pytest.param("refused", {"refusal_kind": "foreign-commit",
+                             "refusal": "commit 3f2a not authored by the executor"},
+                 ("foreign-commit", "tenant", "commit 3f2a not authored by the executor"),
+                 id="229-build-01-foreign-commit"),
+    pytest.param("refused", {"refusal_kind": "claims", "refusal": "attavo/common.py"},
+                 ("claims-boundary", "spec", "attavo/common.py"),
+                 id="229-build-03-outside-claims"),
+    pytest.param("failed", {"gate": RED_TESTS_GATE},
+                 ("gate", "executor", "selected tests: exit 1, 1 selected"),
+                 id="229-build-04-red-selected-tests"),
+    pytest.param("halted", {"halted": {"question": "which overlay wins?\nand why"}},
+                 ("question", "spec", "which overlay wins?"),
+                 id="229-build-05-question"),
+    pytest.param("failed", {"gate": RED_TESTS_GATE},
+                 ("gate", "executor", "selected tests: exit 1, 1 selected"),
+                 id="237-build-01-red-selected-tests-no-checks"),
+]
+
+
+@pytest.mark.parametrize(("status", "structure", "expected"), SPECIMENS)
+def test_the_five_specimens_class_from_structure_whatever_the_transcript_quotes(
+        status: str, structure: dict[str, Any], expected: tuple[str, str, str]) -> None:
+    """#229 build-01, -03, -04, -05 and #237 build-01, replayed with a
+    transcript that quotes every class name: the class is the record's own,
+    and neither `no-cause` nor `forge-unconcluded` is ever derived."""
+    stop = derive_stop(status, log=EVERY_CLASS_QUOTED, **structure)
+    assert stop is not None
+    assert (stop["class"], stop["provenance"], stop["detail"]) == expected
+    assert stop["class"] not in ("no-cause", "forge-unconcluded")
+
+
+def test_a_protected_path_refusal_is_claims_boundary_executor() -> None:
+    stop = derive_stop("refused", refusal_kind="protected", refusal="records/1/sneaky.txt",
+                       log=EVERY_CLASS_QUOTED)
+    assert stop == {"class": "claims-boundary", "provenance": "executor",
+                    "detail": "records/1/sneaky.txt"}
+
+
+def test_a_failed_build_with_a_red_criterion_classes_gate_naming_the_criterion() -> None:
+    gate: dict[str, Any] = {"criteria": [{"name": "ok.sh", "exit": 0}, {"name": "bad.sh", "exit": 4}],
+                            "selected_tests": {"count": 2, "exit": 1}, "checks": {"exit": 1}}
+    stop = derive_stop("failed", gate=gate, log=EVERY_CLASS_QUOTED)
+    assert stop == {"class": "gate", "provenance": "executor", "detail": "criterion bad.sh: exit 4"}
+
+
+def test_a_red_checks_run_alone_classes_gate_naming_the_checks_exit() -> None:
+    gate: dict[str, Any] = {"criteria": [{"name": "ok.sh", "exit": 0}],
+                            "selected_tests": {"count": 3, "exit": 0}, "checks": {"exit": 2}}
+    stop = derive_stop("failed", gate=gate)
+    assert stop == {"class": "gate", "provenance": "executor", "detail": "checks: exit 2"}
+
+
+def test_a_green_gate_on_a_failed_record_is_not_a_gate_stop() -> None:
+    """A failure the gate did not cause (an adapter that exited non-zero
+    after a green gate, say) has no structure to class it: unclassed."""
+    stop = derive_stop("failed", gate=GREEN_GATE, log="one\ntwo")
+    assert stop == {"class": "unclassed", "provenance": "product", "detail": "two"}
+
+
+def test_a_transcript_naming_every_class_and_no_structure_classes_unclassed() -> None:
+    stop = derive_stop("failed", log=EVERY_CLASS_QUOTED)
+    assert stop is not None
+    assert (stop["class"], stop["provenance"]) == ("unclassed", "product")
+    assert stop["detail"] == f"a quoted record says {STOP_CLASSES[-1]} here"
+
+
+def test_a_transcript_naming_a_ceiling_is_not_a_ceiling() -> None:
+    """The ceiling is reported on the adapter's report line, not read from
+    the log's words."""
+    stop = derive_stop("failed", log="Error: input_too_large: ceiling exceeded\n")
+    assert stop is not None and stop["class"] == "unclassed"
+
+
+def test_a_report_line_ceiling_is_ceiling_executor() -> None:
+    stop = derive_stop("failed", report_class="ceiling", log=EVERY_CLASS_QUOTED)
+    assert stop == {"class": "ceiling", "provenance": "executor", "detail": None}
+
+
+def test_returned_and_pass_are_unchanged() -> None:
+    assert derive_stop("pass", log=EVERY_CLASS_QUOTED) is None
+    assert derive_stop("returned") == {"class": "forge-unconcluded", "provenance": "tenant",
+                                       "detail": None}
+
+
+def test_foreign_commit_is_a_class_and_in_both_record_schemas() -> None:
+    root = Path(__file__).resolve().parent.parent
+    for stage in ("build", "verify"):
+        schema = json.loads((root / "schema" / "records" / f"{stage}.schema.json").read_text())
+        assert "foreign-commit" in schema["properties"]["stop"]["properties"]["class"]["enum"], stage
+    assert "foreign-commit" in STOP_CLASSES

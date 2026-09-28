@@ -967,6 +967,11 @@ def main() -> int:
     ceiling = ceiling_refusal(instruction)
     if ceiling:
         sys.stderr.write(f"adapters/claude-code/run: refused: {ceiling}\n")
+        # Reported, not left for the product to find in the words: nothing
+        # was invoked, so no adapter version and no tokens.
+        print(json.dumps({"model": config.get("model"), "model_version": None,
+                          "adapter_version": None, "tokens": {"input": 0, "output": 0},
+                          "cost_usd": None, "class": "ceiling", "detail": ceiling}))
         return 1
 
     if os.environ.get("ATTAVO_ADAPTER_DRY_RUN"):

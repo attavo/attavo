@@ -105,3 +105,14 @@ def test_help_names_the_root_cause_line_and_the_marker() -> None:
     assert run.returncode == 0
     for phrase in ("Root-cause:", "root-causes.md", "own_records"):
         assert phrase in run.stdout, phrase
+
+
+def test_help_names_foreign_commit_and_says_the_class_comes_from_the_record() -> None:
+    """Issue #241: a stop's class comes from the record's own fields, never
+    from the transcript; a commit the executor did not author is its own
+    class. Red on main: neither the class nor the sentence was there."""
+    run = subprocess.run([sys.executable, str(ATTAVO), "--help"],
+                         capture_output=True, text=True, check=False)
+    assert run.returncode == 0
+    for phrase in ("foreign-commit", "never from the transcript", "the record's own fields"):
+        assert phrase in run.stdout, phrase

@@ -476,7 +476,7 @@ def cmd_build(argv: list[str]) -> int:
     checks_result: dict[str, Any] | None = None
     status_out = "failed"
     refusal = None
-    refusal_provenance = None
+    refusal_kind: str | None = None
     halted = None
     empty_detail: str | None = None
     iterations_used = 0
@@ -557,6 +557,7 @@ def cmd_build(argv: list[str]) -> int:
             if foreign:
                 status_out = "refused"
                 refusal = f"commit {foreign['sha']} not authored by the executor"
+                refusal_kind = "foreign-commit"
                 break
 
             # An executor that committed nothing this iteration built
@@ -588,7 +589,7 @@ def cmd_build(argv: list[str]) -> int:
             if protected:
                 status_out = "refused"
                 refusal = protected
-                refusal_provenance = "executor"
+                refusal_kind = "protected"
                 break
 
             touched = sorted(changed_paths(root, start_sha, records_rel))
@@ -596,6 +597,7 @@ def cmd_build(argv: list[str]) -> int:
             if bad_path:
                 status_out = "refused"
                 refusal = bad_path
+                refusal_kind = "claims"
                 break
 
             # The gate reads the commit, never the executor's directory: a
@@ -690,6 +692,10 @@ def cmd_build(argv: list[str]) -> int:
                                    "--- checks output (tail) ---", *tail]
             feedback_path.write_text("\n".join(feedback_lines) + "\n")
 
+    gate = {"criteria": [{"name": c["name"], "exit": c["exit"]} for c in criteria_results],
+            "selected_tests": ({"count": selected_tests["count"], "exit": selected_tests["exit"]}
+                               if selected_tests else None),
+            "checks": {"exit": checks_result["exit"]} if checks_result else None}
     record = {
         "sha": git(root, "rev-parse", "HEAD").strip(),
         "start_sha": start_sha,
@@ -715,21 +721,18 @@ def cmd_build(argv: list[str]) -> int:
         "halted": halted,
         "retry_of": retry_of,
         "steer": steer,
-        "stop": derive_stop(status_out, refusal=refusal, halted=halted,
-                            log="\n".join(transcripts),
-                            report_class="empty" if empty_detail else (payload or {}).get("class"),
-                            refusal_provenance=refusal_provenance),
+        "stop": derive_stop(status_out, refusal=refusal, refusal_kind=refusal_kind, halted=halted,
+                            gate=gate, log="\n".join(transcripts),
+                            report_class="empty" if empty_detail else (payload or {}).get("class")),
     }
     if record["stop"] is not None and empty_detail:
         record["stop"] = {**record["stop"], "detail": empty_detail}
     if record["stop"] is not None:
         stop_out: dict[str, Any] = record["stop"]
         # R3: transient's own signature is the adapter's stop detail
-        # (payload.get("detail")), not derive_stop's detail (which is
-        # None for every class but unclassed/question/environment/gate);
-        # every other non-pass class signs off its own detail (None for
-        # most, so signature is None too -- the class alone, or the log
-        # itself for unclassed, is the specimen's own cause).
+        # (payload.get("detail")), not derive_stop's detail (None for a
+        # report-line class); every other non-pass class signs off its own
+        # detail (None for most, so signature is None too).
         stop_detail: str | None = ((payload or {}).get("detail") if stop_out["class"] == "transient"
                                    else stop_out.get("detail"))
         record["stop"] = {**stop_out, "detail": stop_detail, "signature": signature_of(stop_detail),

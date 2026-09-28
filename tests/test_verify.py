@@ -317,10 +317,11 @@ def test_verify_records_a_silently_failing_adapter_without_being_refused(tmp_pat
     assert "1" in log  # the exit status, so the record explains itself
 
 
-def test_verify_ceiling_error_line_carries_ceiling_stop(tmp_path: Path) -> None:
-    """Issue #89, rejection test 3: an adapter exit with a tool error line
-    matching a declared ceiling is ceiling/product -- issue #86's own
-    specimen, codex's "input_too_large" on a diff too large to judge."""
+def test_verify_a_tool_error_line_naming_a_ceiling_is_not_a_ceiling(tmp_path: Path) -> None:
+    """Issue #241: the log's words decide nothing. Issue #86's own specimen,
+    codex's "input_too_large" on a diff too large to judge, with no report
+    line beside it, is unclassed/product; a ceiling is what an adapter
+    reports, never what the product reads."""
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     approve_item(root)
@@ -331,8 +332,8 @@ def test_verify_ceiling_error_line_carries_ceiling_stop(tmp_path: Path) -> None:
 
     rec = latest_verify(root)
     assert rec["status"] == "failed"
-    assert rec["stop"] == {"class": "ceiling", "provenance": "product", "detail": None,
-                       "signature": None, "bound": None}
+    assert rec["stop"]["class"] == "unclassed"
+    assert rec["stop"]["provenance"] == "product"
     log = latest_verify_log(root)
     assert "input_too_large" in log
 

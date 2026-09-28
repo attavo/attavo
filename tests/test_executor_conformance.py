@@ -626,3 +626,21 @@ def test_situation_15_instruction_stays_under_the_bound_with_large_files(adapter
     assert feedback_path.stat().st_size > 2_000_000
     build = dry_run(adapter_name, tmp_path, extra_env={"ATTAVO_FEEDBACK": str(feedback_path)})
     assert len(build["instruction"].encode()) < FIXED_BOUND_CHARS
+
+
+@pytest.mark.parametrize("adapter_name", ADAPTER_NAMES)
+def test_a_ceiling_refusal_is_reported_on_the_report_line(adapter_name: str, tmp_path: Path) -> None:
+    """Issue #241. An adapter that refuses an instruction over its input
+    ceiling says so on its report line -- "class": "ceiling", the refusal
+    as "detail" -- before exiting 1, so the product classes the stop from
+    the report and never from the words in the transcript. Nothing has
+    been invoked, so the line carries no adapter version and no tokens."""
+    env = base_env(tmp_path)
+    env["ATTAVO_ADAPTER_INPUT_LIMIT_CHARS"] = "10"
+    run = run_adapter(adapter_name, env)
+    assert run.returncode == 1, run.stderr
+    report = json.loads(run.stdout.splitlines()[-1])
+    assert report["class"] == "ceiling"
+    assert "ceiling exceeded" in report["detail"]
+    assert report["tokens"] == {"input": 0, "output": 0}
+    assert "ceiling exceeded" in run.stderr
