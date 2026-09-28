@@ -430,7 +430,9 @@ def test_spec_gate_stub_verdict_after_halted_build_that_committed_nothing(tmp_pa
 
 def add_root_cause_line(root: Path, root_cause: str) -> None:
     spec_md = root / "specs" / "1" / "spec.md"
-    text = spec_md.read_text().replace("## Problem\n", f"## Problem\n\nRoot-cause: {root_cause}\n", 1)
+    # a root-cause item is core (ruled 2026-09-27); the fixture declares fix
+    text = spec_md.read_text().replace("Class: fix\n", "Class: core\n", 1)
+    text = text.replace("## Problem\n", f"## Problem\n\nRoot-cause: {root_cause}\n", 1)
     spec_md.write_text(text)
     commit_all(root, f"name root cause {root_cause}")
 
@@ -475,3 +477,83 @@ def test_spec_gate_leaves_a_spec_with_no_root_cause_line_alone(tmp_path: Path) -
     root = make_tenant(tmp_path, "valid")
     assert not (root / "root-causes.md").exists()
     assert run_attavo(root, "spec-gate", "1").returncode == 0
+
+
+# --- the item's class and the research policy (ruled 2026-09-25, 2026-09-27) ---
+
+def set_class_line(root: Path, line: str | None) -> None:
+    spec_md = root / "specs" / "1" / "spec.md"
+    text = spec_md.read_text().replace("Class: fix\n", "" if line is None else line + "\n", 1)
+    spec_md.write_text(text)
+    commit_all(root, f"class line: {line}")
+
+
+def test_spec_gate_refuses_a_spec_that_declares_no_class_before_any_criterion_runs(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    set_class_line(root, None)
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1, run.stdout + run.stderr
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused" and rec["criteria"] == [], rec
+    assert rec["refusal"] == "class: none declared; add a line 'Class: core' or 'Class: fix' to the problem", rec["refusal"]
+    assert rec["class"] is None and rec["research"] == "not required by policy", rec
+
+
+def test_spec_gate_refuses_a_class_other_than_core_or_fix(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    set_class_line(root, "Class: feature")
+    assert run_attavo(root, "spec-gate", "1").returncode == 1
+    assert latest_record(root, "1", "spec")["refusal"] == "class: feature is not core or fix"
+
+
+def test_spec_gate_refuses_a_root_cause_item_declared_fix(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    (root / "root-causes.md").write_text("# root causes\n\n- shared-working-copy: one checkout, many writers\n")
+    spec_md = root / "specs" / "1" / "spec.md"
+    spec_md.write_text(spec_md.read_text().replace("## Problem\n", "## Problem\n\nRoot-cause: shared-working-copy\n", 1))
+    commit_all(root, "a root cause named on a fix")
+    assert run_attavo(root, "spec-gate", "1").returncode == 1
+    assert latest_record(root, "1", "spec")["refusal"] == "class: fix with root cause shared-working-copy; a root-cause item is core"
+
+
+def test_spec_gate_records_the_class_and_that_research_was_not_required(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    set_class_line(root, "Class: core")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "pass" and rec["class"] == "core", rec
+    assert rec["research"] == "not required by policy", rec
+
+
+def test_with_research_required_a_core_spec_owes_a_research_record_and_a_fix_spec_does_not(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    manifest = root / "attavo.toml"
+    text = manifest.read_text()
+    assert "[spec]\n" in text, text
+    manifest.write_text(text.replace("[spec]\n", '[spec]\nresearch = "required"\n', 1))
+    commit_all(root, "research required")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert latest_record(root, "1", "spec")["research"] == "required"
+    set_class_line(root, "Class: core")
+    assert run_attavo(root, "spec-gate", "1").returncode == 1
+    rec = latest_record(root, "1", "spec")
+    assert rec["refusal"] == "research: [spec].research is required and the item has no research record", rec
+    (root / "records" / "1" / "research-01.json").write_text("{}\n")
+    commit_all(root, "a research record")
+    assert run_attavo(root, "spec-gate", "1").returncode == 0
+
+
+def test_an_approved_and_built_item_whose_spec_declares_no_class_still_regates_built(tmp_path: Path) -> None:
+    """No item in flight is stranded: class is required before approval,
+    and an item approved and built before the gate read class re-gates
+    after an amendment exactly as it did."""
+    root = make_tenant(tmp_path, "valid")
+    approve_valid(root)
+    assert run_real_build(root).returncode == 0
+    set_class_line(root, None)
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "built" and rec["class"] is None, rec

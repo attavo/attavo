@@ -1,5 +1,7 @@
 ## Problem
 
+Class: fix
+
 There is a design stage here, which the contract does not allow.
 
 ## Design

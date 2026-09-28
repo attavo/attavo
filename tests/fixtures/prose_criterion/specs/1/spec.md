@@ -1,5 +1,7 @@
 ## Problem
 
+Class: fix
+
 The build has no criterion at all; this spec lists one anyway.
 
 ## Claims

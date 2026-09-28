@@ -37,7 +37,16 @@ class Stop(_StopRequired, _StopOptional):
     it is. The two schemas enumerate different classes; the shape is the same."""
 
 
-class SpecRecord(TypedDict):
+class _SpecOptional(TypedDict, total=False):
+    # Written from spec/3 on (ruled 2026-09-27); records before it carry neither.
+    # "class" is a Python keyword, hence the functional form below.
+    research: str
+
+
+_SpecClass = TypedDict("_SpecClass", {"class": str | None}, total=False)
+
+
+class SpecRecord(_SpecOptional, _SpecClass):
     record_version: int
     item: str
     sha: str
