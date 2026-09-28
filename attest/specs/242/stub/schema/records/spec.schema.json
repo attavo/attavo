@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://attavo.dev/schema/records/spec/3",
+  "title": "attavo spec-gate record (spec-NN.json)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["record_version", "item", "sha", "spec_sha", "at", "status", "approval_sha", "criteria", "refusal", "product_version", "product_pin"],
+  "properties": {
+    "record_version": {"type": "integer", "minimum": 1},
+    "item": {"type": "string", "minLength": 1},
+    "sha": {"type": "string", "minLength": 1},
+    "spec_sha": {"type": ["string", "null"]},
+    "at": {"type": "string", "minLength": 1},
+    "status": {"type": "string", "enum": ["pass", "refused", "approved", "built"]},
+    "approval_sha": {"type": ["string", "null"]},
+    "criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "on_tree", "on_stub"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "on_tree": {"type": "integer"},
+          "on_stub": {"type": ["integer", "null"]}
+        }
+      }
+    },
+    "refusal": {"type": ["string", "null"]},
+    "product_version": {"type": "string", "minLength": 1},
+    "product_pin": {"type": ["string", "null"]},
+    "class": {"type": ["string", "null"], "enum": ["core", "fix", null], "description": "The item's class as its spec declares it (ruled 2026-09-25); null on a record written before the gate read class, or when the spec did not parse."},
+    "research": {"type": "string", "enum": ["required", "not required by policy"], "description": "Which research policy the gate applied: [spec].research in the manifest at the gate's commit (ruled 2026-09-27)."}
+  }
+}
