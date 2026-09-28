@@ -246,3 +246,75 @@ def test_all_runs_one_pass_in_every_working_copy_beside_the_checkout(tmp_path: P
     assert run.returncode == 0, run.stdout + run.stderr
     assert "attavo-worktree-1: attavo drive: Build started" in run.stdout, run.stdout
     wait_for(lambda: record_files(tmp_path / "attavo-worktree-1", "build") != [])
+
+
+def test_the_report_reads_running_for_the_whole_of_counsel_and_stopped_after_the_push(tmp_path: Path) -> None:
+    """The heartbeat is the holder's, so it runs until the holder exits: a
+    stopped build's worker is asked for counsel, and for the length of
+    that run the report reads running and a pass starts and recovers
+    nothing."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_drive_stall_bound(root)
+    manifest = root / "attavo.toml"
+    manifest.write_text(manifest.read_text().replace(
+        '[executor]\nbuild = "fixture"', '[executor]\nbuild = "fixture"\ncounsel = "fixture"'))
+    commit_all(root, "counsel configured")
+    bare = add_bare_remote(root, tmp_path)
+    approve_item(root)
+    release = tmp_path / "release-counsel"
+    env = {**FAST, "ATTAVO_FIXTURE_QUESTION": "which overlay wins?",
+           "ATTAVO_FIXTURE_COUNSEL_WAIT_FOR": str(release)}
+    assert run_attavo(root, "drive", "1", env=env).returncode == 0
+    beat = git_dir(root) / "attavo" / "build-01.heartbeat"
+    wait_for(lambda: record_files(root, "build") != [])
+    worker = int(beat.read_text())
+    # The stage command has returned; the worker is in counsel. Let the
+    # heartbeat's own interval pass three times over: a beat that stopped
+    # with the command reads stale by now.
+    time.sleep(1.0)
+    os.kill(worker, 0)
+    assert time.time() - beat.stat().st_mtime < 0.6, "the heartbeat is stale while the worker is alive"
+    r = report(root)
+    assert (r["state"], r["kind"]) == ("running", "waits"), r
+    run = run_attavo(root, "drive", "1", env=FAST)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "started" not in run.stdout and "ecover" not in run.stdout, run.stdout
+    assert not (records_dir(root) / "build-02.started").exists()
+    os.kill(worker, 0)
+    release.touch()
+    wait_for(lambda: pushed(bare, "build record for item 1 (build-01)"))
+    assert latest_record(root, "counsel")["record"] == "build-01"
+    assert report(root)["state"] == "stopped"
+
+
+def test_a_worker_whose_commit_is_refused_beats_until_it_returns_and_then_stops(
+        tmp_path: Path, monkeypatch: Any) -> None:
+    import threading
+
+    from attavo import drive
+    from attavo.doctor import heartbeat_path
+
+    root = make_tenant(tmp_path, "build_valid")
+    add_drive_stall_bound(root)
+    approve_item(root)
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("ATTAVO_HEARTBEAT_S", "0.1")
+    seen: dict[str, float] = {}
+
+    def stage(argv: list[str]) -> int:
+        (records_dir(root) / "build-01.json").write_text("{}")
+        return 0
+
+    def refuse(*_: Any) -> None:
+        time.sleep(0.5)
+        seen["age"] = time.time() - heartbeat_path(root, "build", 1).stat().st_mtime
+        raise RuntimeError("refused")
+
+    monkeypatch.setattr(drive, "cmd_build", stage)
+    monkeypatch.setattr(drive, "latest_record", lambda *_: {"status": "pass"})
+    monkeypatch.setattr(drive, "commit_record", refuse)
+    before = threading.active_count()
+    assert drive._stage_body("1", "build", 1) == 1
+    assert seen["age"] < 0.3, f"the heartbeat had stopped {seen['age']:.2f}s before the refused commit"
+    assert threading.active_count() == before, "the heartbeat thread outlived the worker's body"

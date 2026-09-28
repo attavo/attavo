@@ -430,11 +430,19 @@ def _stage_body(item_id: str, stage: str, nn: int) -> int:
 
     beat_thread = threading.Thread(target=_tick, daemon=True)
     beat_thread.start()
+    # The heartbeat says the holder is alive, so it runs until the holder
+    # returns -- through counsel, file-stops, the commit and the push --
+    # not until the stage command does.
     try:
-        rc = cmd_build([item_id]) if stage == "build" else cmd_verify([item_id])
+        return _run_and_transport(item_id, stage, root, m, records_dir, branch, before)
     finally:
         stop_beat.set()
         beat_thread.join()
+
+
+def _run_and_transport(item_id: str, stage: str, root: Path, m: dict[str, Any],
+                       records_dir: Path, branch: str, before: Path | None) -> int:
+    rc = cmd_build([item_id]) if stage == "build" else cmd_verify([item_id])
 
     after = latest_attempt_path(records_dir, stage)
     if after is None or after == before:
