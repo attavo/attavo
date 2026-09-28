@@ -884,6 +884,58 @@ def test_proof_four_fails_a_verify_record_whose_report_class_says_transient(tmp_
         assert named in p["reason"], (named, p["reason"])
 
 
+def test_proof_four_fails_a_build_record_whose_environment_refusal_disagrees_with_its_stop(
+        tmp_path: Path) -> None:
+    """One of three writers that reach a class without derive_stop (issue
+    #254): the [checks].command preflight refuses with refusal_kind
+    "environment" but a stored stop of unclassed/product -- rederive_stop
+    reads refusal_kind back, the same field the writer set it from, and
+    the doctor fails the disagreement rather than trusting the stop."""
+    root = _rederive_tenant(tmp_path, "environment_disagrees", {"build-01": {
+        "status": "refused", "refusal": "no jsonschema", "refusal_kind": "environment",
+        "stop": _stop("unclassed", "product", "no jsonschema")}})
+
+    p = run_doctor(root)["no-stop-lacks-cause"]
+    assert not p["holds"]
+    for named in ("item 1", "build-01", "unclassed/product", "environment/tenant"):
+        assert named in p["reason"], (named, p["reason"])
+
+
+def test_proof_four_fails_a_verify_record_whose_forge_returned_disagrees_with_its_stop(
+        tmp_path: Path) -> None:
+    """A second writer without derive_stop: a review the forge returned
+    (a concluded red check, read from forge_checks) but a stored stop of
+    forge-unconcluded/tenant -- the disagreement between what the forge
+    concluded and what the stop claims is caught the same way."""
+    root = _rederive_tenant(tmp_path, "forge_returned_disagrees", {"verify-01": {
+        "status": "returned",
+        "forge_checks": {"command": "c", "sha": "s",
+                         "conclusions": [{"name": "ci", "conclusion": "failure"}]},
+        "stop": _stop("forge-unconcluded", "tenant")}})
+
+    p = run_doctor(root)["no-stop-lacks-cause"]
+    assert not p["holds"]
+    for named in ("item 1", "verify-01", "forge-unconcluded/tenant", "returned/tenant"):
+        assert named in p["reason"], (named, p["reason"])
+
+
+def test_proof_four_fails_a_verify_record_whose_blocking_finding_disagrees_with_its_stop(
+        tmp_path: Path) -> None:
+    """The third: a review with a blocking finding is class returned by
+    R3's own rule, read back from findings -- a stored stop of
+    unclassed/product disagrees and fails."""
+    root = _rederive_tenant(tmp_path, "blocking_finding_disagrees", {"verify-01": {
+        "status": "failed",
+        "findings": [{"title": "b", "specimen": "s", "retires": "r",
+                     "rejection_test": "t", "severity": "blocking"}],
+        "stop": _stop("unclassed", "product", "boom")}})
+
+    p = run_doctor(root)["no-stop-lacks-cause"]
+    assert not p["holds"]
+    for named in ("item 1", "verify-01", "unclassed/product", "returned/tenant"):
+        assert named in p["reason"], (named, p["reason"])
+
+
 def test_proof_four_holds_when_every_stop_is_what_its_fields_derive(tmp_path: Path) -> None:
     """The passing counterpart of rows 1-3: each stop agrees with its own record."""
     root = _rederive_tenant(tmp_path, "agrees", {
