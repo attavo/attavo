@@ -96,6 +96,8 @@ class _BuildRequired(TypedDict):
     status: str
     refusal: str | None
     halted: dict[str, Any] | None
+    refusal_kind: str | None
+    report_class: str | None
     stop: Stop | None
     product_version: str
     product_pin: str | None
@@ -134,6 +136,7 @@ class _VerifyRequired(TypedDict):
     cost_usd: float | None
     wall_clock_s: float
     status: str
+    report_class: str | None
     stop: Stop | None
     product_version: str
     product_pin: str | None

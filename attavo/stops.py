@@ -4,7 +4,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from attavo.common import MANIFEST, read_manifest
 from attavo.records import parse_attempts, stage_schema
@@ -119,6 +119,113 @@ def derive_stop(status: str, *, report_class: str | None = None,
         if red:
             return {"class": "gate", "provenance": "executor", "detail": red}
     return {"class": "unclassed", "provenance": "product", "detail": _log_last_line(log)}
+
+
+def gate_of(criteria: list[dict[str, Any]] | None, selected_tests: dict[str, Any] | None,
+            checks: dict[str, Any] | None) -> dict[str, Any]:
+    """The gate derive_stop reads, from the three fields a build record
+    carries it in (issue #254): the writer builds it here from the values
+    it is about to store, and the doctor rebuilds it here from the stored
+    ones, so the two cannot disagree about what the gate was."""
+    return {"criteria": [{"name": c["name"], "exit": c["exit"]} for c in criteria or []],
+            "selected_tests": ({"count": selected_tests["count"], "exit": selected_tests["exit"]}
+                               if selected_tests else None),
+            "checks": {"exit": checks["exit"]} if checks else None}
+
+
+# The forge's own conclusions, read by verify before any judge is called.
+FORGE_OK_CONCLUSIONS = {"success", "neutral", "skipped"}
+
+# issue #84: a concluded check's second token is a conclusion --
+# FORGE_OK_CONCLUSIONS, or another concluded one such as failure,
+# cancelled, or timed_out; an unconcluded check's is a status instead,
+# one of these. drive's own poll (poll_forge_checks) is the one reader
+# that needs to tell a still-running check apart from a concluded, not-ok
+# one -- read_forge_checks itself only ever needed "green or not".
+FORGE_UNCONCLUDED_STATUSES = {"queued", "in_progress", "pending", "waiting"}
+
+
+def returned_stop(forge_checks: dict[str, Any]) -> dict[str, Any]:
+    """R3 (ruling C amended): a review the forge returned because a
+    required check concluded red is class returned, retryable -- the
+    next build attempt is handed the evidence -- signed by the sorted
+    names of the checks that concluded red. A review returned because
+    the checks have not concluded at all yet (nothing to sign) stays
+    forge-unconcluded, as before -- there is no rejection to hand a
+    build, only a wait that already has its own bound (the drive
+    forge-poll bound, unchanged by this item)."""
+    conclusions = forge_checks.get("conclusions") or []
+    red = sorted(c["name"] for c in conclusions
+                if c["conclusion"] not in FORGE_OK_CONCLUSIONS
+                and c["conclusion"] not in FORGE_UNCONCLUDED_STATUSES)
+    unconcluded = [c for c in conclusions if c["conclusion"] in FORGE_UNCONCLUDED_STATUSES]
+    if red and not unconcluded:
+        detail = ", ".join(f"{c['name']} {c['conclusion']}" for c in conclusions if c["name"] in red)
+        return {"class": "returned", "provenance": "tenant", "detail": detail,
+               "signature": signature_of(" ".join(red)), "bound": None}
+    stop = dict(derive_stop("returned") or {})
+    return {**stop, "signature": None, "bound": None}
+
+
+def blocking_titles(findings: list[dict[str, Any]] | None) -> list[str]:
+    """The sorted titles of a review's blocking findings: any makes the
+    review failed with class returned, whatever else it reported."""
+    return sorted(f["title"] for f in findings or [] if str(f.get("severity")) == "blocking")
+
+
+# The first record_version at which a build / verify record carries what
+# its stop was derived from (refusal_kind, report_class): the doctor
+# re-derives the stop of a record at or after it, and counts the rest.
+STOP_REDERIVABLE_FROM = {"build": 11, "verify": 10}
+
+
+def rederive_stop(stage: str, rec: dict[str, Any]) -> dict[str, Any] | None:
+    """The stop a record's own fields derive (issue #254): what its writer
+    was handed, read back from the record. Three writers reach a class
+    without derive_stop -- the build environment preflight (refusal_kind
+    environment), a verify the forge returned (its forge_checks), and a
+    review with a blocking finding (its findings) -- and each is read back
+    here from the same field. The class and provenance are the answer; the
+    detail is not (it comes from a log or a payload the record does not hold)."""
+    status = rec.get("status") or ""
+    gate: dict[str, Any] | None = None
+    if stage == "verify":
+        if status == "returned":
+            return returned_stop(rec.get("forge_checks") or {})
+        if status == "failed" and blocking_titles(rec.get("findings")):
+            return {"class": "returned", "provenance": "tenant", "detail": None}
+    else:
+        if status == "refused" and rec.get("refusal_kind") == "environment":
+            return {"class": "environment", "provenance": "tenant", "detail": None}
+        gate = gate_of(rec.get("criteria"), rec.get("selected_tests"), rec.get("checks"))
+    return cast("dict[str, Any] | None",
+                derive_stop(status, halted=rec.get("halted"), refusal_kind=rec.get("refusal_kind"),
+                            refusal=rec.get("refusal"), report_class=rec.get("report_class"),
+                            gate=gate))
+
+
+def is_recovery_stop(rec: dict[str, Any]) -> bool:
+    """A record the pass wrote on recovery: died or hung, provenance
+    product, no adapter's report line behind it. Hand-built by drive, not
+    derived, so it is checked by its own rule (recovery_fault)."""
+    stop = rec.get("stop") or {}
+    return (stop.get("class") in ("died", "hung") and stop.get("provenance") == "product"
+            and rec.get("report_class") is None)
+
+
+def recovery_fault(rec: dict[str, Any]) -> str | None:
+    """What is wrong with a recovery record, or None: hung carries the
+    bound it crossed (stall or ceiling), died carries none, and either
+    was a failed attempt."""
+    stop = rec.get("stop") or {}
+    cls, bound = stop.get("class"), stop.get("bound")
+    if rec.get("status") != "failed":
+        return f"is a recovered {cls} with status {rec.get('status')!r}, not failed"
+    if cls == "hung" and bound not in ("stall", "ceiling"):
+        return f"is hung with bound {bound!r}; a recovered hung carries stall or ceiling"
+    if cls == "died" and bound is not None:
+        return f"is died with bound {bound!r}; a recovered died carries none"
+    return None
 
 
 def gate_stop(refusal: str | None) -> Stop:

@@ -15,7 +15,10 @@ from pathlib import Path
 from typing import Any, cast
 
 import jsonschema
+import pytest
 
+from attavo.common import read_manifest
+from attavo.doctor import proof_no_stop_lacks_cause
 from helpers import commit_all, make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -1019,3 +1022,46 @@ def test_an_empty_iteration_is_fed_back_and_a_later_commit_passes(tmp_path: Path
     rec = latest_build(root)
     assert (rec["status"], rec["iterations"]) == ("pass", 2), rec
     assert rec["sha"] != rec["start_sha"]
+
+
+# --- issue #254: the record carries what its stop was derived from ---
+
+@pytest.mark.parametrize(("env", "expected"), [
+    pytest.param({"ATTAVO_FIXTURE_FOREIGN_COMMIT": "1"}, ("foreign-commit", None),
+                 id="foreign-commit"),
+    pytest.param({"ATTAVO_FIXTURE_WRITE": "unclaimed.txt"}, ("claims", None), id="claims"),
+    pytest.param({"ATTAVO_FIXTURE_WRITE": "records/1/sneaky.txt"}, ("protected", None),
+                 id="protected"),
+    pytest.param({"ATTAVO_FIXTURE_QUESTION": "which overlay wins?",
+                  "ATTAVO_FIXTURE_REPORT_CLASS": "non-question"}, (None, "non-question"),
+                 id="report-line-class"),
+    pytest.param({"ATTAVO_FIXTURE_NO_COMMIT": "1"}, (None, "empty"), id="empty"),
+])
+def test_a_build_record_carries_refusal_kind_and_report_class_and_proof_four_holds(
+        tmp_path: Path, env: dict[str, str], expected: tuple[str | None, str | None]) -> None:
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+    run_attavo(root, "build", "1", env=env)
+
+    rec = latest_build(root)
+    assert (rec["refusal_kind"], rec["report_class"]) == expected
+    p = proof_no_stop_lacks_cause(root, read_manifest(root))
+    assert p.holds, p.reason
+
+
+def test_a_build_record_that_passes_or_is_refused_by_the_environment_says_so(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+    assert run_attavo(root, "build", "1").returncode == 0
+    rec = latest_build(root)
+    assert (rec["refusal_kind"], rec["report_class"]) == (None, None)
+
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text() + '\n[checks]\ncommand = "echo no jsonschema; exit 2"\n')
+    commit_all(root, "configure a broken checks command")
+    run_attavo(root, "build", "1")
+    rec = latest_build(root)
+    assert rec["stop"]["class"] == "environment"
+    assert (rec["refusal_kind"], rec["report_class"]) == ("environment", None)
+    p = proof_no_stop_lacks_cause(root, read_manifest(root))
+    assert p.holds, p.reason

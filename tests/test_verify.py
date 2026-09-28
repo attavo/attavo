@@ -530,3 +530,38 @@ def test_verify_refuses_a_passing_build_record_that_names_no_change(tmp_path: Pa
     assert run.returncode == 1, run.stdout + run.stderr
     assert "names no change" in run.stdout and "sha equals start_sha" in run.stdout, run.stdout
     assert list((root / "records" / "1").glob("verify-*.json")) == []
+
+
+# --- issue #254: the record carries what its stop was derived from ---
+
+def test_a_verify_record_carries_report_class_and_proof_four_holds(tmp_path: Path) -> None:
+    """A returned review (the forge red) and a failed one (an
+    adapter that errors) both write report_class null, and each stop re-derives."""
+    from attavo.common import read_manifest
+    from attavo.doctor import proof_no_stop_lacks_cause
+
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, RED_FORGE)
+    approve_item(root)
+    assert run_attavo(root, "build", "1").returncode == 0
+    assert run_attavo(root, "verify", "1").returncode == 0
+    rec = latest_verify(root)
+    assert rec["status"] == "returned" and rec["report_class"] is None
+
+    adapter_dir = root / "attavo" / "adapters" / "silent"
+    adapter_dir.mkdir(parents=True)
+    adapter_run = adapter_dir / "run"
+    adapter_run.write_text("#!/bin/sh\necho 'the tool broke' >&2\nexit 1\n")
+    adapter_run.chmod(0o755)
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace(
+        '[executor]\nbuild = "fixture"', '[executor]\nbuild = "fixture"\nverify = "silent"'))
+    toml.write_text(toml.read_text().replace(RED_FORGE, GREEN_FORGE))
+    commit_all(root, "the forge goes green")
+    assert run_attavo(root, "verify", "1").returncode == 1
+    rec = latest_verify(root)
+    assert rec["status"] == "failed" and rec["report_class"] is None
+
+    p = proof_no_stop_lacks_cause(root, read_manifest(root))
+    assert p.holds, p.reason
+    assert "2 non-pass record(s)" in p.reason

@@ -15,7 +15,10 @@ from typing import Any
 
 import pytest
 
-from attavo.stops import STOP_CLASSES, derive_stop
+from attavo.common import read_manifest
+from attavo.doctor import proof_no_stop_lacks_cause
+from attavo.records import write_record as write_stage_record
+from attavo.stops import STOP_CLASSES, derive_stop, returned_stop
 from helpers import make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -335,3 +338,106 @@ def test_foreign_commit_is_a_class_and_in_both_record_schemas() -> None:
         schema = json.loads((root / "schema" / "records" / f"{stage}.schema.json").read_text())
         assert "foreign-commit" in schema["properties"]["stop"]["properties"]["class"]["enum"], stage
     assert "foreign-commit" in STOP_CLASSES
+
+
+# --- issue #254: the writer and the reader agree by construction ---
+
+GATES_LOG = "--- attavo gates, iteration 1 ---\ncriterion a.sh: exit 1\nlast line"
+
+RED_CRITERION: dict[str, Any] = {"criteria": [{"name": "a.sh", "exit": 1}],
+                                 "selected_tests": None, "checks": None}
+RED_SELECTED: dict[str, Any] = {"criteria": [{"name": "a.sh", "exit": 0}],
+                                "selected_tests": {"select": "s", "run": "r", "count": 2, "exit": 1},
+                                "checks": None}
+RED_CHECKS: dict[str, Any] = {"criteria": [{"name": "a.sh", "exit": 0}],
+                              "selected_tests": {"select": "s", "run": "r", "count": 2, "exit": 0},
+                              "checks": {"command": "c", "exit": 2}}
+GREEN: dict[str, Any] = {"criteria": [{"name": "a.sh", "exit": 0}],
+                         "selected_tests": {"select": "s", "run": "r", "count": 2, "exit": 0},
+                         "checks": {"command": "c", "exit": 0}}
+FORGE_RED: dict[str, Any] = {"command": "c", "sha": "s", "conclusions": [
+    {"name": "test", "conclusion": "failure"}, {"name": "lint", "conclusion": "success"}]}
+FORGE_PENDING: dict[str, Any] = {"command": "c", "sha": "s", "conclusions": [
+    {"name": "test", "conclusion": "in_progress"}]}
+BLOCKING: list[dict[str, Any]] = [{"title": "b", "specimen": "s", "retires": "r",
+                                   "rejection_test": "t", "severity": "blocking"}]
+
+
+def _build_case(status: str, *, gate_fields: dict[str, Any] | None = None, **derive: Any) -> Any:
+    fields = {"criteria": [], "selected_tests": None, "checks": None, **(gate_fields or {})}
+    gate = {"criteria": [{"name": c["name"], "exit": c["exit"]} for c in fields["criteria"]],
+            "selected_tests": ({"count": fields["selected_tests"]["count"],
+                                "exit": fields["selected_tests"]["exit"]}
+                               if fields["selected_tests"] else None),
+            "checks": {"exit": fields["checks"]["exit"]} if fields["checks"] else None}
+    record = {"status": status, "refusal": derive.get("refusal"),
+              "refusal_kind": derive.get("refusal_kind"), "halted": derive.get("halted"),
+              "report_class": derive.get("report_class"), **fields}
+    stop = derive_stop(status, gate=gate, log=GATES_LOG, **derive)
+    return "build", record, stop
+
+
+DERIVE_CASES: list[Any] = [
+    pytest.param(*_build_case("refused", refusal_kind="foreign-commit", refusal="commit 3f2a"),
+                 id="build-foreign-commit"),
+    pytest.param(*_build_case("refused", refusal_kind="claims", refusal="a.py"), id="build-claims"),
+    pytest.param(*_build_case("refused", refusal_kind="protected", refusal="records/1/x"),
+                 id="build-protected"),
+    pytest.param(*_build_case("refused", refusal="no kind at all"), id="build-refused-unclassed"),
+    pytest.param(*_build_case("failed", gate_fields=RED_CRITERION), id="build-gate-criterion"),
+    pytest.param(*_build_case("failed", gate_fields=RED_SELECTED), id="build-gate-selected-tests"),
+    pytest.param(*_build_case("failed", gate_fields=RED_CHECKS), id="build-gate-checks"),
+    pytest.param(*_build_case("failed", gate_fields=GREEN), id="build-green-gate-unclassed"),
+    pytest.param(*_build_case("halted", halted={"question": "which one?"}), id="build-question"),
+    pytest.param(*_build_case("halted", halted={"question": ""}), id="build-halt-no-question"),
+    pytest.param(*_build_case("failed", report_class="ceiling"), id="build-report-ceiling"),
+    pytest.param(*_build_case("failed", report_class="non-question"),
+                 id="build-report-non-question"),
+    pytest.param(*_build_case("failed", report_class="transient"), id="build-report-transient"),
+    pytest.param(*_build_case("failed", report_class="empty"), id="build-report-empty"),
+    pytest.param(*_build_case("failed", report_class="no-such-class"),
+                 id="build-report-unenumerated"),
+    pytest.param("build",
+                 {"status": "refused", "refusal": "checks cannot run", "refusal_kind": "environment",
+                  "halted": None, "report_class": None, **RED_CHECKS},
+                 {"class": "environment", "provenance": "tenant", "detail": "boom",
+                  "signature": "boom", "bound": None}, id="build-environment-preflight"),
+    pytest.param("verify",
+                 {"status": "returned", "findings": None, "report_class": None,
+                  "forge_checks": FORGE_RED}, returned_stop(FORGE_RED), id="verify-forge-red"),
+    pytest.param("verify",
+                 {"status": "returned", "findings": None, "report_class": None,
+                  "forge_checks": FORGE_PENDING}, returned_stop(FORGE_PENDING),
+                 id="verify-forge-unconcluded"),
+    pytest.param("verify",
+                 {"status": "failed", "findings": BLOCKING, "report_class": None,
+                  "forge_checks": FORGE_PENDING},
+                 {"class": "returned", "provenance": "tenant", "detail": "b", "signature": "b",
+                  "bound": None}, id="verify-blocking-finding"),
+    pytest.param("verify",
+                 {"status": "failed", "findings": None, "report_class": "transient",
+                  "forge_checks": FORGE_PENDING},
+                 derive_stop("failed", report_class="transient", log=GATES_LOG),
+                 id="verify-report-transient"),
+    pytest.param("verify",
+                 {"status": "failed", "findings": None, "report_class": None,
+                  "forge_checks": FORGE_PENDING},
+                 derive_stop("failed", log=GATES_LOG), id="verify-unclassed"),
+]
+
+
+@pytest.mark.parametrize(("stage", "fields", "stop"), DERIVE_CASES)
+def test_every_stop_a_writer_produces_re_derives_to_itself(
+        tmp_path: Path, stage: str, fields: dict[str, Any], stop: dict[str, Any]) -> None:
+    """Issue #254 row 4: write each case's record through write_record, at
+    the schema's own version, and run proof four over it -- the class the
+    writer stored and the class the doctor re-derives are one."""
+    root = tmp_path / "tenant"
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    write_stage_record(root / "records" / "1", stage, {**fields, "stop": stop},
+                       {"paths": {"records": "records"}}, "1", log=GATES_LOG)
+
+    p = proof_no_stop_lacks_cause(root, read_manifest(root))
+    assert p.holds, p.reason
+    assert "1 non-pass record(s)" in p.reason

@@ -19,6 +19,15 @@ from typing import Any
 
 import pytest
 from helpers import FIXTURES, commit_all, init_repo, make_tenant
+from test_drive import (
+    GREEN_FORGE,
+    add_drive_stall_bound,
+    add_forge,
+    approve_item,
+    latest_record,
+    run_attavo,
+    write_dead_marker,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
@@ -809,6 +818,139 @@ def test_doctor_proof_four_fails_on_an_unclassed_stop_with_no_detail(tmp_path: P
     p = run_doctor(root)["no-stop-lacks-cause"]
     assert not p["holds"]
     assert "unclassed with no detail" in p["reason"]
+
+
+# Issue #254: the first record_version whose build / verify record carries
+# what its stop was derived from (refusal_kind, report_class).
+REDERIVABLE = {"build": 11, "verify": 10}
+
+
+def _rederive_tenant(tmp_path: Path, name: str, records: dict[str, dict[str, Any]]) -> Path:
+    """A tenant whose item 1 holds exactly these records, each with the
+    fields a record at its stage's re-derivable version carries (an
+    override wins) and no log, so only the re-derivation can fail."""
+    root = tmp_path / name
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+    item_dir = root / "records" / "1"
+    item_dir.mkdir(parents=True)
+    for stem, fields in records.items():
+        stage = stem.split("-")[0]
+        base: dict[str, Any] = {"record_version": REDERIVABLE[stage], "status": "failed",
+                                "report_class": None}
+        if stage == "build":
+            base |= {"refusal": None, "refusal_kind": None, "halted": None, "criteria": [],
+                     "selected_tests": None, "checks": None}
+        else:
+            base |= {"forge_checks": {"command": "c", "sha": "s",
+                                      "conclusions": [{"name": "t", "conclusion": "success"}]},
+                     "findings": None}
+        (item_dir / f"{stem}.json").write_text(json.dumps({**base, **fields}))
+    commit_all(root, "records for the re-derivation")
+    return root
+
+
+def _stop(cls: str, provenance: str, detail: str | None = None,
+          bound: str | None = None) -> dict[str, Any]:
+    return {"class": cls, "provenance": provenance, "detail": detail, "signature": None,
+            "bound": bound}
+
+
+def test_proof_four_fails_a_build_record_whose_class_disagrees_with_its_fields(tmp_path: Path) -> None:
+    """Issue #254 row 1: the fields say foreign-commit, the stop says gate --
+    the doctor passes it today because gate is an enumerated class."""
+    root = _rederive_tenant(tmp_path, "build_disagrees", {"build-01": {
+        "status": "refused", "refusal": "commit 3f2a not authored by the executor",
+        "refusal_kind": "foreign-commit",
+        "stop": _stop("gate", "executor", "criterion a.sh: exit 1")}})
+
+    p = run_doctor(root)["no-stop-lacks-cause"]
+    assert not p["holds"]
+    for named in ("item 1", "build-01", "gate/executor", "foreign-commit/tenant"):
+        assert named in p["reason"], (named, p["reason"])
+
+
+def test_proof_four_fails_a_verify_record_whose_report_class_says_transient(tmp_path: Path) -> None:
+    """Issue #254 row 2: the adapter's report line said transient, the
+    stop says unclassed -- the report-line class was read only at write time."""
+    root = _rederive_tenant(tmp_path, "verify_disagrees", {"verify-01": {
+        "report_class": "transient",
+        "stop": _stop("unclassed", "product", "boom")}})
+
+    p = run_doctor(root)["no-stop-lacks-cause"]
+    assert not p["holds"]
+    for named in ("item 1", "verify-01", "unclassed/product", "transient/executor"):
+        assert named in p["reason"], (named, p["reason"])
+
+
+def test_proof_four_holds_when_every_stop_is_what_its_fields_derive(tmp_path: Path) -> None:
+    """The passing counterpart of rows 1-3: each stop agrees with its own record."""
+    root = _rederive_tenant(tmp_path, "agrees", {
+        "build-01": {"status": "refused", "refusal": "commit 3f2a not authored",
+                     "refusal_kind": "foreign-commit", "stop": _stop("foreign-commit", "tenant")},
+        "build-02": {"criteria": [{"name": "a.sh", "exit": 0}, {"name": "b.sh", "exit": 3}],
+                     "stop": _stop("gate", "executor", "criterion b.sh: exit 3")},
+        "build-03": {"stop": _stop("hung", "product", "no event for 90 s", bound="stall")},
+        "build-04": {"stop": _stop("died", "product", "no live heartbeat")},
+        "verify-01": {"report_class": "transient", "stop": _stop("transient", "executor")},
+        "verify-02": {"status": "returned", "findings": None,
+                      "stop": _stop("forge-unconcluded", "tenant")},
+    })
+
+    p = run_doctor(root)["no-stop-lacks-cause"]
+    assert p["holds"], p["reason"]
+    assert "6 non-pass record(s)" in p["reason"]
+
+
+def test_proof_four_holds_a_recovery_record_by_its_own_rule(tmp_path: Path) -> None:
+    """Issue #254 row 3: hung owes a bound and died owes none."""
+    cases = {
+        "hung_without_bound": ({"build-01": {"stop": _stop("hung", "product", "d")}},
+                               "build-01", "hung"),
+        "died_with_bound": ({"verify-01": {"stop": _stop("died", "product", "d", bound="stall")}},
+                            "verify-01", "died"),
+    }
+    for name, (records, stem, cls) in cases.items():
+        root = _rederive_tenant(tmp_path, name, records)
+        p = run_doctor(root)["no-stop-lacks-cause"]
+        assert not p["holds"], name
+        assert stem in p["reason"] and cls in p["reason"], (name, p["reason"])
+
+
+def test_proof_four_counts_and_does_not_check_records_before_the_new_version(tmp_path: Path) -> None:
+    """Issue #254 row 5: a disagreeing record one version short of the
+    re-derivable one is counted, in the proof's line, never checked."""
+    root = _rederive_tenant(tmp_path, "before_window", {"build-01": {
+        "record_version": REDERIVABLE["build"] - 1, "status": "refused",
+        "refusal": "commit 3f2a not authored", "refusal_kind": None,
+        "stop": _stop("gate", "executor", "criterion a.sh: exit 1")}})
+
+    p = run_doctor(root)["no-stop-lacks-cause"]
+    assert p["holds"], p["reason"]
+    assert "1 non-pass record(s) before their stop could be re-derived" in p["reason"]
+    assert p["before_rederivable"] == 1
+
+
+def test_a_recovery_record_the_pass_writes_carries_null_for_the_new_keys(tmp_path: Path) -> None:
+    """Issue #254: drive.py builds its record from the schema's required
+    keys, so the new nullable keys arrive as null with no change to it --
+    and proof four checks that record by the recovery rule."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_drive_stall_bound(root)
+    approve_item(root)
+    write_dead_marker(root, "build", 1)
+    run = run_attavo(root, "drive", "1", env={"ATTAVO_HEARTBEAT_S": "0.2",
+                                              "ATTAVO_DRIVE_POLL_INTERVAL_S": "0.5"})
+    assert run.returncode == 0, run.stdout + run.stderr
+
+    rec = latest_record(root, "build")
+    assert rec["stop"]["class"] == "died"
+    assert rec["refusal_kind"] is None and rec["report_class"] is None
+    assert rec["record_version"] >= REDERIVABLE["build"]
+    p = run_doctor(root)["no-stop-lacks-cause"]
+    assert p["holds"], p["reason"]
 
 
 FULL_DRIVE_TABLE = ('[drive]\nstall_after_s = 60\nattempts = 3\n\n'
