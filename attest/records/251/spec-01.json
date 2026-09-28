@@ -1,0 +1,19 @@
+{
+  "sha": "c8bf189f2ee0053a454513be1b744ccb0abc1569",
+  "spec_sha": "c8bf189f2ee0053a454513be1b744ccb0abc1569",
+  "at": "2026-09-28T17:18:33Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "claims-reads-work-in-flight-and-names-a-collision.sh",
+      "on_tree": 2,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "251",
+  "product_version": "v0.30.0",
+  "product_pin": "v0.30.0"
+}
