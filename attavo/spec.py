@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 import shutil
@@ -136,6 +137,27 @@ def run_criterion(exe: Path, cwd: Path) -> int:
         return 124
     except OSError:
         return 126
+
+
+def stub_outside_claims(spec_dir: Path, claims: list[str]) -> str | None:
+    """The first path under stub/ (or named in stub/.removed) that no claim
+    matches, or None. The stub is the change's floor: a path it touches is
+    a path the build will touch, so a Claims list that does not name it is
+    wrong before any build runs (item 229: a claim missed at filing cost
+    an attempt to find). Matched the way cmd_build matches (fnmatch), with
+    a directory claim covering everything under it."""
+    stub_dir = spec_dir / "stub"
+    if not stub_dir.is_dir():
+        return None
+    paths = sorted(p.relative_to(stub_dir).as_posix() for p in stub_dir.rglob("*")
+                   if p.is_file() and p.name != ".removed")
+    paths += parse_removed(stub_dir)
+    patterns = [c + "**" if c.endswith("/") else c for c in claims]
+    for path in paths:
+        if not any(fnmatch.fnmatch(path, pat) or path.startswith(pat.rstrip("*")) and pat.endswith("**")
+                   for pat in patterns):
+            return path
+    return None
 
 
 def parse_removed(stub_dir: Path) -> list[str]:
@@ -297,6 +319,9 @@ def cmd_spec_gate(argv: list[str]) -> int:
                     refusal = f"criterion fails against the tree plus stub: {fail['name']}"
         elif not parsed["claims"]:
             refusal = "claims: empty; the build may touch nothing"
+        elif stub_outside_claims(spec_dir, parsed["claims"]) is not None:
+            refusal = ("stub touches a path the claims do not name: "
+                       f"{stub_outside_claims(spec_dir, parsed['claims'])}")
         else:
             criteria_dir = spec_dir / "criteria"
             listed = parsed["criteria"]

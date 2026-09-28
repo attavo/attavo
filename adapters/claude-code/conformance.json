@@ -13,7 +13,7 @@
   "success_script": "#!/bin/sh\ngit commit -q --allow-empty -m 'adapter commit'\nprintf '{\"type\": \"result\", \"is_error\": false, \"structured_output\": {\"status\": \"done\", \"question\": null}, \"usage\": {\"input_tokens\": 1, \"output_tokens\": 1}, \"modelUsage\": {\"claude-sonnet-5\": {\"inputTokens\": 1, \"outputTokens\": 1}}}\\n'\n",
   "denied_commands": {
     "mechanism": "--disallowedTools permission-rule patterns, prefix-matched by the tool",
-    "patterns": ["Bash(pytest:*)", "Bash(python3 -m pytest:*)", "Bash(python -m pytest:*)", "Bash(npm test:*)", "Bash(npx vitest:*)", "Bash(go test:*)", "Bash(cargo test:*)", "Bash(attavo drive:*)", "Bash(attavo worker:*)"]
+    "patterns": ["Bash(pytest:*)", "Bash(python3 -m pytest:*)", "Bash(python -m pytest:*)", "Bash(npm test:*)", "Bash(npx vitest:*)", "Bash(go test:*)", "Bash(cargo test:*)", "Bash(attavo drive:*)", "Bash(attavo worker:*)", "Monitor", "ScheduleWakeup"]
   },
   "subagent_guard": {
     "supported": true,

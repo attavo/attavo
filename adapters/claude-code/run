@@ -461,6 +461,51 @@ def counsel_instruction() -> str:
 
 
 BUILD_ALLOWED_TOOLS = ["Read", "Edit", "Write", "Bash"]
+
+# Item 229's third attempt: 2,754 s and $6.54 to write the right change and
+# be refused at the gate for one path the spec's Claims did not name. The
+# gate stays the law, but the boundary is told at the edit: the build's
+# Edit and Write are allowed on the claimed paths only, as permission
+# rules built from the spec's own Claims list, so an edit outside them is
+# refused by the tool at the moment it is tried and the executor's recourse
+# is the one it has for anything outside the spec -- a question.
+BUILD_FIXED_TOOLS = ["Read", "Bash"]
+
+
+def claimed_paths() -> list[str]:
+    """The spec's Claims, one path or glob per line under '## Claims', as
+    the spec contract writes them (attavo/spec.py's parse_spec reads the
+    same lines)."""
+    spec_dir = os.environ.get("ATTAVO_SPEC_DIR")
+    if not spec_dir:
+        return []
+    try:
+        lines = (Path(spec_dir) / "spec.md").read_text().splitlines()
+    except OSError:
+        return []
+    claims: list[str] = []
+    inside = False
+    for line in lines:
+        if line.startswith("## "):
+            inside = line.strip() == "## Claims"
+            continue
+        if inside and line.strip().startswith("- "):
+            claims.append(line.strip()[2:].strip())
+    return claims
+
+
+def claim_rule(claim: str) -> str:
+    """A claim as a permission-rule path: a directory claim (trailing
+    slash) covers everything under it."""
+    return claim + "**" if claim.endswith("/") else claim
+
+
+def build_allowed_tools() -> list[str]:
+    claims = claimed_paths()
+    if not claims:
+        return BUILD_ALLOWED_TOOLS
+    rules = [f"{tool}({claim_rule(c)})" for c in claims for tool in ("Edit", "Write")]
+    return BUILD_FIXED_TOOLS + rules
 VERIFY_ALLOWED_TOOLS = ["Read", "Bash"]
 
 # Issue #88 (class B): both tools the tool's own reply named as a way to
@@ -469,6 +514,13 @@ VERIFY_ALLOWED_TOOLS = ["Read", "Bash"]
 # own allowed tools never included either, and did not stop the
 # specimen either.
 SUBAGENT_TOOLS = ["Agent", "Workflow"]
+
+# Items 227 and 229: the executor started `attavo test` in the background,
+# loaded Monitor to tail its output file, scheduled wakeups to wait for it,
+# and on 227 answered done while the wait was still open. Both let the
+# invocation outlive its own answer, the same reason the subagent tools
+# are denied.
+OUTLIVING_TOOLS = ["Monitor", "ScheduleWakeup"]
 
 # The raw test runner and the product's transport are not the executor's
 # tools: `attavo test` is the one test command (issue #212) and the pass
@@ -549,10 +601,36 @@ def sandbox_settings(stage: str, working_directory: Path) -> dict:
     return {"sandbox": sandbox}
 
 
+# Items 227 and 229: Claude Code's Bash foreground is two minutes while one
+# test call is [tests].call_timeout_s (240), so the executor wrapped runs in
+# `timeout N` and backgrounded them. The product exports that bound as
+# ATTAVO_TEST_TIMEOUT_S; the foreground is set to fit one run plus a margin.
+FOREGROUND_MARGIN_S = 60
+
+
+def foreground_env() -> dict[str, str]:
+    """The variables this adapter sets itself for its executor: the Bash
+    foreground and its ceiling, from ATTAVO_TEST_TIMEOUT_S. None when no
+    bound was exported."""
+    bound = os.environ.get("ATTAVO_TEST_TIMEOUT_S")
+    if not bound:
+        return {}
+    try:
+        millis = str((int(bound) + FOREGROUND_MARGIN_S) * 1000)
+    except ValueError:
+        return {}
+    return {"BASH_DEFAULT_TIMEOUT_MS": millis, "BASH_MAX_TIMEOUT_MS": millis}
+
+
 def build_command(instruction: str, config: dict, schema: dict, stage: str) -> list[str]:
     auth = config.get("auth", "api")
-    allowed_tools = VERIFY_ALLOWED_TOOLS if stage in READ_ONLY_STAGES else BUILD_ALLOWED_TOOLS
-    permission_mode = config.get("permission_mode", "acceptEdits")
+    allowed_tools = VERIFY_ALLOWED_TOOLS if stage in READ_ONLY_STAGES else build_allowed_tools()
+    # acceptEdits approves every edit before an allow rule is consulted;
+    # with claimed-path rules in force the mode is default, so a claimed
+    # edit is approved by its rule and an unclaimed one asks -- and a
+    # headless -p run answers no. The tenant may still set the mode.
+    claimed_rules = stage not in READ_ONLY_STAGES and allowed_tools is not BUILD_ALLOWED_TOOLS
+    permission_mode = config.get("permission_mode", "default" if claimed_rules else "acceptEdits")
 
     cmd = ["claude"]
     if auth == "subscription":
@@ -570,7 +648,7 @@ def build_command(instruction: str, config: dict, schema: dict, stage: str) -> l
            "--json-schema", json.dumps(schema),
            "--permission-mode", permission_mode,
            "--allowedTools", ",".join(allowed_tools),
-           "--disallowedTools", ",".join(SUBAGENT_TOOLS + DENIED_COMMANDS)]
+           "--disallowedTools", ",".join(SUBAGENT_TOOLS + OUTLIVING_TOOLS + DENIED_COMMANDS)]
     model = config.get("model")
     if model:
         cmd += ["--model", model]
@@ -856,7 +934,7 @@ def invoke_stream(cmd: list[str], events_path: str | None, canned_lines: list[st
         return "\n".join(raw_lines), result, 0
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                            env=executor_env())
+                            env={**executor_env(), **foreground_env()})
     assert proc.stdout is not None
     for line in proc.stdout:
         handle(line.rstrip("\n"))
@@ -975,12 +1053,13 @@ def main() -> int:
         return 1
 
     if os.environ.get("ATTAVO_ADAPTER_DRY_RUN"):
-        # {"argv", "instruction", "schema"}, not a bare argv list: the
+        # {"argv", "instruction", "schema", "env"}, not a bare argv list: the
         # instruction lives in argv's own "-p" value here, but a second
         # adapter (issue #41) can deliver it on stdin instead, where
         # argv carries no instruction at all -- the envelope is what
         # stays adapter-agnostic for tests/test_executor_conformance.py.
-        print(json.dumps({"argv": cmd, "instruction": instruction, "schema": schema}))
+        print(json.dumps({"argv": cmd, "instruction": instruction, "schema": schema,
+                          "env": foreground_env()}))
         return 0
 
     responses = load_canned_responses()
