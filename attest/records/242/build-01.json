@@ -1,0 +1,56 @@
+{
+  "sha": "cf09dee0d3c067678f0bd8eaff12dfe33bd9ea21",
+  "start_sha": "3912c9e413b52a8d19d1d1073d357a0c990d2f7c",
+  "spec_sha": "99bbc4c96fc45c5e6f63b81757b4d748417fe57e",
+  "approval_sha": "15be48aa9ac257011122ed18cbef0affede1b89b",
+  "at": "2026-09-28T15:58:39Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.283 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "the-gate-reads-the-class-and-the-research-policy.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q -m 'not own_records'",
+    "count": 1,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 413293,
+    "output": 3024
+  },
+  "cost_usd": 0.27069879999999996,
+  "wall_clock_s": 783.931,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 9,
+  "item": "242",
+  "product_version": "v0.30.0-6-gc4d450f",
+  "product_pin": "v0.30.0"
+}
