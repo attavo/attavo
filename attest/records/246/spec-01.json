@@ -1,0 +1,19 @@
+{
+  "sha": "6580f80a440d386dde7815aa74c7ef4a2bde397a",
+  "spec_sha": "6580f80a440d386dde7815aa74c7ef4a2bde397a",
+  "at": "2026-09-28T16:33:33Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "the-stubs-tests-are-left-out-of-the-ratio.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "246",
+  "product_version": "v0.30.0",
+  "product_pin": "v0.30.0"
+}
