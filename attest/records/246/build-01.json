@@ -1,0 +1,56 @@
+{
+  "sha": "503e87fa085d41537cb8e3eef636a7d476a25420",
+  "start_sha": "85e50122a745e1912a0ca40d88e7309ff5acc1c9",
+  "spec_sha": "6580f80a440d386dde7815aa74c7ef4a2bde397a",
+  "approval_sha": "f8554e0668e43ea9dd9e89b379678eac93b4d05a",
+  "at": "2026-09-28T16:35:24Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.283 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "the-stubs-tests-are-left-out-of-the-ratio.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q -m 'not own_records'",
+    "count": 4,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 135134,
+    "output": 1029
+  },
+  "cost_usd": 0.0995178,
+  "wall_clock_s": 98.354,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 10,
+  "item": "246",
+  "product_version": "v0.30.0-17-g3f1bd57",
+  "product_pin": "v0.30.0"
+}
