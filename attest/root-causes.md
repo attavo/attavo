@@ -1,13 +1,13 @@
-# Root-cause buckets
+# Root causes
 
-The closed list a fix item names with a `Bucket:` line in its spec's
-problem. `attavo spec-gate` refuses a bucket that is not listed here;
+The closed list a fix item names with a `Root-cause:` line in its spec's
+problem. `attavo spec-gate` refuses a root cause that is not listed here;
 adding one is an item's deliberate act, in the same change as the fix.
 Symptom counts do not converge. The number to read is the count of
-distinct buckets named by the fix items merged over the last N items:
+distinct root causes named by the fix items merged over the last N items:
 flat while items merge is convergence; growing names the next invariant.
 
-Read it with: grep -h '^Bucket:' attest/specs/*/spec.md | sort | uniq -c
+Read it with: grep -h '^Root-cause:' attest/specs/*/spec.md | sort | uniq -c
 
 - shared-working-copy: the executor, the driver, the screen and counsel wrote into one checkout; the invariant is that while a build runs the checkout is the executor's and every other actor writes records from a detached worktree (#227; #229 build-01, build-04's marker in the gate worktree; the driver's records-only commits)
 - deny-list-tool-surface: the executor's tools were removed one at a time as each one hurt; the invariant is a boundary told at the edit and a foreground long enough for one test run (#227 build-01; #229 build-01, build-05)

@@ -96,12 +96,12 @@ def test_help_names_the_seventh_proof_and_the_empty_stop() -> None:
         assert phrase in run.stdout, phrase
 
 
-def test_help_names_the_bucket_line_and_the_marker() -> None:
-    """Item 229's fix: the spec gate's bucket refusal and the own_records
-    marker as the only way a tenant's dogfood tests are told apart. Red on
-    the tree and on the stub: the words are the build's."""
+def test_help_names_the_root_cause_line_and_the_marker() -> None:
+    """Item 229's fix: the spec gate's root-cause refusal and the
+    own_records marker as the only way a tenant's dogfood tests are told
+    apart. Red on the tree and on the stub: the words are the build's."""
     run = subprocess.run([sys.executable, str(ATTAVO), "--help"],
                          capture_output=True, text=True, check=False)
     assert run.returncode == 0
-    for phrase in ("Bucket:", "buckets.md", "own_records"):
+    for phrase in ("Root-cause:", "root-causes.md", "own_records"):
         assert phrase in run.stdout, phrase

@@ -79,12 +79,12 @@ rejection fixture's own item, so a gate's own command needs no argument
 even while the enclosing repository sits on a real item's attavo/N-*
 branch. Every run of spec-gate or approve writes the next numbered attempt
 file under paths.records/N/ and never overwrites one already written. A
-fix item's spec may name the root-cause bucket its change closes as one
-"Bucket: <slug>" line in the problem; spec-gate refuses a slug the
-tenant's buckets.md (beside paths.specs) does not list, or any slug when
-that file is absent, before any criterion runs -- a spec with no bucket
-line is untouched. See the spec contract in the project's Phase 1 issue
-for the full rules each one enforces.
+fix item's spec may name the root cause its change closes as one
+"Root-cause: <slug>" line in the problem; spec-gate refuses a slug the
+tenant's root-causes.md (beside paths.specs) does not list, or any slug
+when that file is absent, before any criterion runs -- a spec with no
+root-cause line is untouched. See the spec contract in the project's
+Phase 1 issue for the full rules each one enforces.
 
 build refuses (exit 1, naming the cause, no record) unless the manifest
 declares [executor].build and [tests].select and [tests].run, and unless
