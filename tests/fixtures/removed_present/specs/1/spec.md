@@ -1,5 +1,7 @@
 ## Problem
 
+Class: fix
+
 The build script leaves a scratch file, src/doomed.txt, that must be removed.
 
 ## Claims

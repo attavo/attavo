@@ -1,5 +1,7 @@
 ## Problem
 
+Class: fix
+
 The build script does not emit a success marker file.
 
 ## Claims

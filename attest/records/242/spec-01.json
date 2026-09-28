@@ -1,0 +1,19 @@
+{
+  "sha": "99bbc4c96fc45c5e6f63b81757b4d748417fe57e",
+  "spec_sha": "99bbc4c96fc45c5e6f63b81757b4d748417fe57e",
+  "at": "2026-09-28T15:43:06Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "the-gate-reads-the-class-and-the-research-policy.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "242",
+  "product_version": "v0.30.0",
+  "product_pin": "v0.30.0"
+}

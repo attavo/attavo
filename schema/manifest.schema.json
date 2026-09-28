@@ -132,6 +132,11 @@
       "additionalProperties": false,
       "required": ["boundary"],
       "properties": {
+        "research": {
+          "type": "string",
+          "enum": ["required"],
+          "description": "Set to \"required\" and a core spec owes a research record in the item's records before its gate passes. Absent, it owes none, and every gate record says so (ruled 2026-09-27: behind this flag until the Plan area hosts research)."
+        },
         "boundary": {
           "type": "object",
           "description": "Which changes take the governed path. A change outside the boundary takes the tenant's ordinary pull-request flow, and the path ratio measures both.",

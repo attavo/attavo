@@ -1,5 +1,7 @@
 ## Problem
 
+Class: fix
+
 The stub overlay does not actually satisfy the criterion it claims to.
 
 ## Claims

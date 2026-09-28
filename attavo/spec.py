@@ -25,6 +25,8 @@ from attavo.records import latest_record, write_record
 
 ROOT_CAUSE_LINE = re.compile(r"^Root-cause:\s*([a-z0-9][a-z0-9-]*)\s*$")
 ROOT_CAUSE_ENTRY = re.compile(r"^- ([a-z0-9][a-z0-9-]*):\s+\S")
+CLASS_LINE = re.compile(r"^Class:\s*(\S+)\s*$")
+CLASSES = ("core", "fix")
 
 
 def parse_spec(spec_md: Path) -> tuple[dict[str, Any] | None, str | None]:
@@ -50,6 +52,15 @@ def parse_spec(spec_md: Path) -> tuple[dict[str, Any] | None, str | None]:
         if m:
             root_cause = m.group(1)
             break
+    # The item's class, declared by the operator at filing as one line in
+    # the problem: "Class: core" (the change touches the mechanism) or
+    # "Class: fix". Optional to parse; the gate requires it (class_refusal).
+    item_class = None
+    for l in lines[idx_problem + 1:idx_claims]:
+        cm = CLASS_LINE.match(l)
+        if cm:
+            item_class = cm.group(1)
+            break
     criteria = []
     for l in lines[idx_criteria + 1:]:
         s = l.strip()
@@ -57,7 +68,7 @@ def parse_spec(spec_md: Path) -> tuple[dict[str, Any] | None, str | None]:
             continue
         name = s[2:].split(":", 1)[0].strip()
         criteria.append(name)
-    return {"claims": claims, "criteria": criteria, "root_cause": root_cause}, None
+    return {"claims": claims, "criteria": criteria, "root_cause": root_cause, "class": item_class}, None
 
 
 def root_causes_path(root: Path, m: dict[str, Any]) -> Path:
@@ -86,6 +97,33 @@ def root_cause_refusal(root: Path, m: dict[str, Any], root_cause: str | None) ->
         return f"root cause: {root_cause} named but {path.relative_to(root)} does not exist"
     if root_cause not in listed_root_causes(path):
         return f"root cause: {root_cause} is not listed in {path.relative_to(root)}"
+    return None
+
+
+def research_policy(m: dict[str, Any]) -> str:
+    """[spec].research: "required" makes a core spec owe a research record
+    before its gate passes; absent, it owes none. Ruled 2026-09-27: every
+    core item owes research in the end state, behind this flag until the
+    Plan area hosts research. The gate record says which policy applied."""
+    return "required" if (m.get("spec") or {}).get("research") == "required" else "not required by policy"
+
+
+def class_refusal(m: dict[str, Any], parsed: dict[str, Any], records_dir: Path) -> str | None:
+    """A spec declares its class; a spec that names a root cause is core
+    (ruled 2026-09-27: a root cause lies behind several issues, and closing
+    it changes the mechanism); and, when the tenant requires research, a
+    core spec has a research record in the item's records before its gate
+    passes."""
+    item_class = parsed.get("class")
+    if item_class is None:
+        return "class: none declared; add a line 'Class: core' or 'Class: fix' to the problem"
+    if item_class not in CLASSES:
+        return f"class: {item_class} is not core or fix"
+    if parsed.get("root_cause") and item_class != "core":
+        return f"class: {item_class} with root cause {parsed['root_cause']}; a root-cause item is core"
+    if (item_class == "core" and research_policy(m) == "required"
+            and latest_record(records_dir, "research") is None):
+        return "research: [spec].research is required and the item has no research record"
     return None
 
 
@@ -239,6 +277,10 @@ def cmd_spec_gate(argv: list[str]) -> int:
         # parse_spec returns a refusal exactly when it returns no spec.
         parsed = cast(dict[str, Any], parsed)
         refusal = root_cause_refusal(root, m, parsed.get("root_cause"))
+    if refusal is None and not built:
+        # Required before approval only: an item already approved and
+        # built re-gates as it did, so no item in flight is stranded.
+        refusal = class_refusal(m, cast(dict[str, Any], parsed), records_dir)
     if refusal is None:
         parsed = cast(dict[str, Any], parsed)
         if built:
@@ -292,7 +334,8 @@ def cmd_spec_gate(argv: list[str]) -> int:
     record = {"sha": git(root, "rev-parse", "HEAD").strip(),
               "spec_sha": spec_sha,
               "at": now_iso(), "status": status, "approval_sha": None,
-              "criteria": results, "refusal": refusal}
+              "criteria": results, "refusal": refusal,
+              "class": (parsed or {}).get("class"), "research": research_policy(m)}
     write_record(records_dir, "spec", record, m, item_id)
 
     if refusal:
