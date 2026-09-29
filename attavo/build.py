@@ -558,7 +558,8 @@ def cmd_build(argv: list[str]) -> int:
                           None)
             if foreign:
                 status_out = "refused"
-                refusal = f"commit {foreign['sha']} not authored by the executor"
+                refusal = (f"commit {foreign['sha']} by {foreign['name']} <{foreign['email']}> "
+                           f"not authored by the executor")
                 refusal_kind = "foreign-commit"
                 break
 

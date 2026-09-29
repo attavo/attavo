@@ -1322,3 +1322,70 @@ def test_no_attested_item_is_empty() -> None:
     item's build names a change."""
     p = run_doctor(ROOT)["no-attested-item-is-empty"]
     assert p["holds"], p["reason"]
+
+
+DRIVER_ENV = {"GIT_AUTHOR_NAME": "attavo driver", "GIT_AUTHOR_EMAIL": "driver@attavo.invalid",
+              "GIT_COMMITTER_NAME": "attavo driver", "GIT_COMMITTER_EMAIL": "driver@attavo.invalid"}
+
+
+def _driver_git(root: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True,
+                   env={**os.environ, **DRIVER_ENV})
+
+
+def _driver_history(tmp_path: Path, name: str) -> Path:
+    """An item branch merged to main, whose records the doctor's proof
+    three already accepts, and to which each test adds one driver commit."""
+    root = tmp_path / name
+    root.mkdir()
+    (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+    init_repo(root, "install")
+    subprocess.run(["git", "-C", str(root), "checkout", "-b", "attavo/1-x"], check=True)
+    records = root / "records" / "1"
+    records.mkdir(parents=True)
+    (records / "spec-01.json").write_text(json.dumps({"status": "pass"}))
+    commit_all(root, "spec record for item 1")
+    return root
+
+
+def _merge_to_main(root: Path) -> None:
+    subprocess.run(["git", "-C", str(root), "checkout", "main"], check=True)
+    subprocess.run(["git", "-C", str(root), "merge", "--no-ff", "-m", "Merge branch 'attavo/1-x'",
+                    "attavo/1-x"], check=True, capture_output=True)
+
+
+def test_proof_three_holds_on_a_driver_commit_that_carries_only_its_items_records(tmp_path: Path) -> None:
+    root = _driver_history(tmp_path, "driver_ok")
+    (root / "records" / "1" / "build-01.json").write_text(json.dumps({"status": "pass"}))
+    _driver_git(root, "add", "records/1/build-01.json")
+    _driver_git(root, "commit", "-q", "-m", "attavo: build record for item 1 (build-01)")
+    _merge_to_main(root)
+    p = run_doctor(root)["no-commit-lacks-record"]
+    assert p["holds"], p["reason"]
+
+
+def test_proof_three_fails_on_a_driver_authored_merge_commit(tmp_path: Path) -> None:
+    """A merge authored as the driver -- the merge retry of the record push,
+    authored as whoever's git config the machine had -- is not a records
+    transport."""
+    root = _driver_history(tmp_path, "driver_merge")
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "-b", "elsewhere", "main"], check=True)
+    (root / "elsewhere.txt").write_text("from elsewhere\n")
+    commit_all(root, "a commit from elsewhere")
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "attavo/1-x"], check=True)
+    _driver_git(root, "merge", "--no-ff", "-m", "Merge branch 'elsewhere' into attavo/1-x", "elsewhere")
+    _merge_to_main(root)
+    p = run_doctor(root)["no-commit-lacks-record"]
+    assert not p["holds"] and "not a records transport" in p["reason"] and "is a merge" in p["reason"], p["reason"]
+
+
+def test_proof_three_fails_on_a_driver_commit_touching_a_file_outside_its_records(tmp_path: Path) -> None:
+    root = _driver_history(tmp_path, "driver_outside")
+    (root / "records" / "1" / "build-01.json").write_text(json.dumps({"status": "pass"}))
+    (root / "stray.txt").write_text("not a record\n")
+    _driver_git(root, "add", "-A")
+    _driver_git(root, "commit", "-q", "-m", "attavo: build record for item 1 (build-01)")
+    _merge_to_main(root)
+    p = run_doctor(root)["no-commit-lacks-record"]
+    assert not p["holds"], p["reason"]
+    assert "not a records transport" in p["reason"] and "stray.txt" in p["reason"], p["reason"]

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
@@ -58,97 +62,182 @@ if TYPE_CHECKING:
 # reads. ---
 
 
-def commit_record(root: Path, record_paths: Path | list[Path], message: str) -> None:
-    """`git commit --only` on every record path given, and each one's .log
-    and .filed, each if one exists -- never the whole index. A transport
-    commit that sweeps the index is exactly the regression issue #46
-    already guards build and verify against on the adapter side; drive
-    must not reintroduce it on the transport side. The .filed marker
-    (issue #89) is committed alongside the record it names, in the same
-    commit and the same push, so a second worktree or a fresh clone reads
-    the same filed fact rather than refiling every stop it finds with no
-    marker of its own. A single Path is accepted for the common one-record
-    case; issue #100 passes a list so the counsel record lands in the same
-    commit as the stage record it counsels. Authored and committed as
-    driver_identity(), set by the product and never the tenant's git
-    config, so a driven item's record commits are never indistinguishable
-    from an operator's own."""
-    if isinstance(record_paths, Path):
-        record_paths = [record_paths]
-    paths: list[str] = []
-    for record_path in record_paths:
-        paths.append(str(record_path.relative_to(root)))
-        log_path = record_path.with_suffix(".log")
-        if log_path.is_file():
-            paths.append(str(log_path.relative_to(root)))
-        marker_path = record_path.with_suffix(".filed")
-        if marker_path.is_file():
-            paths.append(str(marker_path.relative_to(root)))
+RECORD_PUSH_TRIES = 5
+
+
+class TransportRefused(RuntimeError):
+    """A record transport that could not land: the message is the reason,
+    already worded for the pass or worker that prints it."""
+
+
+def _driver_env() -> dict[str, str]:
     identity = driver_identity()
     env = dict(os.environ)
     env["GIT_AUTHOR_NAME"] = identity["name"]
     env["GIT_AUTHOR_EMAIL"] = identity["email"]
     env["GIT_COMMITTER_NAME"] = identity["name"]
     env["GIT_COMMITTER_EMAIL"] = identity["email"]
-    git(root, "add", *paths)
-    git(root, "commit", "--only", "-m", message, *paths, env=env)
+    return env
 
 
-def push_record_commit(root: Path, branch: str) -> tuple[bool, str | None]:
-    """Push HEAD to branch on origin. A push a divergent remote rejects is
-    retried once after `git pull --no-rebase --no-edit origin branch` -- a
-    merge, never a rebase, because a rebase would change the sha the record
-    commit just wrote already names. This is the record push's own retry
-    -- the worker's, once it has the lease -- distinct from push_lease
-    below, which never retries."""
-    def attempt() -> tuple[bool, str]:
-        run = subprocess.run(["git", "-C", str(root), "push", "origin", f"HEAD:{branch}"],
+def _retry_base(root: Path, branch: str) -> str:
+    """The commit a retried record is committed on: origin's branch tip,
+    fetched now. It must contain this checkout's HEAD -- the stage's own
+    commits are in it, and a record's `sha` names them -- because the
+    driver neither merges nor rebases; a tip that does not is a refusal,
+    with the commits it would strand named by sha and author."""
+    git(root, "fetch", "-q", "origin", branch)
+    tip = git(root, "rev-parse", "FETCH_HEAD").strip()
+    contained = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", "HEAD", tip],
+                               capture_output=True, text=True, check=False)
+    if contained.returncode != 0:
+        ours = git(root, "log", "--format=%h %an <%ae>", f"{tip}..HEAD").splitlines()
+        raise TransportRefused(
+            f"origin's {branch} moved under this checkout's own commits and the driver "
+            f"neither merges nor rebases them: {'; '.join(ours)}")
+    return tip
+
+
+@contextlib.contextmanager
+def record_worktree(root: Path, tip: str) -> Iterator[Path]:
+    """A detached worktree of `tip` under the git dir, removed on exit:
+    the only place the driver commits. The item's checkout is the
+    executor's while a build runs, so nothing the driver writes or
+    commits, resets or merges is made there."""
+    parent = stage_events_dir(root) / "transport"
+    parent.mkdir(parents=True, exist_ok=True)
+    tree = Path(tempfile.mkdtemp(prefix="tx-", dir=parent)) / "head"
+    git(root, "worktree", "add", "--detach", "-q", str(tree), tip)
+    try:
+        yield tree
+    finally:
+        try:
+            git(root, "worktree", "remove", "--force", str(tree))
+        except RuntimeError:
+            shutil.rmtree(tree, ignore_errors=True)
+            try:
+                git(root, "worktree", "prune")
+            except RuntimeError:
+                pass
+        shutil.rmtree(tree.parent, ignore_errors=True)
+
+
+def _record_paths(tree: Path, record_paths: list[Path]) -> list[str]:
+    """Each record's path relative to the tree, and each one's .log and
+    .filed, each if one exists (issues #89, #100): the paths `git commit
+    --only` names, so a transport commit never sweeps the index (issue
+    #46's regression, on the transport side)."""
+    paths: list[str] = []
+    for record_path in record_paths:
+        paths.append(str(record_path.relative_to(tree)))
+        for suffix in (".log", ".filed"):
+            extra = record_path.with_suffix(suffix)
+            if extra.is_file():
+                paths.append(str(extra.relative_to(tree)))
+    return paths
+
+
+def commit_record(tree: Path, record_paths: list[Path], message: str) -> str:
+    """`git commit --only` on the record paths given, in `tree` -- a
+    record worktree, never the checkout -- as driver_identity(), set by
+    the product and never the tenant's git config, so a driven item's
+    record commits are never indistinguishable from an operator's own.
+    Returns the commit's sha."""
+    paths = _record_paths(tree, record_paths)
+    git(tree, "add", *paths)
+    git(tree, "commit", "--only", "-q", "-m", message, *paths, env=_driver_env())
+    return git(tree, "rev-parse", "HEAD").strip()
+
+
+def sync_checkout(root: Path, target: str) -> None:
+    """Fast-forward the item's checkout to `target`, the one thing the
+    driver does to it. A pass in the same directory may hold the index
+    for a moment, so a lock is retried; a checkout already at or beyond
+    target is done."""
+    err = ""
+    for _ in range(20):
+        run = subprocess.run(["git", "-C", str(root), "merge", "--ff-only", "-q", target],
                              capture_output=True, text=True, check=False)
-        return run.returncode == 0, run.stderr.strip()
+        if run.returncode == 0:
+            return
+        err = run.stderr.strip()
+        contained = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", target, "HEAD"],
+                                   capture_output=True, text=True, check=False)
+        if contained.returncode == 0:
+            return
+        time.sleep(0.1)
+    raise TransportRefused(f"the checkout could not fast-forward to {target[:12]}: {err}")
 
-    ok, err = attempt()
-    if ok:
-        return True, None
-    pull = subprocess.run(["git", "-C", str(root), "pull", "--no-rebase", "--no-edit",
-                           "origin", branch], capture_output=True, text=True, check=False)
-    if pull.returncode != 0:
-        return False, f"push rejected and the retry merge failed: {pull.stderr.strip() or err}"
-    ok, err = attempt()
-    if not ok:
-        return False, f"push rejected again after merging {branch}: {err}"
-    return True, None
+
+def _stage_copies(root: Path, paths: list[str]) -> None:
+    """Stage the checkout's own untracked copies of records the driver
+    has just committed elsewhere, so the fast-forward that brings the
+    committed ones in finds them identical to the target and has nothing
+    to collide with -- and the record is never absent from the checkout,
+    which is what a pass or a reader beside the worker sees."""
+    if not paths:
+        return
+    out = git(root, "ls-files", "--others", "--exclude-standard", "--", *paths).splitlines()
+    if out:
+        git(root, "add", "--", *out)
+
+
+def transport_records(root: Path, branch: str, message: str,
+                      write: Callable[[Path], list[Path]],
+                      lease: bool = False) -> tuple[str, str | None]:
+    """Commit records in a detached worktree of the branch's tip and push
+    them from there as HEAD:branch; then fast-forward the checkout.
+    `write(tree)` puts the records in the worktree and returns the record
+    paths to commit -- called again on every try, since a retry starts
+    from a freshly fetched tip.
+
+    The first try commits on this checkout's HEAD, which carries the
+    stage's own commits. A push origin rejects is retried without a
+    merge: fetch, recreate the worktree at the new tip (which must
+    contain HEAD, see _retry_base), write again, push again as a
+    fast-forward, RECORD_PUSH_TRIES times at most. The record's own `sha` names the
+    stage's commit, not this transport commit, so moving the transport
+    commit changes nothing a record names.
+
+    lease=True is the marker's push (ruling A): one try, and a race lost
+    is ("lost-race", stderr) with the worktree discarded and the checkout
+    untouched. Otherwise ("pushed", None), or ("refused", reason)."""
+    err = ""
+    base = git(root, "rev-parse", "HEAD").strip()
+    for attempt in range(1 if lease else RECORD_PUSH_TRIES):
+        if attempt:
+            try:
+                base = _retry_base(root, branch)
+            except TransportRefused as exc:
+                return "refused", str(exc)
+            except RuntimeError as exc:
+                return "refused", f"could not read origin's {branch}: {exc}"
+        with record_worktree(root, base) as tree:
+            paths = write(tree)
+            try:
+                sha = commit_record(tree, paths, message)
+            except RuntimeError as exc:
+                return "refused", f"could not commit: {exc}"
+            if has_origin(root):
+                run = subprocess.run(["git", "-C", str(tree), "push", "origin", f"HEAD:{branch}"],
+                                     capture_output=True, text=True, check=False)
+                if run.returncode != 0:
+                    err = run.stderr.strip()
+                    if lease:
+                        raced = any(marker in run.stderr for marker in _RACE_MARKERS)
+                        return ("lost-race" if raced else "refused"), err
+                    continue
+            try:
+                _stage_copies(root, _record_paths(tree, paths))
+                sync_checkout(root, sha)
+            except (RuntimeError, TransportRefused) as exc:
+                return "refused", str(exc)
+            return "pushed", None
+    return "refused", f"push rejected {RECORD_PUSH_TRIES} times: {err}"
 
 
 _RACE_MARKERS = ("non-fast-forward", "fetch first", "stale info", "cannot lock ref",
                  "failed to update ref")
-
-
-def push_lease(root: Path, branch: str) -> tuple[str, str | None]:
-    """Push HEAD to branch on origin as a plain fast-forward -- no merge,
-    no retry: this is the lease the marker commit takes on the attempt it
-    names (ruling A). ("pushed", None) on success.
-
-    ("lost-race", stderr) when git's own ref check is what rejected it --
-    the branch moved since this pass fast-forwarded to it (a sequential
-    "[rejected] ... (fetch first)"), or the remote's own ref transaction
-    lost a genuine simultaneous push ("[remote rejected] ... (failed to
-    update ref)", "cannot lock ref"): either way, another pass's own
-    marker (or record) landed there first. The pass that reads this is
-    the loser: it says so, resets its own marker commit, and starts
-    nothing.
-
-    ("refused", stderr) for every other rejection -- a remote that
-    refuses the push outright (a hook, a permission, an unreachable
-    remote). This is not a race for the lease; it is a refusal, and ends
-    the pass with exit 1."""
-    run = subprocess.run(["git", "-C", str(root), "push", "origin", f"HEAD:{branch}"],
-                         capture_output=True, text=True, check=False)
-    if run.returncode == 0:
-        return "pushed", None
-    stderr = run.stderr
-    if any(marker in stderr for marker in _RACE_MARKERS):
-        return "lost-race", stderr.strip()
-    return "refused", stderr.strip()
 
 
 def has_origin(root: Path) -> bool:
@@ -364,39 +453,38 @@ def worker_holds_copy(root: Path, records_dir: Path) -> bool:
            or uncommitted_record(root, records_dir, "verify") is not None)
 
 
-def fast_forward_to_origin(root: Path, m: dict[str, Any], item_id: str) -> None:
+def fast_forward_to_origin(root: Path, m: dict[str, Any], item_id: str) -> str | None:
     """The pass's own read of origin's branch, taken before it reads
     anything else -- a commit landed there from elsewhere (an approval
     from the screen, a ruling, another pass's own record) is not a race
     for the lease, it is exactly what the lease is for. Never while a
-    worker holds this copy (worker_holds_copy): resetting a working tree
-    a detached child is still writing into would corrupt its own commits.
-    A plain fast-forward when origin is simply ahead; when this checkout
-    also carries its own commits origin has not seen yet (an operator's
-    approval, not yet pushed), those are replayed on top of origin's own
-    tip instead -- no merge commit, and the marker this pass is about to
-    write still lands as a fast-forward when it pushes. Silent about
-    everything short of that -- a real conflict, or an absent origin, is
-    left for the ordinary read (and the marker push, for the lease) to
-    sort out."""
+    worker holds this copy (worker_holds_copy): moving a working tree a
+    detached child is still writing into would corrupt its own commits.
+    The checkout only fast-forwards. When it carries commits origin has
+    not seen (an operator's approval, not yet pushed), the pass does not
+    replay them: it returns a refusal naming each by sha and author, and
+    the commits stay where they are. None when the checkout is now at
+    origin's tip or there is nothing to read; silent about an absent
+    origin or an unreachable one, which the ordinary read (and the
+    marker push, for the lease) sort out."""
     records_dir = root / m["paths"]["records"] / item_id
     if worker_holds_copy(root, records_dir) or not has_origin(root):
-        return
+        return None
     try:
         branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
         git(root, "fetch", "origin", branch)
     except RuntimeError:
-        return
-    try:
-        git(root, "merge", "--ff-only", "FETCH_HEAD")
-        return
-    except RuntimeError:
-        pass
-    try:
-        git(root, "rebase", "FETCH_HEAD")
-    except RuntimeError:
-        subprocess.run(["git", "-C", str(root), "rebase", "--abort"],
-                       capture_output=True, text=True, check=False)
+        return None
+    ours = git(root, "log", "--format=%h %an <%ae>", "FETCH_HEAD..HEAD").splitlines()
+    if not ours:
+        try:
+            git(root, "merge", "--ff-only", "FETCH_HEAD")
+        except RuntimeError:
+            pass
+        return None
+    listed = "; ".join(ours)
+    return (f"this checkout carries {len(ours)} commit(s) origin's {branch} lacks and the pass "
+            f"does not replay them: {listed}. Push them, or move them, and run the pass again")
 
 
 # --- the worker: a detached child of the pass's own session, running the
@@ -478,18 +566,27 @@ def _run_and_transport(item_id: str, stage: str, root: Path, m: dict[str, Any],
             cmd_file_stops([item_id])
 
     message = f"attavo: {stage} record for item {item_id} ({after.stem})"
-    try:
-        commit_record(root, to_commit, message)
-    except RuntimeError as exc:
-        print(f"attavo drive: stopped: could not commit the {stage} record: {exc}")
-        return 1
 
-    if has_origin(root):
-        ok, err = push_record_commit(root, branch)
-        if not ok:
-            print(f"attavo drive: stopped: could not push the {stage} record: {err}")
-            return 1
-    else:
+    def copy_in(tree: Path) -> list[Path]:
+        # The stage command wrote the records in this checkout, untracked;
+        # they are committed from the detached worktree and the checkout's
+        # copies become the committed ones when the checkout fast-forwards
+        # (transport_records).
+        copied: list[Path] = []
+        for record_path in to_commit:
+            for src in (record_path, record_path.with_suffix(".log"), record_path.with_suffix(".filed")):
+                if src.is_file():
+                    dest = tree / src.relative_to(root)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(src, dest)
+            copied.append(tree / record_path.relative_to(root))
+        return copied
+
+    outcome, err = transport_records(root, branch, message, copy_in)
+    if outcome != "pushed":
+        print(f"attavo drive: stopped: could not push the {stage} record: {err}")
+        return 1
+    if not has_origin(root):
         print(f"attavo drive: note: no origin remote; {after.name} is committed, not pushed")
 
     if status_out == "halted":
@@ -533,10 +630,10 @@ def cmd_worker(argv: list[str]) -> int:
 def _start_stage(root: Path, m: dict[str, Any], item_id: str, stage: str,
                  forge_checks: dict[str, Any] | None, again_by: str | None = None) -> int:
     """The lease (ruling A): the marker, committed and pushed as a plain
-    fast-forward with no merge and no retry (push_lease). Lost to another
-    pass, or refused outright by the remote, both undo the marker commit
-    here (git reset --hard) so this checkout carries no half-taken
-    attempt either way; only a pushed lease starts the worker. On a
+    fast-forward with no merge and no retry, made and pushed from a
+    detached worktree (transport_records). Lost to another pass, or
+    refused outright by the remote, the worktree is discarded and this
+    checkout was never touched; only a pushed lease starts the worker. On a
     review, forge_checks is the checks this same pass already read on
     the pre-marker head (ruling B) -- written to
     <git-dir>/attavo/verify-NN.forge-checks.json and named in
@@ -548,22 +645,21 @@ def _start_stage(root: Path, m: dict[str, Any], item_id: str, stage: str,
     records_dir = root / m["paths"]["records"] / item_id
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
     nn = next_attempt_number(records_dir, stage)
-    marker = write_invocation_marker(root, records_dir, stage, nn, again_by=again_by)
-    try:
-        commit_record(root, [marker], f"attavo: {stage} invocation {nn:02d} started for item {item_id}")
-    except RuntimeError as exc:
-        print(f"attavo drive: stopped: could not commit the {stage} invocation marker: {exc}")
-        return 1
+    marker = records_dir / f"{stage}-{nn:02d}.started"
 
-    if has_origin(root):
-        outcome, err = push_lease(root, branch)
-        if outcome != "pushed":
-            git(root, "reset", "--hard", "HEAD^")
-            if outcome == "lost-race":
-                print(f"attavo drive: another pass holds this attempt ({marker.name}); nothing started")
-                return 0
-            print(f"attavo drive: stopped: could not push the {stage} invocation marker: {err}")
-            return 1
+    def write_marker(tree: Path) -> list[Path]:
+        return [write_invocation_marker(tree, tree / records_dir.relative_to(root), stage, nn,
+                                        again_by=again_by)]
+
+    outcome, err = transport_records(
+        root, branch, f"attavo: {stage} invocation {nn:02d} started for item {item_id}",
+        write_marker, lease=True)
+    if outcome == "lost-race":
+        print(f"attavo drive: another pass holds this attempt ({marker.name}); nothing started")
+        return 0
+    if outcome != "pushed":
+        print(f"attavo drive: stopped: could not push the {stage} invocation marker: {err}")
+        return 1
 
     env = dict(os.environ)
     if forge_checks is not None:
@@ -588,8 +684,8 @@ def _recover_one(root: Path, m: dict[str, Any], item_id: str, records_dir: Path)
     when the heartbeat is fresh and a declared [drive].stall_after_s has
     passed with no newer event (or the stage's ceiling has passed), the
     holder terminated by the pid its own heartbeat names. Provenance product; the events tail as the log. Committed
-    and pushed the way any stage record is (push_record_commit, with its
-    own merge retry) -- this is not a race for a lease, since no new
+    and pushed the way any stage record is (transport_records, with its
+    retry that never merges) -- this is not a race for a lease, since no new
     attempt marker is written."""
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
     bound = stall_bound_s(m)
@@ -650,24 +746,23 @@ def _recover_one(root: Path, m: dict[str, Any], item_id: str, records_dir: Path)
     if "wall_clock_s" in record:
         record["wall_clock_s"] = None if age is None else int(age)
     record = {k: v for k, v in record.items() if k in schema.get("properties", {})}
+    tree_records = records_dir.relative_to(root)
+
+    def write_recovered(tree: Path) -> list[Path]:
+        return [write_record(tree / tree_records, stage, record, m, item_id, log=log)]
+
+    message = (f"attavo: {stage} record for item {item_id} "
+               f"({stage}-{nn:02d}), recovered as {cls}")
     try:
-        path = write_record(records_dir, stage, record, m, item_id, log=log)
+        outcome, err = transport_records(root, branch, message, write_recovered)
     except ValueError as exc:
         print(f"attavo drive: stopped: could not write the {cls} record for {marker.stem}: {exc}")
         return 1
-    try:
-        commit_record(root, [path], f"attavo: {stage} record for item {item_id} "
-                                    f"({path.stem}), recovered as {cls}")
-    except RuntimeError as exc:
-        print(f"attavo drive: stopped: could not commit the {cls} record: {exc}")
+    if outcome != "pushed":
+        print(f"attavo drive: stopped: could not push the {cls} record: {err}")
         return 1
-    if has_origin(root):
-        ok, err = push_record_commit(root, branch)
-        if not ok:
-            print(f"attavo drive: stopped: could not push the {cls} record: {err}")
-            return 1
-    else:
-        print(f"attavo drive: note: no origin remote; {path.name} is committed, not pushed")
+    if not has_origin(root):
+        print(f"attavo drive: note: no origin remote; {stage}-{nn:02d}.json is committed, not pushed")
     print(f"attavo drive: recovered {marker.stem} as {cls}: {detail}")
     return 0
 
@@ -796,8 +891,11 @@ def _pass_once(root: Path, m: dict[str, Any], item_id: str, again: str | None) -
     forces the next attempt, naming who pressed it as again_by in its marker, when it would
     not. Every other level is printed in the report's own words and left."""
     from attavo.report import drive_report
-    fast_forward_to_origin(root, m, item_id)
+    refusal = fast_forward_to_origin(root, m, item_id)
     r = drive_report(root, m, item_id)
+    if refusal:
+        print(f"attavo drive: stopped: {refusal}")
+        return 1, r
     records_dir = root / m["paths"]["records"] / item_id
 
     if r["state"] == "owes-recovery":
@@ -949,7 +1047,9 @@ def cmd_drive(argv: list[str]) -> int:
             print("attavo drive: --report reads and does nothing else; drop --until-ready "
                   "and --again", file=sys.stderr)
             return 2
-        fast_forward_to_origin(root, m, item_id)
+        refusal = fast_forward_to_origin(root, m, item_id)
+        if refusal:
+            print(f"attavo drive: note: {refusal}", file=sys.stderr)
         from attavo.report import drive_report
         print(json.dumps(drive_report(root, m, item_id), indent=2))
         return 0

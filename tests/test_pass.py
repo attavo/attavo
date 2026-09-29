@@ -25,6 +25,7 @@ from test_drive import (
     add_forge,
     approve_item,
     head_of,
+    publish_approval,
     latest_record,
     record_files,
     records_dir,
@@ -161,8 +162,7 @@ def test_a_stale_heartbeat_reads_died_though_the_pid_lives_and_a_fresh_one_reads
 
 def test_two_passes_at_once_start_one_worker_and_the_loser_says_so(tmp_path: Path) -> None:
     root, bare = built_tenant(tmp_path, seconds=3)
-    commit_all(root, "the approval, so a second checkout carries it")
-    git(root, "push", "-q", "origin", "HEAD:main")
+    publish_approval(root)
     clone = tmp_path / "second"
     git(root.parent, "clone", "-q", "-b", git(root, "rev-parse", "--abbrev-ref", "HEAD").strip(), str(bare), str(clone))
     git(clone, "config", "user.email", "test@example.com")
@@ -170,6 +170,7 @@ def test_two_passes_at_once_start_one_worker_and_the_loser_says_so(tmp_path: Pat
     git(clone, "remote", "set-head", "origin", "-a")
     env = dict(os.environ)
     env.update(FAST)
+    before = {c: (head_of(c), git(c, "ls-files", "-s"), git(c, "status", "--porcelain")) for c in (root, clone)}
     procs = [subprocess.Popen([sys.executable, str(ROOT / "bin" / "attavo"), "drive", "1"], cwd=str(c),
                               env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
              for c in (root, clone)]
@@ -177,6 +178,10 @@ def test_two_passes_at_once_start_one_worker_and_the_loser_says_so(tmp_path: Pat
     started = [o for o in outs if "Build started" in o]
     held = [o for o in outs if "another pass holds" in o]
     assert len(started) == 1 and len(held) == 1, outs
+    loser = clone if "another pass holds" in outs[1] else root
+    assert (head_of(loser), git(loser, "ls-files", "-s"), git(loser, "status", "--porcelain")) == before[loser], \
+        "the loser's checkout (HEAD, index, working tree) moved"
+    assert "reset" not in git(loser, "reflog", "show", "HEAD"), git(loser, "reflog", "show", "HEAD")
     log = subprocess.run(["git", "-C", str(bare), "log", "--format=%s", "main"], capture_output=True, text=True).stdout
     assert log.count("build invocation 01 started") == 1, log
     wait_for(lambda: "build record for item 1" in subprocess.run(
@@ -210,6 +215,7 @@ def test_the_review_takes_the_checks_the_pass_read_and_never_polls(tmp_path: Pat
     approve_item(root)
     assert run_attavo(root, "drive", "1", env=FAST).returncode == 0
     wait_for(lambda: pushed(bare, "build record for item 1"))
+    wait_for(lambda: remote_head(bare, "main") == head_of(root))
     calls.write_text("")
     pre_marker = head_of(root)
     run = run_attavo(root, "drive", "1", env=FAST)
@@ -341,3 +347,93 @@ def test_a_worker_whose_commit_is_refused_beats_until_it_returns_and_then_stops(
     assert drive._stage_body("1", "build", 1) == 1
     assert seen["age"] < 0.3, f"the heartbeat had stopped {seen['age']:.2f}s before the refused commit"
     assert threading.active_count() == before, "the heartbeat thread outlived the worker's body"
+
+
+def test_after_the_stage_record_is_pushed_the_checkout_is_clean_and_at_origin(tmp_path: Path) -> None:
+    """The record is committed by the driver from a detached worktree and
+    the checkout only fast-forwards to it: no untracked or modified file,
+    HEAD at origin's branch, the record commit the driver's with one
+    parent."""
+    root, bare = built_tenant(tmp_path, seconds=1)
+    publish_approval(root)
+    assert run_attavo(root, "drive", "1", env=FAST).returncode == 0
+    wait_for(lambda: pushed(bare, "build record for item 1 (build-01)"))
+    wait_for(lambda: remote_head(bare, "main") == head_of(root), 5)
+    assert git(root, "status", "--porcelain") == "", git(root, "status", "--porcelain")
+    subject, author, parents = git(root, "log", "-1", "--format=%s%x1f%an <%ae>%x1f%P", "HEAD").strip().split("\x1f")
+    assert "build record for item 1" in subject, subject
+    assert author == "attavo driver <driver@attavo.invalid>", author
+    assert len(parents.split()) == 1, parents
+    made_here = [l for l in git(root, "reflog", "show", "HEAD").splitlines() if "attavo:" in l]
+    assert all("fast-forward" in l.lower() for l in made_here), \
+        "the driver made a commit in the executor's checkout:\n" + "\n".join(made_here)
+    assert (records_dir(root) / "build-01.json").is_file()
+    assert not list((git_dir(root) / "attavo").glob("transport/*/*")), "a transport worktree was left behind"
+
+
+def test_a_pass_every_half_second_beside_a_worker_committing_its_records_hits_no_git_error(
+        tmp_path: Path) -> None:
+    """The collision root cause 1 names (#261): passes run every 0.5 s
+    while the detached worker commits its stage and counsel records --
+    the specimen is tests/test_retry.py::test_counsels_verdict_routes_
+    the_next_pass, which failed 8 of 40 runs that way before it was
+    changed to run one pass. No pass and no worker reports a git error,
+    and the records land."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_drive_stall_bound(root)
+    slow_adapter(root, 0)
+    manifest = root / "attavo.toml"
+    manifest.write_text(manifest.read_text().replace(
+        '[executor]\nbuild = "fixture"', '[executor]\nbuild = "fixture"\ncounsel = "fixture"'))
+    commit_all(root, "counsel configured")
+    bare = add_bare_remote(root, tmp_path)
+    approve_item(root)
+    publish_approval(root)
+    # A commit that takes a while (a slow hook holds the index lock for its
+    # length), so a commit and several passes overlap in time.
+    hook = Path(git(root, "rev-parse", "--git-path", "hooks/pre-commit").strip())
+    hook = hook if hook.is_absolute() else root / hook
+    hook.write_text("#!/bin/sh\nsleep 0.4\n")
+    hook.chmod(0o755)
+    response = tmp_path / "counsel.json"
+    response.write_text(json.dumps({
+        "model": "fixture", "model_version": None, "adapter_version": "fixture-1",
+        "tokens": {"input": 1, "output": 1}, "cost_usd": 0.0, "class": "question", "verdict": "person",
+        "citations": [{"kind": "instruction", "path": "specs/1/spec.md", "symbol": "problem"}],
+        "proposal": {"ruling_text": None, "patch": None, "question": "which overlay wins?"}}))
+    env = {**FAST, "ATTAVO_FIXTURE_QUESTION": "which overlay wins?",
+           "ATTAVO_FIXTURE_COUNSEL_RESPONSE": str(response)}
+    outputs: list[str] = []
+    beat = git_dir(root) / "attavo" / "build-01.heartbeat"
+
+    def worker_alive() -> bool:
+        try:
+            os.kill(int(beat.read_text()), 0)
+            return True
+        except (OSError, ValueError):
+            return False
+
+    deadline = time.monotonic() + 60
+    started = False
+    while time.monotonic() < deadline:
+        run = run_attavo(root, "drive", "1", env=env)
+        outputs.append(f"rc={run.returncode}\n{run.stdout}{run.stderr}")
+        started = started or beat.exists()
+        if started and not worker_alive():
+            break
+        time.sleep(0.5)
+    else:
+        raise AssertionError("the worker never returned:\n" + "\n".join(outputs))
+    assert pushed(bare, "build record for item 1 (build-01)"), "\n".join(outputs)
+    outputs.append(f"rc=0\n{run_attavo(root, 'drive', '1', env=env).stdout}")
+    bad = [o for o in outputs if not o.startswith("rc=0") or "fatal" in o or "stopped: could not" in o or "error" in o.lower()]
+    assert not bad, "a pass hit a git error:\n" + "\n".join(bad)
+    worker_log = (git_dir(root) / "attavo" / "build-01.worker.log").read_text()
+    assert "fatal" not in worker_log and "could not" not in worker_log and "error" not in worker_log.lower(), worker_log
+    assert latest_record(root, "counsel")["verdict"] == "person"
+    assert git(root, "status", "--porcelain") == ""
+    made_here = [l for l in git(root, "reflog", "show", "HEAD").splitlines() if "attavo:" in l]
+    assert all("fast-forward" in l.lower() for l in made_here), \
+        "a pass or the worker committed in the executor's checkout:\n" + "\n".join(made_here)
+    assert "build record for item 1 (build-01)" in git(root, "log", "--format=%s", "origin/main")

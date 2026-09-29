@@ -9,6 +9,7 @@ failed with "unknown subcommand".
 Run: python3 -m pytest tests -q
 """
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -591,6 +592,8 @@ def test_build_refused_on_a_foreign_commit_is_foreign_commit_tenant(tmp_path: Pa
     assert rec["stop"]["provenance"] == "tenant"
     assert rec["stop"]["detail"] == rec["refusal"]
     assert "not authored by the executor" in rec["stop"]["detail"]
+    assert re.fullmatch(r"commit [0-9a-f]{40} by .+ <.+@.+> not authored by the executor",
+                        rec["stop"]["detail"]), rec["stop"]["detail"]
 
 
 def test_build_a_tool_error_line_naming_a_ceiling_is_not_a_ceiling(tmp_path: Path) -> None:
