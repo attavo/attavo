@@ -7,6 +7,7 @@ Run: python3 -m pytest tests -q
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -18,9 +19,10 @@ ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
 
 
-def run_attavo(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def run_attavo(root: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
-                          capture_output=True, text=True, check=False)
+                          capture_output=True, text=True, check=False,
+                          env={**os.environ, **env} if env else None)
 
 
 def push_branch(root: Path, branch: str, files: dict[str, str]) -> None:
@@ -96,3 +98,24 @@ def test_claims_refuses_by_name_when_the_default_branch_is_not_set(tmp_path: Pat
     run = run_attavo(root, "claims")
     assert run.returncode == 2
     assert "refs/remotes/origin/HEAD is not set" in run.stderr, run.stderr
+
+
+def _assert_lists_only(run: subprocess.CompletedProcess[str]) -> None:
+    assert run.returncode == 0, run.stdout + run.stderr
+    report = json.loads(run.stdout)
+    assert report["item"] is None, report
+    assert report["claims"] == [] and report["collisions"] == [], report
+    assert "lane/9-other" in {f["branch"] for f in report["in_flight"]}, report
+
+
+def test_claims_without_an_item_lists_only_even_on_an_item_branch(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    push_branch(root, "lane/9-other", {"src/marker.txt": "someone else\n"})
+    git(root, "checkout", "-q", "-b", "attavo/1-self", "main")
+    _assert_lists_only(run_attavo(root, "claims", "--json"))
+
+
+def test_claims_without_an_item_ignores_attavo_item(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    push_branch(root, "lane/9-other", {"src/marker.txt": "someone else\n"})
+    _assert_lists_only(run_attavo(root, "claims", "--json", env={"ATTAVO_ITEM": "1"}))

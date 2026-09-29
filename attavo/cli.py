@@ -149,7 +149,8 @@ claims [N] [--json] reads what is in flight from git alone: every branch
 under refs/remotes/origin/ not yet on the default branch
 (refs/remotes/origin/HEAD), with the paths it changes outside
 paths.records and paths.specs and, when it carries an item's spec, that
-spec's Claims. With an item, it compares the item's Claims with every
+spec's Claims. Without N it lists only: it never takes the item from the
+current branch or from ATTAVO_ITEM. With an item, it compares the item's Claims with every
 other branch in flight, names each overlap by branch and path, and exits
 1 when there is one. A claim is a glob; two claims overlap when either
 matches the other or their literal prefixes nest. It writes nothing and

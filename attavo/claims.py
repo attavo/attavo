@@ -7,7 +7,9 @@ paths.specs) and, when it carries an item's spec, that spec's Claims. The
 default branch is refs/remotes/origin/HEAD, as everywhere else in the
 product (issue #52, #169); unset, this refuses by name rather than guess.
 
-With an item, the item's own Claims are compared with every other branch
+Without N it lists only: it never takes the item from the current branch
+or from ATTAVO_ITEM, compares nothing, and exits 0 apart from its
+refusals. With an item, the item's own Claims are compared with every other branch
 in flight, and any overlap is named with the branch and the paths. A claim
 is a glob (fnmatch, as build's boundary reads it); two claims overlap when
 either matches the other, or, where one carries a wildcard, when their
@@ -27,7 +29,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from attavo.common import MANIFEST, derive_item_id, read_manifest
+from attavo.common import MANIFEST, read_manifest
 from attavo.spec import parse_spec
 
 WILDCARDS = "*?["
@@ -126,7 +128,7 @@ def cmd_claims(argv: list[str]) -> int:
         print("attavo claims: refused: refs/remotes/origin/HEAD is not set; "
               "run `git remote set-head origin -a`", file=sys.stderr)
         return 2
-    item = args[0] if args else derive_item_id(root)
+    item = args[0] if args else None
     flights = in_flight(root, m, default)
     claims: list[str] = []
     found: list[dict[str, Any]] = []
