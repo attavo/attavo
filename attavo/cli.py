@@ -16,6 +16,9 @@
     attavo worker N <build|verify> NN
     attavo ledger [N] [--json]
     attavo claims [N] [--json]
+    attavo plan get [--version V] | put FILE --base V --by LOGIN | log
+    attavo plan rank <EPIC|#N> (--before <EPIC|#M> | --last) --by LOGIN
+    attavo plan move #N --epic EPIC --by LOGIN
     attavo stops [N] [--json]
     attavo test [N] [--all | <test>...] [--fresh]
 
@@ -155,6 +158,17 @@ other branch in flight, names each overlap by branch and path, and exits
 1 when there is one. A claim is a glob; two claims overlap when either
 matches the other or their literal prefixes nest. It writes nothing and
 gates nothing: run it before filing or starting an item.
+
+plan keeps the Plan's order in the product's datastore, never in git:
+the epics in rank order, each with its issues in rank order, the edges
+between issues, and policy. The store is <git common dir>/attavo/store/
+(ATTAVO_STORE overrides it): shared by every worktree of the clone, never
+staged, one file per version. get prints the plan and its version; put
+writes the next version from a file and refuses a stale --base by naming
+the latest version and its author; log lists versions; rank and move
+change one position or one membership and write the next version. A
+re-rank is a new version, not a commit: priority is working material the
+attestation does not bind to.
 
 test [N] runs the tests [tests].select names for every path the item has
 changed since it left the default branch (refs/remotes/origin/HEAD),
@@ -388,6 +402,7 @@ from attavo.approval import cmd_approval_status, cmd_approve
 from attavo.attest import cmd_attest
 from attavo.build import cmd_build
 from attavo.claims import cmd_claims
+from attavo.plan import cmd_plan
 from attavo.counsel import cmd_counsel
 from attavo.doctor import cmd_doctor
 from attavo.drive import cmd_drive, cmd_worker
@@ -444,11 +459,13 @@ def main(argv: list[str]) -> int:
         return cmd_ledger(argv[1:])
     if argv[0] == "claims":
         return cmd_claims(argv[1:])
+    if argv[0] == "plan":
+        return cmd_plan(argv[1:])
     if argv[0] == "stops":
         return cmd_stops(argv[1:])
     if argv[0] == "test":
         return cmd_test(argv[1:])
     print(f"attavo: unknown subcommand {argv[0]!r}; only doctor, spec-gate, approve, "
           f"approval-status, build, verify, file-findings, file-stops, counsel, record-only, "
-          f"attest, drive, worker, ledger, claims, stops, test exist at this commit", file=sys.stderr)
+          f"attest, drive, worker, ledger, claims, plan, stops, test exist at this commit", file=sys.stderr)
     return 2
