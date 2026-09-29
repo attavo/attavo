@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
+from attavo import clock
 from attavo.approval import approval_status
 from attavo.build import cmd_build, driver_identity
 from attavo.common import MANIFEST, PRODUCT_ROOT, derive_item_id, git, read_manifest
@@ -248,7 +249,7 @@ def _seconds_since(at: str | None) -> float | None:
         then = datetime.strptime(at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     except ValueError:
         return None
-    return (datetime.now(timezone.utc) - then).total_seconds()
+    return clock.now() - then.timestamp()
 
 
 class InvocationReading(NamedTuple):
