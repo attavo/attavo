@@ -1,0 +1,96 @@
+{
+  "sha": "998d452070dee19a77d26ef38cf6128a2179cabe",
+  "build_sha": "d9e3b41d29273796fcbe82b8f357aa8d5f92a1c7",
+  "build_record": "build-01",
+  "approval_sha": "d20a2037b63057c59ebf36f0ddbeecd3c3d81f5c",
+  "at": "2026-09-29T19:28:14Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "040fad591e07977ccdc40c9158df05a345502d3a",
+    "conclusions": [
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "Edges may reference issues that belong to no epic",
+      "specimen": "attavo/plan.py: shape_errors at build commit d9e3b41d29273796fcbe82b8f357aa8d5f92a1c7",
+      "retires": "The assumption that validating edge numbers and self-edges establishes the approved invariant that every issue belongs to an epic.",
+      "rejection_test": "test_the_check_refuses_an_edge_whose_endpoint_is_not_in_any_epic",
+      "severity": "Blocking when either endpoint of an accepted edge is absent from every epic; that state makes the Plan contain an issue with no home."
+    },
+    {
+      "title": "Ruled edges accept empty ruler and time values",
+      "specimen": "attavo/plan.py and schema/plan.schema.json at build commit d9e3b41d29273796fcbe82b8f357aa8d5f92a1c7",
+      "retires": "The assumption that requiring string-typed `by` and `at` fields means a ruled edge names who ruled it and when.",
+      "rejection_test": "test_ruled_edges_refuse_empty_or_whitespace_only_by_and_at_values",
+      "severity": "Blocking when an accepted ruled edge has an empty or whitespace-only `by` or `at`, because the ruling then lacks the identity or time required by the approved contract."
+    },
+    {
+      "title": "Malformed and contradictory CLI options are silently interpreted as valid operations",
+      "specimen": "attavo/plan.py: cmd_plan at build commit d9e3b41d29273796fcbe82b8f357aa8d5f92a1c7",
+      "retires": "The assumption that the documented command grammar is enforced by the Plan CLI.",
+      "rejection_test": "test_plan_commands_refuse_invalid_versions_unknown_options_and_both_before_and_last",
+      "severity": "Blocking when malformed input changes the selected state or writes a version\u2014for example, `get --version nope` returns the latest plan and `rank ... --before ... --last` performs a write instead of refusing the contradictory request."
+    }
+  ],
+  "tests_named": [
+    "test_the_check_refuses_an_edge_whose_endpoint_is_not_in_any_epic",
+    "test_ruled_edges_refuse_empty_or_whitespace_only_by_and_at_values",
+    "test_plan_commands_refuse_invalid_versions_unknown_options_and_both_before_and_last"
+  ],
+  "commits": [],
+  "stub_ratio": 1.0,
+  "tokens": {
+    "input": 195964,
+    "output": 3437
+  },
+  "cost_usd": null,
+  "wall_clock_s": 75.284,
+  "status": "pass",
+  "report_class": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 10,
+  "item": "264",
+  "product_version": "v0.30.0-51-geb6bbb0",
+  "product_pin": "v0.30.0"
+}
