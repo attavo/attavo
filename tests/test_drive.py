@@ -138,7 +138,8 @@ def add_bare_remote(root: Path, tmp_path: Path) -> Path:
     git(root, "push", "origin", "HEAD:main")
     # The item's own branch, checked out where the pass runs: a pass from
     # a tenant's checkout on main ensures ../attavo-worktree-N instead.
-    git(root, "checkout", "-q", "-b", ITEM_BRANCH)
+    if git(root, "rev-parse", "--abbrev-ref", "HEAD").strip() != ITEM_BRANCH:
+        git(root, "checkout", "-q", "-b", ITEM_BRANCH)
     git(root, "push", "-q", "origin", f"HEAD:{ITEM_BRANCH}")
     return bare
 
@@ -1338,6 +1339,7 @@ def test_a_marker_with_no_heartbeat_on_this_host_reads_died_though_its_pid_lives
     and the marker names it (a marker from before this release), yet no
     heartbeat file means no holder."""
     root = make_tenant(tmp_path, "build_valid")
+    git(root, "checkout", "-q", "-b", "attavo/1-x")
     add_forge(root, GREEN_FORGE)
     add_drive_stall_bound(root, 60)
     approve_item(root)

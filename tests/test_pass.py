@@ -139,6 +139,7 @@ def test_the_worker_touches_its_heartbeat_and_the_report_reads_running_by_it(tmp
 
 def test_a_stale_heartbeat_reads_died_though_the_pid_lives_and_a_fresh_one_reads_alive(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "build_valid")
+    git(root, "checkout", "-q", "-b", "attavo/1-x")
     add_forge(root, GREEN_FORGE)
     add_drive_stall_bound(root, 600)
     approve_item(root)
@@ -190,6 +191,7 @@ def test_two_passes_at_once_start_one_worker_and_the_loser_says_so(tmp_path: Pat
 
 def test_a_pass_recovers_a_dead_invocation_and_recover_is_gone(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "build_valid")
+    git(root, "checkout", "-q", "-b", "attavo/1-x")
     add_forge(root, GREEN_FORGE)
     add_drive_stall_bound(root)
     approve_item(root)
@@ -243,6 +245,7 @@ def test_a_died_stage_retries_plainly_and_again_is_a_no_op_inside_the_budget(tmp
     needed; `--again` inside the budget is a no-op that says so, rather
     than starting a second attempt of its own."""
     root = make_tenant(tmp_path, "build_valid")
+    git(root, "checkout", "-q", "-b", "attavo/1-x")
     add_forge(root, GREEN_FORGE)
     add_drive_stall_bound(root)
     approve_item(root)

@@ -204,6 +204,53 @@ def _uncommitted(root: Path, m: dict[str, Any], records_dir: Path, r: DriveRepor
     return r
 
 
+def _staged_at_origin(root: Path, m: dict[str, Any], records_dir: Path, r: DriveReport) -> DriveReport | None:
+    """The stuck state a refused fast-forward leaves: a stage record this
+    copy holds uncommitted that origin's branch already carries, its worker
+    gone (a live heartbeat is the ordinary window, and reads running),
+    and no marker lacking its record. Reported, never repaired: the copy
+    is not moved while it holds the record, so no pass would ever say so."""
+    for stage in ("build", "verify"):
+        path = uncommitted_record(root, records_dir, stage)
+        if path is None:
+            continue
+        nn = int(path.stem.rsplit("-", 1)[1])
+        marker = records_dir / f"{stage}-{nn:02d}.started"
+        if marker.is_file():
+            try:
+                with marker.open() as fh:
+                    loaded = json.load(fh)
+            except (OSError, ValueError):
+                loaded = {}
+            info = loaded if isinstance(loaded, dict) else {}
+            if read_invocation(root, stall_bound_s(m), marker, info).cls == "running":
+                continue
+        carried = _carried_at_origin(root, records_dir, path)
+        if carried:
+            r["state"], r["kind"], r["stage"], r["attempt"] = "refused", "yours", stage, nn
+            r["says"] = (f"{carried} is staged in this copy and origin's branch already carries it: the "
+                         f"copy's fast-forward was refused, and no pass moves the copy while it holds "
+                         f"the record. Move it aside, then run the pass again")
+            return r
+    return None
+
+
+def _carried_at_origin(root: Path, records_dir: Path, path: Path) -> str | None:
+    """The record's path when it is uncommitted here, no marker lacks its
+    record, and origin's branch tip already carries the same bytes: the
+    copy a worker's fast-forward left behind. None otherwise."""
+    if invocations_without_record(records_dir):
+        return None
+    rel = str(path.relative_to(root))
+    try:
+        git(root, "fetch", "-q", "origin", git(root, "rev-parse", "--abbrev-ref", "HEAD").strip())
+        theirs = git(root, "rev-parse", f"FETCH_HEAD:{rel}").strip()
+        ours = git(root, "hash-object", "--", rel).strip()
+    except RuntimeError:
+        return None
+    return rel if ours == theirs else None
+
+
 def _checks(r: DriveReport, forge_checks: dict[str, Any], ok: bool, ready: bool) -> DriveReport:
     """Read the forge's answer on the head as a level: green, still
     running, or done and not green."""
@@ -260,6 +307,10 @@ def drive_report(root: Path, m: dict[str, Any], item_id: str) -> DriveReport:
                      "Waiting on you: the approval expired because the spec changed after it; "
                      "approve the spec again")
         return r
+
+    stuck = _staged_at_origin(root, m, records_dir, r)
+    if stuck:
+        return stuck
 
     pending = _pending(root, m, records_dir, r)
     if pending:

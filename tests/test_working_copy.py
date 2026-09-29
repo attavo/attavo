@@ -195,3 +195,61 @@ def test_a_merged_copy_that_is_dirty_or_not_in_the_default_branch_stays_and_is_r
     rc, out = drive(root, "2")
     assert "stays" in out and "not in origin's default branch" in out, out
     assert copy.is_dir()
+
+
+def test_from_a_branch_that_is_not_the_items_a_pass_refuses_by_name_and_writes_nothing(tmp_path: Path) -> None:
+    """Item 1's records sit in a checkout on main, and origin carries no
+    attavo/1-*: the pass does not run in place, commit, or push."""
+    root, bare = tenant_on_main(tmp_path)
+    git(root, "push", "-q", "origin", "--delete", ITEM_BRANCH)
+    approve_item(root)
+    publish_approval(root)
+    head, tip = head_of(root), remote_head(bare, "main")
+    rc, out = drive(root, "1")
+    assert rc == 1 and "attavo/1-*" in out, out
+    assert head_of(root) == head and remote_head(bare, "main") == tip
+    assert not copy_of(tmp_path).exists() and len(listed(root)) == 1
+
+
+def test_with_no_origin_at_all_a_pass_from_main_refuses_by_name_and_writes_nothing(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "build_valid", name="tenant")
+    add_forge(root, GREEN_FORGE)
+    add_drive_stall_bound(root)
+    slow_adapter(root, 0)
+    approve_item(root)
+    publish = git(root, "status", "--porcelain")
+    head = head_of(root)
+    rc, out = drive(root, "1")
+    assert rc == 1 and "attavo/1-*" in out, out
+    assert head_of(root) == head and git(root, "status", "--porcelain") == publish
+    assert not (root / "records" / "1" / "build-01.started").exists()
+
+
+def test_merged_is_judged_on_origins_default_branch_not_a_stale_local_main(tmp_path: Path) -> None:
+    root, bare = tenant_on_main(tmp_path)
+    add_merged_item(root, bare, "2")
+    git(root, "branch", "-q", "-D", "attavo/2-y")
+    git(root, "reset", "-q", "--hard", "HEAD^")
+    rc, out = drive(root, "2")
+    assert rc == 0 and "merged" in out, out
+    assert not copy_of(tmp_path, "2").exists()
+    assert git(root, "branch", "--list", "attavo/2-y").strip() == "", "the copy's branch was made"
+    run = run_attavo(root, "drive", "--all", env=FAST)
+    assert "attavo-worktree-2" not in run.stdout, run.stdout
+    assert git(root, "branch", "--list", "attavo/2-y").strip() == ""
+    wait_for(lambda: record_files(copy_of(tmp_path), "build") != [])
+
+
+def test_a_staged_record_origin_already_carries_is_reported_as_a_refused_fast_forward(tmp_path: Path) -> None:
+    import time
+    root, bare = tenant_on_main(tmp_path)
+    assert drive(root, "1")[0] == 0
+    copy = copy_of(tmp_path)
+    settle(copy, bare)
+    marker_commit = git(copy, "log", "--format=%H", "--grep", "invocation 01 started").strip()
+    git(copy, "reset", "-q", "--soft", marker_commit)
+    time.sleep(1.5)
+    rc, out = drive(root, "1")
+    assert rc == 1, out
+    assert "build-01.json" in out and "fast-forward was refused" in out, out
+    assert not list((copy / "records" / "1").glob("verify-*.started")), "the pass started a stage"

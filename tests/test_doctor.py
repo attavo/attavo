@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from helpers import FIXTURES, commit_all, init_repo, make_tenant
+from helpers import FIXTURES, commit_all, git, init_repo, make_tenant
 from test_drive import (
     GREEN_FORGE,
     add_drive_stall_bound,
@@ -989,6 +989,7 @@ def test_a_recovery_record_the_pass_writes_carries_null_for_the_new_keys(tmp_pat
     keys, so the new nullable keys arrive as null with no change to it --
     and proof four checks that record by the recovery rule."""
     root = make_tenant(tmp_path, "build_valid")
+    git(root, "checkout", "-q", "-b", "attavo/1-x")
     add_forge(root, GREEN_FORGE)
     add_drive_stall_bound(root)
     approve_item(root)

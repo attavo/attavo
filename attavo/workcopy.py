@@ -26,6 +26,8 @@ ORIGIN_ITEM_REFS = "refs/remotes/origin/attavo/"
 
 
 class Ensured(NamedTuple):
+    """path None with a refusal: stopped, and why. path None with none:
+    the item is merged on origin and has no copy, so there is nothing to make."""
     path: Path | None
     refusal: str | None
 
@@ -50,6 +52,8 @@ def fetch_origin_items(root: Path) -> dict[str, list[str]]:
     """{item id: [branch, ...]} for origin's attavo/* branches, read at
     one `git fetch` of that namespace and one `git for-each-ref`. Pruned,
     so a branch origin no longer has is no longer named."""
+    if not has_origin(root):
+        raise RuntimeError("this checkout has no origin")
     default = subprocess.run(["git", "-C", str(root), "symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
                              capture_output=True, text=True, check=False).stdout.strip()
     specs = [f"+refs/heads/attavo/*:{ORIGIN_ITEM_REFS}*"]
@@ -66,15 +70,16 @@ def fetch_origin_items(root: Path) -> dict[str, list[str]]:
     return items
 
 
-def default_ref(root: Path) -> str:
+def default_ref(root: Path, fetch: bool = True) -> str:
     """origin's default branch as a remote-tracking ref, freshly fetched
     when origin answers."""
     out = subprocess.run(["git", "-C", str(root), "symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
                          capture_output=True, text=True, check=False)
     ref = out.stdout.strip() or "refs/remotes/origin/main"
     name = ref.removeprefix("refs/remotes/origin/")
-    subprocess.run(["git", "-C", str(root), "fetch", "-q", "origin", f"+refs/heads/{name}:{ref}"],
-                   capture_output=True, text=True, check=False)
+    if fetch:
+        subprocess.run(["git", "-C", str(root), "fetch", "-q", "origin", f"+refs/heads/{name}:{ref}"],
+                       capture_output=True, text=True, check=False)
     return ref
 
 
@@ -142,22 +147,6 @@ def has_origin(root: Path) -> bool:
                           capture_output=True, text=True, check=False).returncode == 0
 
 
-def lives_here(root: Path, item_id: str, records_rel: str) -> bool:
-    """True when the tenant's own checkout is where the item is worked:
-    it has no origin at all (a scratch checkout or fixture, as has_origin
-    already treats it), or origin has no branch for the item and this
-    checkout carries the item's records (an item whose records were
-    committed on the default branch itself, or whose branch is deleted
-    after its merge). Everywhere else the item's branch is origin's."""
-    if not has_origin(root):
-        return True
-    try:
-        items = fetch_origin_items(root)
-    except RuntimeError:
-        return False
-    return not items.get(item_id) and (root / records_rel / item_id).is_dir()
-
-
 def ensure(root: Path, item_id: str, records_rel: str) -> Ensured:
     """The item's working copy at ../attavo-worktree-N, on origin's one
     attavo/N-* branch at its tip; or the reason it cannot be. Created
@@ -168,8 +157,9 @@ def ensure(root: Path, item_id: str, records_rel: str) -> Ensured:
     as it is."""
     copy = copy_path(root, item_id)
     listed = registered_copies(root)
-    if copy.resolve() not in listed and lives_here(root, item_id, records_rel):
-        return Ensured(root, None)
+    if not has_origin(root) and copy.resolve() not in listed:
+        return Ensured(None, f"this checkout has no origin, so there is no attavo/{item_id}-* to work on; "
+                             f"run from inside the item's working copy")
     try:
         items = fetch_origin_items(root)
     except RuntimeError as exc:
@@ -190,6 +180,8 @@ def ensure(root: Path, item_id: str, records_rel: str) -> Ensured:
             return Ensured(copy, None)
         return Ensured(None, f"origin has no attavo/{item_id}-* branch")
     branch = branches[0]
+    if not present and item_id in merged_items(root, records_rel, [item_id]):
+        return Ensured(None, None)
     tip = f"{ORIGIN_ITEM_REFS}{branch.removeprefix('attavo/')}"
     if present:
         on = listed[copy.resolve()]
@@ -229,7 +221,7 @@ def read_only_copy(root: Path, item_id: str) -> Iterator[tuple[Path | None, str 
     try:
         items = fetch_origin_items(root)
     except RuntimeError as exc:
-        yield None, f"could not read origin's attavo/* branches: {exc}"
+        yield None, f"could not read origin's attavo/{item_id}-*: {exc}"
         return
     branches = items.get(item_id, [])
     if len(branches) != 1:
@@ -310,10 +302,15 @@ def remove_when_merged(copy: Path, item_id: str, records_rel: str) -> str | None
 
 
 def merged_items(root: Path, records_rel: str, items: list[str]) -> set[str]:
+    """Which of `items` are merged, judged on origin's default branch as the
+    fetch the pass already made left it -- never this checkout's HEAD."""
     from attavo.common import STAGES
-    from attavo.doctor import merge_introducing_records
-    default_ref(root)
-    return {n for n in items if merge_introducing_records(root, records_rel, n, STAGES)[0]}
+    from attavo.doctor import _merges_reachable, merge_introducing_records
+    ref = default_ref(root, fetch=False)
+    merges, refusal = _merges_reachable(root, ref)
+    if refusal:
+        return set()
+    return {n for n in items if merge_introducing_records(root, records_rel, n, STAGES, merges)[0]}
 
 
 def existing_copy_items(root: Path) -> list[str]:

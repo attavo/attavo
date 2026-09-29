@@ -1071,7 +1071,7 @@ def cmd_drive(argv: list[str]) -> int:
             copy = workcopy.copy_path(root, item_id)
             if copy.resolve() in workcopy.registered_copies(root) and copy.is_dir():
                 root = copy
-            elif not workcopy.lives_here(root, item_id, m["paths"]["records"]):
+            else:
                 with workcopy.read_only_copy(root, item_id) as (tree, why):
                     if tree is None:
                         print(f"attavo drive: stopped: {why}")
@@ -1090,6 +1090,9 @@ def cmd_drive(argv: list[str]) -> int:
     if not workcopy.on_item_branch(root):
         ensured = workcopy.ensure(root, item_id, m["paths"]["records"])
         if ensured.path is None:
+            if ensured.refusal is None:
+                print(f"attavo drive: merged: item {item_id} is merged on origin and has no working copy")
+                return 0
             print(f"attavo drive: stopped: {ensured.refusal}")
             return 1
         root = ensured.path
