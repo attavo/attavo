@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://attavo.dev/plan/v1",
+  "title": "attavo plan",
+  "description": "The Plan's order, kept in the product's datastore and never committed: epics in rank order, each with its issues in rank order; edges between issues; policy. It holds no issue text, state or claims. attavo/plan.py checks the same shape with the standard library, plus what a schema cannot say: an issue is in at most one epic, and an edge never joins an issue to itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "epics", "edges"],
+  "properties": {
+    "schema": {"const": "plan/1"},
+    "epics": {
+      "type": "array",
+      "description": "In rank order. An epic with id backlog must exist.",
+      "contains": {"type": "object", "properties": {"id": {"const": "backlog"}}, "required": ["id"]},
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "issues"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"},
+          "title": {"type": "string", "minLength": 1},
+          "outcome": {"type": "string"},
+          "proof": {"type": "string"},
+          "issues": {"type": "array", "items": {"type": "integer", "minimum": 1}, "uniqueItems": true, "description": "In rank order within the epic."}
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "from", "to"],
+        "properties": {
+          "type": {"enum": ["depends", "ruled"]},
+          "from": {"type": "integer", "minimum": 1},
+          "to": {"type": "integer", "minimum": 1},
+          "by": {"type": "string"},
+          "at": {"type": "string"},
+          "why": {"type": "string"},
+          "evidence": {"type": "string"},
+          "applies": {"const": "spec"}
+        },
+        "if": {"properties": {"type": {"const": "ruled"}}},
+        "then": {"required": ["by", "at"]}
+      }
+    },
+    "policy": {"type": "object"}
+  }
+}

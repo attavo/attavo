@@ -1,0 +1,19 @@
+{
+  "sha": "262b7a9e05660db0e6835865e3e459e439359554",
+  "spec_sha": "262b7a9e05660db0e6835865e3e459e439359554",
+  "at": "2026-09-29T19:17:57Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "the-plan-store-keeps-versions-outside-git-and-refuses-a-stale-base.sh",
+      "on_tree": 2,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "264",
+  "product_version": "v0.30.0",
+  "product_pin": "v0.30.0"
+}
