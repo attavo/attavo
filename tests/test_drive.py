@@ -24,9 +24,22 @@ import time
 from pathlib import Path
 from typing import IO, Any, cast
 
-from helpers import commit_all, git, make_tenant
+from helpers import commit_all as _commit_all
+from helpers import git, make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def commit_all(root: Path, message: str) -> None:
+    """helpers.commit_all, then the push an operator makes: the pass only
+    fast-forwards the checkout and refuses commits origin lacks, so a
+    fixture with a remote carries none."""
+    _commit_all(root, message)
+    if subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"],
+                      capture_output=True).returncode == 0:
+        git(root, "push", "-q", "origin", f"HEAD:{git(root, 'rev-parse', '--abbrev-ref', 'HEAD').strip()}")
+
+
 ATTAVO = ROOT / "bin" / "attavo"
 
 GREEN_FORGE = "printf 'ci success\\n'"
@@ -96,6 +109,19 @@ def add_forge(root: Path, checks_command: str) -> None:
 def approve_item(root: Path, item: str = "1") -> None:
     assert run_attavo(root, "spec-gate", item).returncode == 0
     assert run_attavo(root, "approve", item, "--by", "alice").returncode == 0
+    if subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"],
+                      capture_output=True).returncode == 0:
+        # The pass only fast-forwards the checkout and refuses commits
+        # origin lacks, so what an operator committed is pushed like one.
+        git(root, "push", "-q", "origin", f"HEAD:{git(root, 'rev-parse', '--abbrev-ref', 'HEAD').strip()}")
+
+
+def publish_approval(root: Path) -> None:
+    """The approval and spec records approve_item leaves untracked, committed
+    and pushed the way an operator does, so a checkout can be read as
+    clean."""
+    commit_all(root, "the approval")
+    git(root, "push", "-q", "origin", f"HEAD:{git(root, 'rev-parse', '--abbrev-ref', 'HEAD').strip()}")
 
 
 def add_bare_remote(root: Path, tmp_path: Path) -> Path:
@@ -927,60 +953,115 @@ def test_drive_pass_fast_forwards_to_a_branch_that_moved_before_taking_the_lease
     assert "concurrent.txt" in git(root, "ls-tree", "-r", "--name-only", "HEAD")
 
 
-def test_drive_worker_retries_a_rejected_record_push_with_a_merge_never_a_rebase(tmp_path: Path) -> None:
-    """Acceptance row 7, under R2. The branch moves while the worker
-    runs -- after the pass's marker push, before the worker's record
-    push: the record push is rejected, retried after `git pull
-    --no-rebase --no-edit`, never a rebase; the build record's own sha is
-    unchanged (still reachable, still what the record names), and the
-    retry lands a merge commit, not a rewritten one."""
-    root = make_tenant(tmp_path, "build_valid")
-    add_forge(root, GREEN_FORGE)
-    bare = add_bare_remote(root, tmp_path)
-    slow_build_adapter(root, 3)
-    approve_item(root)
-    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
-
-    run = run_attavo(root, "drive", "1")
-    assert run.returncode == 0, run.stdout + run.stderr
-    assert "worker pid" in run.stdout
-    assert "invocation 01 started" in subprocess.run(
-        ["git", "-C", str(bare), "log", "-1", "--format=%s", branch],
-        capture_output=True, text=True).stdout
-
-    other = tmp_path / "other-clone"
+def _elsewhere_pushes(bare: Path, branch: str, tmp_path: Path, name: str = "other-clone") -> None:
+    other = tmp_path / name
     subprocess.run(["git", "clone", "--quiet", str(bare), str(other)], check=True)
     subprocess.run(["git", "-C", str(other), "checkout", "-q", branch], check=True)
-    subprocess.run(["git", "-C", str(other), "config", "user.email", "other@example.com"],
-                   check=True)
+    subprocess.run(["git", "-C", str(other), "config", "user.email", "other@example.com"], check=True)
     subprocess.run(["git", "-C", str(other), "config", "user.name", "Other"], check=True)
     (other / "concurrent.txt").write_text("from elsewhere\n")
     subprocess.run(["git", "-C", str(other), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(other), "commit", "-q", "-m", "a concurrent commit"],
-                   check=True)
+    subprocess.run(["git", "-C", str(other), "commit", "-q", "-m", "a concurrent commit"], check=True)
     subprocess.run(["git", "-C", str(other), "push", "origin", f"HEAD:{branch}"], check=True)
 
-    waiting = drive(root, "1")  # a pass while the worker holds the copy: reads, touches nothing
-    assert waiting.returncode == 0, waiting.stdout + waiting.stderr
-    assert "running" in waiting.stdout
-    assert "concurrent.txt" not in git(root, "ls-tree", "-r", "--name-only", "HEAD")
 
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline and not (
-            record_files(root, "build") and remote_head(bare, branch) == head_of(root)):
-        time.sleep(0.3)
+def test_drive_a_record_push_rejected_once_lands_as_a_fast_forward_and_the_record_is_unchanged(
+        tmp_path: Path) -> None:
+    """The branch moves after the worker's record was written and before
+    it pushes: the push is rejected, the driver fetches, recreates its
+    worktree at the new tip, writes the record there again and pushes a
+    fast-forward. No merge commit, the checkout untouched until it
+    fast-forwards, and the record's own `sha` -- the stage's commit, not
+    the transport commit -- is exactly what it was."""
+    from attavo import drive
 
-    rec = latest_record(root, "build")
-    assert rec["status"] == "pass"
-    build_sha = rec["sha"]
-    assert build_sha in git(root, "rev-list", "HEAD").split()
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    bare = add_bare_remote(root, tmp_path)
+    approve_item(root)
+    publish_approval(root)
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    stage_sha = head_of(root)
+    tries: list[int] = []
 
-    merges = git(root, "log", "--merges", "--format=%H", "HEAD").split()
-    assert merges, "the retry should have landed a merge commit"
+    def write(tree: Path) -> list[Path]:
+        tries.append(1)
+        if len(tries) == 1:
+            _elsewhere_pushes(bare, branch, tmp_path)
+        rec = tree / "records" / "1" / "build-01.json"
+        rec.parent.mkdir(parents=True, exist_ok=True)
+        rec.write_text(json.dumps({"status": "pass", "sha": stage_sha}))
+        return [rec]
 
+    (root / "records" / "1").mkdir(parents=True, exist_ok=True)
+    outcome = drive.transport_records(root, branch, "attavo: build record for item 1 (build-01)", write)
+    assert outcome == ("pushed", None), outcome
+    assert len(tries) == 2, "the record was not written again on the fetched tip"
+    assert git(root, "log", "--merges", "--format=%H", branch).split() == []
+    assert git(bare, "log", "--merges", "--format=%H", branch).split() == []
     assert remote_head(bare, branch) == head_of(root)
     assert "concurrent.txt" in git(root, "ls-tree", "-r", "--name-only", "HEAD")
+    assert json.loads((root / "records" / "1" / "build-01.json").read_text())["sha"] == stage_sha
+    assert git(root, "status", "--porcelain") == ""
+    assert git(root, "log", "-1", "--format=%an|%p", "HEAD").strip().split("|")[0] == "attavo driver"
+    assert len(git(root, "log", "-1", "--format=%P", "HEAD").split()) == 1
 
+
+def test_drive_a_record_push_rejected_under_the_stage_commits_is_refused_not_merged(tmp_path: Path) -> None:
+    """The branch moves while the executor's own commits are still only in
+    the checkout. The driver has neither a merge nor a rebase to bring
+    them in, so the transport refuses, names the commits it would
+    strand by sha and author, and leaves the checkout and the branch as
+    they were."""
+    from attavo import drive
+
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    bare = add_bare_remote(root, tmp_path)
+    approve_item(root)
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    (root / "built.txt").write_text("the executor's work\n")
+    git(root, "add", "built.txt")
+    git(root, "-c", "user.name=executor fixture", "-c", "user.email=executor+fixture@attavo.invalid",
+        "commit", "-q", "-m", "the executor's commit")
+    stage_commit = head_of(root)
+    _elsewhere_pushes(bare, branch, tmp_path)
+    remote_before = remote_head(bare, branch)
+
+    def write(tree: Path) -> list[Path]:
+        rec = tree / "records" / "1" / "build-01.json"
+        rec.parent.mkdir(parents=True, exist_ok=True)
+        rec.write_text(json.dumps({"status": "pass", "sha": stage_commit}))
+        return [rec]
+
+    outcome, why = drive.transport_records(root, branch, "attavo: build record", write)
+    assert outcome == "refused" and why is not None, (outcome, why)
+    assert stage_commit[:7] in why and "executor fixture" in why, why
+    assert head_of(root) == stage_commit
+    assert remote_head(bare, branch) == remote_before
+    assert git(root, "log", "--merges", "--format=%H", "HEAD").split() == []
+
+
+def test_drive_a_pass_refuses_a_checkout_carrying_a_commit_origin_lacks(tmp_path: Path) -> None:
+    """The checkout only fast-forwards. A commit it carries that origin
+    lacks is named by sha and author, never rebased, and is still there
+    afterwards; the pass starts nothing."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_bare_remote(root, tmp_path)
+    approve_item(root)
+    (root / "stray.txt").write_text("not pushed\n")
+    git(root, "add", "stray.txt")
+    git(root, "-c", "user.name=Some Operator", "-c", "user.email=op@example.com",
+        "commit", "-q", "-m", "an unpushed commit")
+    stray = head_of(root)
+
+    run = run_attavo(root, "drive", "1")
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert stray[:7] in run.stdout and "Some Operator" in run.stdout, run.stdout
+    assert head_of(root) == stray
+    assert not (records_dir(root) / "build-01.started").exists()
+    assert "worker pid" not in run.stdout
 
 
 def test_drive_a_refused_marker_push_ends_the_pass_with_exit_1(tmp_path: Path) -> None:

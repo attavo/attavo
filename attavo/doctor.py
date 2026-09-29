@@ -10,7 +10,7 @@ from typing import Any
 
 from attavo import clock
 from attavo.attest import check_attest_chain, item_time_and_cost
-from attavo.build import build_is_empty
+from attavo.build import build_is_empty, driver_identity
 from attavo.common import (
     MANIFEST,
     Proof,
@@ -528,17 +528,50 @@ def proof_no_commit_lacks_record(root: Path, m: dict[str, Any] | None) -> Proof:
             unrecorded.append(c)
             unrecorded_commits.append({"sha": c, "subject": commit_subject(root, c)})
 
+    not_transport = driver_commits_not_transport(root, window_spec, records_rel) if records_rel else []
     counts = f"{len(recorded)} recorded, {len(ordinary)} ordinary, {len(unrecorded)} unrecorded"
     evasions = boundary_evasions if boundary_paths else "n/a"
     extra = {"recorded": len(recorded), "ordinary": len(ordinary),
              "unrecorded": len(unrecorded), "boundary_evasions": evasions,
              "before_window": before_window,
-             "ordinary_commits": ordinary_commits, "unrecorded_commits": unrecorded_commits}
+             "ordinary_commits": ordinary_commits, "unrecorded_commits": unrecorded_commits,
+             "driver_commits_not_transport": not_transport}
+    if not_transport:
+        return p.fail(f"a driver commit is not a records transport: {not_transport[0]}; {counts}", **extra)
     if unrecorded:
         return p.fail(f"{unrecorded[-1][:12]} lacks a record; {counts}; boundary evasions: "
                       f"{evasions}; before the window: {before_window}", **extra)
     return p.hold(f"{counts}; boundary evasions: {evasions}; before the window: {before_window}",
                   **extra)
+
+
+def driver_commits_not_transport(root: Path, window_spec: str, records_rel: str) -> list[str]:
+    """Every commit in the window authored as driver_identity() that is not
+    a records transport: more than one parent, or a path outside
+    <records>/<N>/ for the one item N it touches. The driver's commits
+    carry records and nothing else, one parent each (root cause 1: the
+    driver makes them in a detached worktree and never merges), so one
+    that does either was made by something other than the transport.
+    Each entry reads `<sha12> <why>`."""
+    email = driver_identity()["email"]
+    bad: list[str] = []
+    prefix = records_rel.strip("/") + "/"
+    out = git(root, "log", window_spec, "--format=%H\x1f%ae\x1f%P")
+    for line in out.splitlines():
+        sha, author, parents = line.split("\x1f")
+        if author != email:
+            continue
+        if len(parents.split()) > 1:
+            bad.append(f"{sha[:12]} is a merge")
+            continue
+        paths = git(root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", sha).splitlines()
+        items = {p[len(prefix):].split("/", 1)[0] for p in paths if p.startswith(prefix) and "/" in p[len(prefix):]}
+        outside = [p for p in paths if not (p.startswith(prefix) and "/" in p[len(prefix):])]
+        if outside:
+            bad.append(f"{sha[:12]} touches {outside[0]}, outside its item's records")
+        elif len(items) > 1:
+            bad.append(f"{sha[:12]} touches the records of items {', '.join(sorted(items))}")
+    return bad
 
 
 ADAPTER_EXIT_RE = re.compile(r"^\[adapter exited \d+\]$")
