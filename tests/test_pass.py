@@ -62,7 +62,7 @@ def report(root: Path, env: dict[str, str] | None = None) -> dict[str, Any]:
 
 
 def pushed(bare: Path, subject: str) -> bool:
-    log = subprocess.run(["git", "-C", str(bare), "log", "--format=%s", "main"], capture_output=True, text=True).stdout
+    log = subprocess.run(["git", "-C", str(bare), "log", "--format=%s", "attavo/1-x"], capture_output=True, text=True).stdout
     return subject in log
 
 
@@ -117,10 +117,10 @@ def test_a_pass_returns_while_the_worker_runs_and_the_worker_outlives_it(tmp_pat
     assert elapsed < 2.5, f"the pass took {elapsed:.1f}s: it waited for the stage"
     assert "Build started" in run.stdout, run.stdout
     assert (records_dir(root) / "build-01.started").exists()
-    assert remote_head(bare, "main") == head_of(root), "the marker was not pushed before the pass returned"
+    assert remote_head(bare) == head_of(root), "the marker was not pushed before the pass returned"
     assert record_files(root, "build") == [], "the record existed before the worker could have written it"
     wait_for(lambda: record_files(root, "build") != [])
-    wait_for(lambda: remote_head(bare, "main") == head_of(root))
+    wait_for(lambda: remote_head(bare) == head_of(root))
     assert latest_record(root, "build")["status"] == "pass"
 
 
@@ -182,10 +182,10 @@ def test_two_passes_at_once_start_one_worker_and_the_loser_says_so(tmp_path: Pat
     assert (head_of(loser), git(loser, "ls-files", "-s"), git(loser, "status", "--porcelain")) == before[loser], \
         "the loser's checkout (HEAD, index, working tree) moved"
     assert "reset" not in git(loser, "reflog", "show", "HEAD"), git(loser, "reflog", "show", "HEAD")
-    log = subprocess.run(["git", "-C", str(bare), "log", "--format=%s", "main"], capture_output=True, text=True).stdout
+    log = subprocess.run(["git", "-C", str(bare), "log", "--format=%s", "attavo/1-x"], capture_output=True, text=True).stdout
     assert log.count("build invocation 01 started") == 1, log
     wait_for(lambda: "build record for item 1" in subprocess.run(
-        ["git", "-C", str(bare), "log", "--format=%s", "main"], capture_output=True, text=True).stdout)
+        ["git", "-C", str(bare), "log", "--format=%s", "attavo/1-x"], capture_output=True, text=True).stdout)
 
 
 def test_a_pass_recovers_a_dead_invocation_and_recover_is_gone(tmp_path: Path) -> None:
@@ -215,7 +215,7 @@ def test_the_review_takes_the_checks_the_pass_read_and_never_polls(tmp_path: Pat
     approve_item(root)
     assert run_attavo(root, "drive", "1", env=FAST).returncode == 0
     wait_for(lambda: pushed(bare, "build record for item 1"))
-    wait_for(lambda: remote_head(bare, "main") == head_of(root))
+    wait_for(lambda: remote_head(bare) == head_of(root))
     calls.write_text("")
     pre_marker = head_of(root)
     run = run_attavo(root, "drive", "1", env=FAST)
@@ -259,22 +259,19 @@ def test_a_died_stage_retries_plainly_and_again_is_a_no_op_inside_the_budget(tmp
     assert latest_record(root, "build")["retry_of"] == "build-01"
 
 
-def test_all_runs_one_pass_in_every_working_copy_beside_the_checkout(tmp_path: Path) -> None:
-    root = make_tenant(tmp_path, "build_valid", name="tenant")
-    add_forge(root, GREEN_FORGE)
-    add_drive_stall_bound(root)
-    slow_adapter(root, 0)
-    bare = add_bare_remote(root, tmp_path)
-    for n in ("1",):
-        copy = tmp_path / f"attavo-worktree-{n}"
-        git(root, "worktree", "add", "-q", "-b", f"attavo/{n}-x", str(copy), "HEAD")
-        git(copy, "config", "user.email", "test@example.com")
-        git(copy, "config", "user.name", "Attavo Test")
-        approve_item(copy, n)
+def test_all_from_the_checkout_passes_every_unmerged_branch_on_origin_and_removes_merged_copies(
+        tmp_path: Path) -> None:
+    from test_working_copy import add_merged_item, copy_of, tenant_on_main
+    root, bare = tenant_on_main(tmp_path)
+    add_merged_item(root, bare, "2")
+    merged = copy_of(tmp_path, "2")
+    git(root, "worktree", "add", "-q", str(merged), "attavo/2-y")
     run = run_attavo(root, "drive", "--all", env=FAST)
     assert run.returncode == 0, run.stdout + run.stderr
     assert "attavo-worktree-1: attavo drive: Build started" in run.stdout, run.stdout
-    wait_for(lambda: record_files(tmp_path / "attavo-worktree-1", "build") != [])
+    assert "attavo-worktree-2: attavo drive: merged: removed attavo-worktree-2" in run.stdout, run.stdout
+    assert not merged.exists()
+    wait_for(lambda: record_files(copy_of(tmp_path), "build") != [])
 
 
 def test_the_report_reads_running_for_the_whole_of_counsel_and_stopped_after_the_push(tmp_path: Path) -> None:
@@ -358,7 +355,7 @@ def test_after_the_stage_record_is_pushed_the_checkout_is_clean_and_at_origin(tm
     publish_approval(root)
     assert run_attavo(root, "drive", "1", env=FAST).returncode == 0
     wait_for(lambda: pushed(bare, "build record for item 1 (build-01)"))
-    wait_for(lambda: remote_head(bare, "main") == head_of(root), 5)
+    wait_for(lambda: remote_head(bare) == head_of(root), 5)
     assert git(root, "status", "--porcelain") == "", git(root, "status", "--porcelain")
     subject, author, parents = git(root, "log", "-1", "--format=%s%x1f%an <%ae>%x1f%P", "HEAD").strip().split("\x1f")
     assert "build record for item 1" in subject, subject
@@ -436,4 +433,4 @@ def test_a_pass_every_half_second_beside_a_worker_committing_its_records_hits_no
     made_here = [l for l in git(root, "reflog", "show", "HEAD").splitlines() if "attavo:" in l]
     assert all("fast-forward" in l.lower() for l in made_here), \
         "a pass or the worker committed in the executor's checkout:\n" + "\n".join(made_here)
-    assert "build record for item 1 (build-01)" in git(root, "log", "--format=%s", "origin/main")
+    assert "build record for item 1 (build-01)" in git(root, "log", "--format=%s", "origin/attavo/1-x")

@@ -133,3 +133,13 @@ def test_help_says_the_gate_refuses_a_stub_outside_the_claims() -> None:
                          capture_output=True, text=True, check=False)
     assert run.returncode == 0
     assert "stub touches a path the claims do not name" in run.stdout, run.stdout
+
+
+def test_help_names_the_working_copys_convention_and_the_removal_rule() -> None:
+    run = subprocess.run([sys.executable, str(ATTAVO), "--help"],
+                         capture_output=True, text=True, check=False)
+    assert run.returncode == 0
+    flat = " ".join(run.stdout.split())
+    assert "../attavo-worktree-N" in flat
+    assert "plain `git worktree remove`, never --force" in flat
+    assert "<common git dir>/attavo/archive/<N>/" in flat

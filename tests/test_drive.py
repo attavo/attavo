@@ -124,6 +124,9 @@ def publish_approval(root: Path) -> None:
     git(root, "push", "-q", "origin", f"HEAD:{git(root, 'rev-parse', '--abbrev-ref', 'HEAD').strip()}")
 
 
+ITEM_BRANCH = "attavo/1-x"
+
+
 def add_bare_remote(root: Path, tmp_path: Path) -> Path:
     """A real (bare) remote named origin, seeded with the tenant's current
     state -- drive's own push target, distinct from the fake
@@ -132,8 +135,11 @@ def add_bare_remote(root: Path, tmp_path: Path) -> Path:
     bare = tmp_path / "origin.git"
     subprocess.run(["git", "init", "--quiet", "--bare", "-b", "main", str(bare)], check=True)
     git(root, "remote", "add", "origin", str(bare))
-    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
-    git(root, "push", "origin", f"HEAD:{branch}")
+    git(root, "push", "origin", "HEAD:main")
+    # The item's own branch, checked out where the pass runs: a pass from
+    # a tenant's checkout on main ensures ../attavo-worktree-N instead.
+    git(root, "checkout", "-q", "-b", ITEM_BRANCH)
+    git(root, "push", "-q", "origin", f"HEAD:{ITEM_BRANCH}")
     return bare
 
 
@@ -159,7 +165,7 @@ def last_commit_paths(root: Path) -> list[str]:
     return git(root, "diff", "--name-only", "HEAD^", "HEAD").splitlines()
 
 
-def remote_head(bare: Path, branch: str = "main") -> str:
+def remote_head(bare: Path, branch: str = ITEM_BRANCH) -> str:
     return subprocess.run(["git", "-C", str(bare), "rev-parse", branch],
                           capture_output=True, text=True, check=True).stdout.strip()
 

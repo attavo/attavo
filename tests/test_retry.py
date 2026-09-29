@@ -90,7 +90,7 @@ def approved_tenant(tmp_path: Path, build_prelude: str = "", **drive: Any) -> tu
     bare = add_bare_remote(root, tmp_path)
     approve_item(root)
     commit_all(root, "approved")
-    git(root, "push", "-q", "origin", "HEAD:main")
+    git(root, "push", "-q", "origin", "HEAD:attavo/1-x")
     return root, bare
 
 
@@ -168,7 +168,7 @@ def test_a_red_check_becomes_a_returned_record_with_the_log_as_evidence(tmp_path
     bare = add_bare_remote(root, tmp_path)
     approve_item(root)
     commit_all(root, "approved")
-    git(root, "push", "-q", "origin", "HEAD:main")
+    git(root, "push", "-q", "origin", "HEAD:attavo/1-x")
     approved_at = git(root, "rev-parse", "HEAD").strip()
 
     passes_until(root, lambda: pushed(bare, "verify record for item 1 (verify-01)"), seconds=40)
@@ -183,7 +183,7 @@ def test_a_red_check_becomes_a_returned_record_with_the_log_as_evidence(tmp_path
 
     passes_until(root, lambda: pushed(bare, "verify record for item 1 (verify-02)"), seconds=40)
     assert latest_record(root, "verify")["status"] == "pass"
-    authors = set(git(root, "log", "--format=%an", f"{approved_at}..origin/main").splitlines())
+    authors = set(git(root, "log", "--format=%an", f"{approved_at}..origin/attavo/1-x").splitlines())
     assert authors <= {"attavo driver", "attavo executor (fixture)"}, authors
 
 
@@ -204,11 +204,11 @@ def test_a_returned_review_retries_with_its_findings_and_counsels_on_the_second(
                      "  exit 0\nfi\n")
     (d / "run").write_text(run.replace("#!/bin/sh\n", "#!/bin/sh\n" + verify_branch, 1))
     commit_all(root, "a review that returns a blocking finding")
-    git(root, "push", "-q", "origin", "HEAD:main")
+    git(root, "push", "-q", "origin", "HEAD:attavo/1-x")
     manifest = root / "attavo.toml"
     manifest.write_text(manifest.read_text().replace('[executor]\nbuild = "fixture"', '[executor]\nbuild = "fixture"\ncounsel = "fixture"'))
     commit_all(root, "counsel configured")
-    git(root, "push", "-q", "origin", "HEAD:main")
+    git(root, "push", "-q", "origin", "HEAD:attavo/1-x")
 
     passes_until(root, lambda: pushed(bare, "verify record for item 1 (verify-01)"), seconds=40)
     first = latest_record(root, "verify")
@@ -246,7 +246,7 @@ def test_counsels_verdict_routes_the_next_pass(tmp_path: Path) -> None:
         manifest = root / "attavo.toml"
         manifest.write_text(manifest.read_text().replace('[executor]\nbuild = "fixture"', '[executor]\nbuild = "fixture"\ncounsel = "fixture"'))
         commit_all(root, "counsel configured")
-        git(root, "push", "-q", "origin", "HEAD:main")
+        git(root, "push", "-q", "origin", "HEAD:attavo/1-x")
         env = {"ATTAVO_FIXTURE_QUESTION": "which overlay wins?",
                "ATTAVO_FIXTURE_COUNSEL_RESPONSE": str(responses / f"{verdict}.json")}
         # one pass starts the worker; the record's push is the fact to wait on, with no
@@ -346,7 +346,7 @@ def test_a_stage_past_its_ceiling_is_hung_by_the_ceiling(tmp_path: Path) -> None
     d = root / "attavo" / "adapters" / "fixture"
     (d / "conformance.json").write_text(json.dumps({"streams_events": False}) + "\n")
     commit_all(root, "an adapter that does not stream")
-    git(root, "push", "-q", "origin", "HEAD:main")
+    git(root, "push", "-q", "origin", "HEAD:attavo/1-x")
     assert run_attavo(root, "drive", "1", env=FAST).returncode == 0
     wait_for(lambda: report(root)["state"] == "running")
     # the worker is inside its ceiling now; the clock, not a wait, puts it past
