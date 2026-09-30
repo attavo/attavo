@@ -83,6 +83,25 @@ def test_strict_opportunism_a_lower_ranked_issue_never_takes_a_path_a_higher_ran
     assert "yields shared.py to #2, ranked above" in why_of(out, 3)
 
 
+def test_a_predecessor_never_yields_to_its_own_dependents() -> None:
+    """The first live read (plan version 1, 2026-09-30): R4 (#276) is
+    ranked above CN (#277) and waits on it by a ruled edge; both claim
+    attavo/cli.py. CN must not yield the path to the issue that waits on
+    it, or neither is ever placed and everything claiming the path behind
+    R4 freezes. Transitively too: #10 waits on #11, which waits on #12."""
+    body = plan([("e1", [276, 10, 11]), ("e2", [277, 12]), ("backlog", [300])],
+                [{"type": "ruled", "from": 277, "to": 276, "by": "op", "at": "2026-09-26"},
+                 {"type": "depends", "from": 11, "to": 10}, {"type": "depends", "from": 12, "to": 11}])
+    issues = [issue(276, ["attavo/cli.py"]), issue(277, ["attavo/cli.py", "docs/**"]),
+              issue(10, ["x/shared.py"]), issue(11, ["y/b.py"]), issue(12, ["x/shared.py"]),
+              issue(300, ["attavo/cli.py"])]
+    out = frontier.compute(body, issues, [])
+    assert (wave_of(out, 277), wave_of(out, 276)) == (1, 2)
+    assert wave_of(out, 12) == 1 and wave_of(out, 11) == 2 and wave_of(out, 10) == 3
+    assert wave_of(out, 300) == 3, "a lower-ranked issue still yields to the dependent above it"
+    assert out["not_placed"] == []
+
+
 def test_an_issue_overlapping_a_branch_in_flight_is_not_in_wave_one_and_says_which_branch() -> None:
     body = plan([("e1", [1, 5]), ("backlog", [])])
     flights: list[dict[str, Any]] = [{"branch": "lane/9-other", "item": None, "declared": [], "changed": ["src/marker.txt"]},
