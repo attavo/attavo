@@ -1,6 +1,6 @@
 ## Problem
 
-Class: fix
+Class: core
 
 Root-cause: classification-by-reading-prose
 
