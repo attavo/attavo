@@ -1,0 +1,61 @@
+{
+  "sha": "22831ee93aa5d72a3a761ddea8cfb1895e24b8d7",
+  "record_stage": "build",
+  "record": "build-01",
+  "at": "2026-09-30T00:56:02Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 107698,
+    "output": 1408
+  },
+  "cost_usd": null,
+  "wall_clock_s": 41.58,
+  "status": "done",
+  "class": "unclassed",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "adapters/claude-code/README.md",
+      "symbol": "Keys / auth",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "adapters/claude-code/run",
+      "symbol": "transient_detail",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "attavo/drive.py",
+      "symbol": "retry_state",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "The build did not reach the item: the Claude Code subscription OAuth session expired and could not be refreshed. This is not a transient vendor-capacity failure and changes none of the specification or definition of done. Reauthenticate the operator's Claude Code subscription session, then retry this build; the existing unclassed stop requires this counsel answer before the retry is eligible.",
+    "patch": null,
+    "question": null,
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": []
+  },
+  "question": null,
+  "record_version": 3,
+  "item": "267",
+  "product_version": "v0.30.0-60-g5df6926",
+  "product_pin": "v0.30.0"
+}
