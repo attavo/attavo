@@ -1,0 +1,21 @@
+{
+  "sha": "b33c7d622a335ef9b9409962050e7376d86b943c",
+  "spec_sha": "b33c7d622a335ef9b9409962050e7376d86b943c",
+  "at": "2026-09-30T02:26:50Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "the-frontier-builds-waves-from-the-plan-the-issues-and-git.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "class": "core",
+  "research": "not required by policy",
+  "record_version": 3,
+  "item": "281",
+  "product_version": "v0.31.0",
+  "product_pin": "v0.31.0"
+}
