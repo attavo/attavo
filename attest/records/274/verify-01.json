@@ -1,0 +1,75 @@
+{
+  "sha": "6c9f98bbb4ef783022794a3d527d4109bc1008d4",
+  "build_sha": "1cb1b3ab40f1e52e024bf175b5191f6915722af8",
+  "build_record": "build-01",
+  "approval_sha": "3562d27e645b0628942888787fb2bfef046985f4",
+  "at": "2026-09-30T02:07:53Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "d5fe3c93de6b70e12c64a2202993b3046f3e4fc1",
+    "conclusions": [
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [],
+  "tests_named": [
+    "test_root_causes_matches_approved_stub",
+    "test_specimen_rows_are_unique_and_exactly_thirty",
+    "test_specimen_mapping_and_states_match_approved_catalog",
+    "test_only_shared_working_copy_cause_line_changed"
+  ],
+  "commits": [],
+  "stub_ratio": 1.0,
+  "tokens": {
+    "input": 104075,
+    "output": 1530
+  },
+  "cost_usd": null,
+  "wall_clock_s": 40.359,
+  "status": "pass",
+  "report_class": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 10,
+  "item": "274",
+  "product_version": "v0.31.0-21-g7a5cbfb",
+  "product_pin": "v0.31.0"
+}

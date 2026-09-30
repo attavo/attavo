@@ -1,0 +1,58 @@
+{
+  "sha": "1cb1b3ab40f1e52e024bf175b5191f6915722af8",
+  "start_sha": "26fcf1e6fdf8ea0698f4d5f047f4058ca32973a0",
+  "spec_sha": "350a011559ae09be39ff5f6d772881348c41c48b",
+  "approval_sha": "3562d27e645b0628942888787fb2bfef046985f4",
+  "at": "2026-09-30T02:03:29Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.285 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "the-specimens-are-in-the-closed-list.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q -m 'not own_records'",
+    "count": 0,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 332499,
+    "output": 1912
+  },
+  "cost_usd": 0.1563244,
+  "wall_clock_s": 35.682,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "refusal_kind": null,
+  "report_class": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 11,
+  "item": "274",
+  "product_version": "v0.31.0-21-g7a5cbfb",
+  "product_pin": "v0.31.0"
+}

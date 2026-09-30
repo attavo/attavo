@@ -1,0 +1,21 @@
+{
+  "sha": "350a011559ae09be39ff5f6d772881348c41c48b",
+  "spec_sha": "350a011559ae09be39ff5f6d772881348c41c48b",
+  "at": "2026-09-30T01:44:53Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "the-specimens-are-in-the-closed-list.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "class": "fix",
+  "research": "not required by policy",
+  "record_version": 3,
+  "item": "274",
+  "product_version": "v0.31.0",
+  "product_pin": "v0.31.0"
+}
