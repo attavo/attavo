@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""forge-issues: [forge].issues_command for this repository.
+
+Prints every issue in this repository, open and closed, as one JSON list
+of {number, title, state, closed_at, labels, body}, the shape
+schema/manifest.schema.json names for [forge].issues_command. The
+product parses each body's "## Claims" section itself; this script only
+translates the forge's words ("OPEN", label objects) into that shape.
+
+Exits non-zero, printing nothing to stdout, when the forge cannot be
+read: the product reads that as "not read", never as no issues.
+
+Usage: forge-issues
+Requires: `gh`, authenticated, run inside this repository's checkout.
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+
+LIMIT = 2000
+
+
+def main() -> int:
+    run = subprocess.run(
+        ["gh", "issue", "list", "--state", "all", "--limit", str(LIMIT),
+         "--json", "number,title,state,closedAt,labels,body"],
+        capture_output=True, text=True, timeout=50, check=False,
+    )
+    if run.returncode != 0:
+        print(run.stderr.strip() or "forge-issues: gh issue list failed", file=sys.stderr)
+        return 1
+    try:
+        raw = json.loads(run.stdout)
+    except json.JSONDecodeError:
+        print("forge-issues: gh printed no JSON", file=sys.stderr)
+        return 1
+    if len(raw) >= LIMIT:
+        print(f"forge-issues: {LIMIT} issues or more; the list would be cut short", file=sys.stderr)
+        return 1
+    out = [{"number": i["number"], "title": i["title"], "state": str(i["state"]).lower(),
+            "closed_at": i.get("closedAt") or None,
+            "labels": [lb["name"] for lb in i.get("labels") or []],
+            "body": i.get("body") or ""} for i in raw]
+    print(json.dumps(out))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,80 @@
+{
+  "sha": "63b2d7f57362bc4a5d1946fe0f77a9c9f0d4e370",
+  "build_sha": "e8208ec2ccd065479a953c3999c3ad9f610b650a",
+  "build_record": "build-04",
+  "approval_sha": "243a9c2190795c432fa08662722648349a71ebcf",
+  "at": "2026-09-30T01:48:35Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "e51e73f0a9e066d70a351c714e8707e58619aad0",
+    "conclusions": [
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "Missing issue fields are accepted as valid output",
+      "specimen": "attavo/issues.py:_shape_error and read_issues",
+      "retires": "Acceptance of the wrong-shape handling as complete",
+      "rejection_test": "test_an_entry_missing_closed_at_labels_or_body_is_not_read",
+      "severity": "Blocking when a tenant command omits any required field: closed_at is silently changed to None, labels to [], and body/claims to an empty body/None instead of returning \u201cnot read\u201d."
+    }
+  ],
+  "tests_named": [
+    "test_an_entry_missing_closed_at_labels_or_body_is_not_read"
+  ],
+  "commits": [],
+  "stub_ratio": 1.0,
+  "tokens": {
+    "input": 146113,
+    "output": 2308
+  },
+  "cost_usd": null,
+  "wall_clock_s": 64.03,
+  "status": "pass",
+  "report_class": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 10,
+  "item": "267",
+  "product_version": "v0.31.0-4-g3e16140",
+  "product_pin": "v0.30.0"
+}

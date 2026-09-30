@@ -418,7 +418,7 @@ def test_only_load_record_parses_record_file_content() -> None:
     """Acceptance 6: _load_record is the one place in this repository
     that turns a <stage>-NN.json record's bytes into a dict; parse_attempts
     and load_records both read through it rather than calling json.loads
-    themselves. `git grep -n "json.loads(" bin/attavo` still finds ten
+    themselves. `git grep -n "json.loads(" bin/attavo` still finds eleven
     other sites -- a schema file, attavo test's own cache of exit-0 runs
     under the git directory (never a record), an adapter's conformance.json (read
     twice: once for its declared reports, once for R3's own
@@ -429,9 +429,10 @@ def test_only_load_record_parses_record_file_content() -> None:
     own read of the forge checks a drive pass already wrote (issue #217,
     ATTAVO_FORGE_CHECKS), and the Plan store's two: a version
     of a store document, and the file `attavo plan put` is given -- working
-    material outside git, never a record."""
+    material outside git, never a record -- and the tenant's issues as
+    [forge].issues_command prints them."""
     text = "\n".join(p.read_text() for p in sorted((ROOT / "attavo").rglob("*.py")))
-    assert text.count("json.loads(") == 11, (
+    assert text.count("json.loads(") == 12, (
         "a new json.loads( site was added; review it against issue #60 acceptance 6 "
         "and update this count")
     assert "data = json.loads(path.read_text())" in text

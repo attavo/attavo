@@ -1,0 +1,61 @@
+{
+  "sha": "93f25239de943ed5c4e6f4eec75ff1453687e88b",
+  "record_stage": "build",
+  "record": "build-02",
+  "at": "2026-09-30T00:57:23Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 199998,
+    "output": 1954
+  },
+  "cost_usd": null,
+  "wall_clock_s": 53.571,
+  "status": "done",
+  "class": "unclassed",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "adapters/claude-code/README.md",
+      "symbol": "Keys / auth",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "adapters/claude-code/run",
+      "symbol": "transient_detail",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "attavo/drive.py",
+      "symbol": "_signatures_match",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "The build did not reach the item: the configured Claude Code subscription login again failed because its OAuth session had expired and could not be refreshed. Authentication failures are deliberately not classified as transient vendor-capacity failures, and this changes neither the specification nor the definition of done. Reauthenticate the operator\u2019s Claude Code subscription session before trying again. Because build-01 and build-02 have the same non-null stop signature, the early-stop guard forbids an automatic third attempt; after reauthentication, resume explicitly with `attavo drive 267 --again --by LOGIN`.",
+    "patch": null,
+    "question": null,
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": []
+  },
+  "question": null,
+  "record_version": 3,
+  "item": "267",
+  "product_version": "v0.30.0-60-g5df6926",
+  "product_pin": "v0.30.0"
+}

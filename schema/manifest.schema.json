@@ -97,7 +97,7 @@
     },
     "forge": {
       "type": "object",
-      "description": "The tenant's own commit-status and issue-tracking reads. The product names no vendor: both keys are commands the tenant supplies. Optional; attavo verify refuses without checks_command, and attavo file-findings refuses without file_issue_command, but neither key requires the other.",
+      "description": "The tenant's own commit-status and issue-tracking reads. The product names no vendor: every key is a command the tenant supplies. Optional; attavo verify refuses without checks_command, and attavo file-findings refuses without file_issue_command, but neither key requires the other.",
       "additionalProperties": false,
       "properties": {
         "checks_command": {
@@ -113,6 +113,11 @@
         "file_issue_command": {
           "type": "string",
           "description": "Reads one finding as JSON on stdin and files it as a tenant issue. attavo file-findings runs it once per finding in the item's latest verify record.",
+          "minLength": 1
+        },
+        "issues_command": {
+          "type": "string",
+          "description": "Takes nothing; prints the tenant's issues, open and closed, as one JSON list of {number, title, state (open or closed), closed_at, labels, body}. The product parses each body's \"## Claims\" section itself. attavo frontier runs it once per read; absent, every reader that needs issues says \"not read: no [forge].issues_command\".",
           "minLength": 1
         },
         "attestation_command": {

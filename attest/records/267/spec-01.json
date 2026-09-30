@@ -1,0 +1,19 @@
+{
+  "sha": "9f328be47311b149144abe7c4722ef5006130040",
+  "spec_sha": "9f328be47311b149144abe7c4722ef5006130040",
+  "at": "2026-09-30T00:54:25Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "the-product-reads-issues-and-their-claims-through-the-tenants-command.sh",
+      "on_tree": 2,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "record_version": 2,
+  "item": "267",
+  "product_version": "v0.30.0",
+  "product_pin": "v0.30.0"
+}
