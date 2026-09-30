@@ -14,7 +14,8 @@ edges) are closed or placed in an earlier wave, whose Claims overlap no
 claim already placed in the wave, none still held in wave 0, and -- strict
 opportunism (ruled 2026-09-29) -- none of an open issue ranked above it
 that is not yet placed, ready or not: a lower-ranked issue never takes a
-path a higher-ranked one wants. Wave k+1 walks what is left as if the
+path a higher-ranked one wants -- unless that issue waits on it, directly
+or through others, since a predecessor never yields to its own dependents. Wave k+1 walks what is left as if the
 waves before it had merged. Overlap is attavo.claims.overlap, the
 product's only rule. An issue with no Claims is not placed: nothing shows
 it disjoint from anything. Every placed issue carries a why line for each
@@ -109,6 +110,17 @@ def compute(body: dict[str, Any], issues: list[Issue], flights: list[dict[str, A
     for g in body.get("edges", []):
         preds.setdefault(g["to"], []).append((g["from"], g["type"]))
 
+    def ancestors(n: int) -> set[int]:
+        """Every issue n waits on, directly or through others."""
+        seen: set[int] = set()
+        stack = [p for p, _ in preds.get(n, [])]
+        while stack:
+            p = stack.pop()
+            if p not in seen:
+                seen.add(p)
+                stack += [q for q, _ in preds.get(p, [])]
+        return seen
+
     def title(n: int) -> str:
         return by_number[n]["title"] if n in by_number else f"#{n} (not read from the forge)"
 
@@ -175,6 +187,10 @@ def compute(body: dict[str, Any], issues: list[Issue], flights: list[dict[str, A
                     blocked = True
             for m in remaining[:idx]:
                 if placed_wave.get(m) is not None:
+                    continue
+                if n in ancestors(m):
+                    # m waits on n: n never yields to its own dependents,
+                    # or a rank that disagrees with an edge deadlocks both.
                     continue
                 hit = _overlaps(mine, by_number[m]["claims"] or [])
                 if hit:
