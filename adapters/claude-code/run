@@ -754,6 +754,29 @@ def transient_detail(response: dict) -> str | None:
     return text if any(marker in low for marker in TRANSIENT_MARKERS) else None
 
 
+# Issue #288: the CLI reports its own authentication failure as a
+# structured field on a stream line ("error": "authentication_failed",
+# #267 build-01 and build-02), then exits non-zero with no result line.
+# That is the operator's act (sign in again), never a retry and never a
+# question for counsel, so it is classed on this adapter's report line
+# from the field, not from the message's words.
+AUTH_ERRORS = ("authentication_failed",)
+
+
+def auth_failure(raw: str) -> str | None:
+    """The first stream line's own text whose "error" field names an
+    authentication failure; the error value itself when that line
+    carries no text; None when no line does."""
+    for line in raw.splitlines():
+        obj = parse_stream_line(line)
+        if obj is None or obj.get("error") not in AUTH_ERRORS:
+            continue
+        content = (obj.get("message") or {}).get("content") or []
+        texts = [c.get("text") for c in content if isinstance(c, dict) and c.get("text")]
+        return texts[0] if texts else str(obj.get("error"))
+    return None
+
+
 def subagent_refusal(response: dict) -> str | None:
     """None if response carries no spawned background work; else the
     refusal naming the counts (issue #88, class B). Checked on the
@@ -964,6 +987,10 @@ def invoke_once(cmd: list[str], responses: list[dict] | None, call_index: int,
     raw, result, returncode = invoke_stream(cmd, events_path, load_canned_stream())
     if raw.strip():
         print(raw)
+    auth = auth_failure(raw)
+    if auth is not None:
+        print(json.dumps({"class": "environment", "detail": auth}))
+        return 1, None
     if returncode != 0:
         return returncode, None
     if result is None:

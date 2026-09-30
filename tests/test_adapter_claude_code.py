@@ -153,3 +153,36 @@ def test_claude_code_stream_missing_result_line_fails(tmp_path: Path) -> None:
         {"type": "text", "text": "still working"}]}}]
     run = run_with_stream(tmp_path, stream)
     assert run.returncode == 1
+
+
+AUTH_STREAM: list[dict[str, Any]] = [
+    {"type": "system", "subtype": "init"},
+    {"type": "assistant", "error": "authentication_failed", "is_api_error_message": True,
+     "message": {"content": [{"type": "text",
+                              "text": "Failed to authenticate: OAuth session expired and could not be refreshed"}]}},
+]
+
+
+def test_claude_code_classes_an_authentication_failure_as_environment_from_the_field(tmp_path: Path) -> None:
+    """#267 build-01 and build-02: the CLI's own "error":
+    "authentication_failed" field makes the report line's class
+    environment (the operator's act, never retried), with the CLI's own
+    words as the detail -- read from the field, not the text."""
+    run = run_with_stream(tmp_path, AUTH_STREAM)
+    assert run.returncode == 1
+    last = json.loads(run.stdout.strip().splitlines()[-1])
+    assert last == {"class": "environment",
+                    "detail": "Failed to authenticate: OAuth session expired and could not be refreshed"}
+
+
+def test_claude_code_does_not_class_other_stream_errors_or_matching_words_as_environment(tmp_path: Path) -> None:
+    """Another error value, or the same words with no error field, is not
+    an authentication failure: no environment report line."""
+    other = [dict(AUTH_STREAM[0]), {**AUTH_STREAM[1], "error": "invalid_request"}]
+    words = [dict(AUTH_STREAM[0]), {k: v for k, v in AUTH_STREAM[1].items() if k != "error"}]
+    for i, lines in enumerate((other, words)):
+        sub = tmp_path / str(i)
+        sub.mkdir()
+        run = run_with_stream(sub, lines)
+        assert run.returncode == 1
+        assert '"class": "environment"' not in run.stdout

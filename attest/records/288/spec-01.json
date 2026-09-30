@@ -1,0 +1,15 @@
+{
+  "sha": "5c4e5cb42f7877def00781a2365d95cf8c52d008",
+  "spec_sha": "5c4e5cb42f7877def00781a2365d95cf8c52d008",
+  "at": "2026-09-30T02:19:43Z",
+  "status": "refused",
+  "approval_sha": null,
+  "criteria": [],
+  "refusal": "class: fix with root cause classification-by-reading-prose; a root-cause item is core",
+  "class": "fix",
+  "research": "not required by policy",
+  "record_version": 3,
+  "item": "288",
+  "product_version": "v0.31.0",
+  "product_pin": "v0.31.0"
+}

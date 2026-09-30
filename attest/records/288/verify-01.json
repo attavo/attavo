@@ -1,0 +1,80 @@
+{
+  "sha": "d218727126bb28dfa7732c0899590c81b356dc1b",
+  "build_sha": "b422183faa30d6af806843c22cbe9a016f64dfd6",
+  "build_record": "build-01",
+  "approval_sha": "78149b4d83b76e62e2a5fe03fd4a204f9221b7aa",
+  "at": "2026-09-30T02:29:01Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "b9a807cf33391e91307421e5f42c3a50a990f8e4",
+    "conclusions": [
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "Authentication classification can crash before emitting the environment report",
+      "specimen": "adapters/claude-code/run: auth_failure",
+      "retires": "The untested assumption that every authentication-failure line has an object-valued `message`; the approved requirement says any stream line carrying `\"error\": \"authentication_failed\"` is classified",
+      "rejection_test": "test_claude_code_classes_authentication_failure_with_non_object_message_as_environment",
+      "severity": "Blocking when an `authentication_failed` stream object has a missing-schema or scalar `message`: `(obj.get(\"message\") or {}).get(...)` raises `AttributeError`, so the adapter emits no report line and the stop remains unclassified instead of `environment`."
+    }
+  ],
+  "tests_named": [
+    "test_claude_code_classes_authentication_failure_with_non_object_message_as_environment"
+  ],
+  "commits": [],
+  "stub_ratio": 1.0,
+  "tokens": {
+    "input": 106601,
+    "output": 1504
+  },
+  "cost_usd": null,
+  "wall_clock_s": 38.716,
+  "status": "pass",
+  "report_class": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 10,
+  "item": "288",
+  "product_version": "v0.31.0-21-g7a5cbfb",
+  "product_pin": "v0.31.0"
+}

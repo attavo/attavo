@@ -1,0 +1,21 @@
+{
+  "sha": "fd5d0fe7b812e3945ef9b4f466c51f3f2f2a6640",
+  "spec_sha": "fd5d0fe7b812e3945ef9b4f466c51f3f2f2a6640",
+  "at": "2026-09-30T02:22:12Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "an-authentication-failure-is-the-operators-act.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "class": "core",
+  "research": "not required by policy",
+  "record_version": 3,
+  "item": "288",
+  "product_version": "v0.31.0",
+  "product_pin": "v0.31.0"
+}
