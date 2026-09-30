@@ -7,6 +7,7 @@ version = "v0.30.0"
 checks_command = "python3 .attavo/bin/forge-checks"
 check_log_command = "python3 .attavo/bin/forge-check-log"
 file_issue_command = "python3 .attavo/bin/file-issue"
+issues_command = "python3 .attavo/bin/forge-issues"
 attestation_command = "sh .attavo/bin/forge-attestation"
 sealed_since = "83fcbc6863fdb65956b77768c66c2103d221521b"
 

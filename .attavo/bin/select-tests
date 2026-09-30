@@ -51,6 +51,7 @@ MODULE_TESTS: dict[str, tuple[str, ...]] = {
                          "tests/test_sealed_since_default.py"),
     "attavo/drive.py": ("tests/test_drive.py",),
     "attavo/filing.py": ("tests/test_file_findings.py", "tests/test_file_stops.py"),
+    "attavo/issues.py": ("tests/test_issues.py",),
     "attavo/ledger.py": ("tests/test_ledger.py",),
     "attavo/plan.py": ("tests/test_plan.py",),
     "attavo/record_only.py": ("tests/test_record_only.py",),
@@ -65,6 +66,7 @@ MODULE_TESTS: dict[str, tuple[str, ...]] = {
     "schema/plan.schema.json": ("tests/test_plan.py",),
     "schema/manifest.schema.json": ("tests/test_self_tenancy.py", "tests/test_record_schemas.py",
                                     "tests/test_testtool.py"),
+    ".attavo/bin/forge-issues": ("tests/test_issues.py",),
     ".attavo/bin/select-tests": ("tests/test_self_tenancy.py", "tests/test_testtool.py"),
 }
 
