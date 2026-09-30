@@ -1,0 +1,88 @@
+{
+  "sha": "3e33fc7e115e5b5cf32df2efdde97a4b78601e77",
+  "build_sha": "59f005e3ded28be20dd5dd6f5c3fc2b205e3bf4d",
+  "build_record": "build-01",
+  "approval_sha": "d289e294e01680aeed85dddd3c2b6147559f3384",
+  "at": "2026-09-30T02:37:10Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "61815b277a4737b4f42a8748d3bd57ffd73a1cf8",
+    "conclusions": [
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "Class parsing skips the normal `## Problem` section",
+      "specimen": "attavo/issues.py: parse_class",
+      "retires": "The assumption that the existing class test covers forge bodies formatted like approved specs",
+      "rejection_test": "test_class_is_read_from_within_the_problem_section_of_a_spec_shaped_issue_body",
+      "severity": "Blocking whenever an issue body begins with `## Problem`; its declared class becomes None or is incorrectly replaced by a label."
+    },
+    {
+      "title": "Started records are mistaken for completed stage records",
+      "specimen": "attavo/frontier.py: branch_state",
+      "retires": "The untested assumption that record filename stage alone determines an item branch's state",
+      "rejection_test": "test_branch_state_distinguishes_started_markers_from_completed_records",
+      "severity": "Blocking whenever an item branch carries `approval-NN.started` or `spec-NN.started`; it is reported as approved or spec-refused before a completed record establishes that state."
+    }
+  ],
+  "tests_named": [
+    "test_class_is_read_from_within_the_problem_section_of_a_spec_shaped_issue_body",
+    "test_branch_state_distinguishes_started_markers_from_completed_records"
+  ],
+  "commits": [],
+  "stub_ratio": 1.0,
+  "tokens": {
+    "input": 337804,
+    "output": 3273
+  },
+  "cost_usd": null,
+  "wall_clock_s": 94.009,
+  "status": "pass",
+  "report_class": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 10,
+  "item": "281",
+  "product_version": "v0.31.0-21-g7a5cbfb",
+  "product_pin": "v0.31.0"
+}
