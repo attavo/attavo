@@ -800,6 +800,50 @@ def test_proof_four_reads_an_error_event_as_the_tools_own_words(tmp_path: Path) 
             assert "tool's own error line is owed" in p["reason"], name
 
 
+def test_proof_four_reads_an_api_error_message_as_the_tools_own_words(tmp_path: Path) -> None:
+    """Item 267, 2026-09-30: Claude Code's login had expired, and the tool
+    reported it as its own assistant message flagged
+    `"is_api_error_message": true`, then the adapter exited. The cause is
+    in the log, in the tool's words, so proof four does not owe a line.
+    The same event with no text, or a text block that is blank, says
+    nothing and still owes it."""
+    init = '{"type":"system","subtype":"init","session_id":"s"}\n'
+    exit_line = "[adapter exited 1]"
+    build = {
+        "status": "failed", "record_version": 3,
+        "stop": {"class": "unclassed", "provenance": "product", "detail": exit_line},
+    }
+
+    def api_error(content: object) -> str:
+        return json.dumps({"type": "assistant", "error": "authentication_failed",
+                           "is_api_error_message": True,
+                           "message": {"role": "assistant", "content": content}}) + "\n"
+
+    cases = {
+        "with_text": (api_error([{"type": "text", "text": "Failed to authenticate: OAuth session "
+                                                           "expired and could not be refreshed"}]), True),
+        "blank_text": (api_error([{"type": "text", "text": "  "}]), False),
+        "no_content": (api_error([]), False),
+        "not_flagged": ('{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n', False),
+    }
+    for name, (error_line, holds) in cases.items():
+        root = tmp_path / name
+        root.mkdir()
+        (root / "attavo.toml").write_text('[paths]\nrecords = "records"\n')
+        init_repo(root, "install")
+
+        records = root / "records" / "1"
+        records.mkdir(parents=True)
+        (records / "build-01.json").write_text(json.dumps(build))
+        (records / "build-01.log").write_text(init + error_line + exit_line)
+        commit_all(root, f"a failed build whose log has an API error message: {name}")
+
+        p = run_doctor(root)["no-stop-lacks-cause"]
+        assert p["holds"] is holds, (name, p["reason"])
+        if not holds:
+            assert "tool's own error line is owed" in p["reason"], name
+
+
 def test_doctor_proof_four_fails_on_an_unclassed_stop_with_no_detail(tmp_path: Path) -> None:
     """An unclassed stop's whole contract is its detail (issue #89):
     with none, the record is exactly as unexplained as no stop at all."""

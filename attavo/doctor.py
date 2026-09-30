@@ -605,7 +605,11 @@ def _log_owes_tool_error(log: str | None) -> bool:
     marker, nothing before it at all, still owes the same line. An
     `error` event with a non-empty string `message` is the tool's own
     error delivered as an event (issue #200: "Selected model is at
-    capacity"), so it owes nothing."""
+    capacity"), so it owes nothing. So is an API error the tool reports as
+    its own assistant message -- Claude Code's `"is_api_error_message":
+    true` event, whose text is the tool's words ("Failed to authenticate:
+    OAuth session expired and could not be refreshed", item 267 build-01
+    and build-02, 2026-09-30) -- when that text is non-empty."""
     if not log:
         return False
     lines = [l for l in log.splitlines() if l.strip()]
@@ -619,7 +623,23 @@ def _log_owes_tool_error(log: str | None) -> bool:
             message = parsed.get("message")
             if isinstance(message, str) and message:
                 return False
+        if isinstance(parsed, dict) and parsed.get("is_api_error_message") is True:
+            if _api_error_text(parsed):
+                return False
     return True
+
+
+def _api_error_text(event: dict[str, Any]) -> str:
+    """The text of an API error an adapter's tool delivered as its own
+    assistant message: the non-empty text blocks of message.content,
+    joined. Empty when there is none, which owes the line still."""
+    message = event.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return ""
+    texts = [b.get("text") for b in content
+             if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)]
+    return " ".join(t.strip() for t in texts if t and t.strip())
 
 
 def proof_no_stop_lacks_cause(root: Path, m: dict[str, Any] | None) -> Proof:
