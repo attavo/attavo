@@ -1,0 +1,58 @@
+{
+  "sha": "e18ec719430a0e660297b96f98e77915a4acc264",
+  "start_sha": "1a1758a7b78026a09843ef8f2726cbe243b758d9",
+  "spec_sha": "9f328be47311b149144abe7c4722ef5006130040",
+  "approval_sha": "243a9c2190795c432fa08662722648349a71ebcf",
+  "at": "2026-09-30T01:03:28Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.285 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "the-product-reads-issues-and-their-claims-through-the-tenants-command.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q -m 'not own_records'",
+    "count": 4,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 1037382,
+    "output": 5526
+  },
+  "cost_usd": 0.5319894000000002,
+  "wall_clock_s": 149.426,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "refusal_kind": null,
+  "report_class": null,
+  "retry_of": "build-02",
+  "steer": "counsel-02",
+  "stop": null,
+  "record_version": 11,
+  "item": "267",
+  "product_version": "v0.30.0-63-g61c4fb4",
+  "product_pin": "v0.30.0"
+}
