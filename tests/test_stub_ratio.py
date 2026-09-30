@@ -77,7 +77,6 @@ def test_verify_records_the_ratio_and_no_longer_carries_the_two_fields_nothing_c
     add_bare_remote(root, tmp_path)
     # on the item's own branch, as a real item is: the diff under review is
     # the branch's work against the default branch, and drive pushes as it goes
-    git(root, "checkout", "-q", "-b", "attavo/1-x")
     approve_item(root)
     assert drive(root, "1").returncode == 0
     assert drive(root, "1").returncode == 0
@@ -96,7 +95,6 @@ def test_a_returned_review_carries_the_ratio_too(tmp_path: Path) -> None:
     select_only_tests_dir(root)
     add_forge(root, RED_FORGE)
     add_bare_remote(root, tmp_path)
-    git(root, "checkout", "-q", "-b", "attavo/1-x")
     # the stub's one file says what the fixture executor will write, so the
     # share is 1.0 and a constant 0.0 cannot pass for it
     (root / "specs" / "1" / "stub" / "built.txt").write_text("built\n")

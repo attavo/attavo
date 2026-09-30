@@ -50,6 +50,7 @@ MODULE_TESTS: dict[str, tuple[str, ...]] = {
                          "tests/test_proof_five_elsewhere.py",
                          "tests/test_sealed_since_default.py"),
     "attavo/drive.py": ("tests/test_drive.py",),
+    "attavo/workcopy.py": ("tests/test_working_copy.py",),
     "attavo/filing.py": ("tests/test_file_findings.py", "tests/test_file_stops.py"),
     "attavo/ledger.py": ("tests/test_ledger.py",),
     "attavo/plan.py": ("tests/test_plan.py",),

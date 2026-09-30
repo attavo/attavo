@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from helpers import commit_all, git, make_tenant
+from helpers import commit_all, git
+from helpers import make_tenant as make_fixture_tenant
 from test_attest_time import INVOCATIONS, make_item
 from test_drive import (
     GREEN_FORGE,
@@ -36,6 +37,14 @@ from test_drive import (
 
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA = json.loads((ROOT / "schema" / "drive-report.schema.json").read_text())
+
+
+def make_tenant(tmp_path: Path, fixture: str, name: str | None = None) -> Path:
+    """On the item's own branch, where a pass runs in place: from any other
+    branch a pass works in ../attavo-worktree-N instead."""
+    root = make_fixture_tenant(tmp_path, fixture, name)
+    git(root, "checkout", "-q", "-b", "attavo/1-x")
+    return root
 
 
 def report(root: Path, item: str = "1", env: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -290,6 +299,7 @@ def test_report_reads_a_merged_item_as_merged(tmp_path: Path) -> None:
     """The screen showed #204 as waiting, its pull request "not read", after
     it had merged: the branch survived and no view read the history."""
     root, merge = make_item(tmp_path, INVOCATIONS)
+    git(root, "checkout", "-q", "attavo/1-x")
     run = run_attavo(root, "drive", "1", "--report")
     assert run.returncode == 0, run.stdout + run.stderr
     out = json.loads(run.stdout)

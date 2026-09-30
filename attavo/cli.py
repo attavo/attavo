@@ -293,6 +293,22 @@ latest build -- still run over whatever records exist. merge_group and a
 push to main still demand the whole chain. See issue #69's lane for the
 full rules it enforces.
 
+drive N from the tenant's own checkout (any branch but attavo/N-*) works in
+the item's working copy, ../attavo-worktree-N, which the pass ensures: made
+on origin's one attavo/N-* branch at its tip when absent, pruned and made
+again when git lists it but its directory is gone, fast-forwarded when
+behind, its executor- or driver-authored unpushed commits pushed as a
+fast-forward. A directory git does not list, tracked changes, or a commit
+origin lacks by anyone else is refused, and nothing is deleted or reset.
+--report there reads origin's branch in a detached worktree removed after.
+When the report reads merged, the pass removes the working copy with a plain
+`git worktree remove`, never --force, only when it is tracked-clean, no
+marker lacks its record, and its HEAD is in origin's default branch; its
+<git-dir>/attavo moves to <common git dir>/attavo/archive/<N>/ first, and
+anything short of that is reported and the copy stays. `drive --all`, run
+there, passes every origin attavo/<N>-* whose item is not merged, and every
+existing copy whose item is merged.
+
 drive (reconciler R2) is one short pass: it fast-forwards its working copy
 to origin's branch (never while a worker holds it), reads the item's
 report (attavo.report, issue #206) exactly as --report would, and acts at

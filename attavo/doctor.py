@@ -72,7 +72,7 @@ def proof_every_gate_rejects(root: Path, m: dict[str, Any] | None) -> Proof:
     return p.hold(f"{len(gates)} gate(s) rejected their fixture")
 
 
-def _merges_reachable(root: Path) -> tuple[list[dict[str, Any]], str | None]:
+def _merges_reachable(root: Path, ref: str | None = None) -> tuple[list[dict[str, Any]], str | None]:
     """(merges, refusal): every merge commit on the default branch's own
     first-parent line -- sha, parents, and its own first-parent diff --
     read by one process rather than the git log plus one git diff per
@@ -108,9 +108,9 @@ def _merges_reachable(root: Path) -> tuple[list[dict[str, Any]], str | None]:
     current_branch = subprocess.run(
         ["git", "-C", str(root), "symbolic-ref", "-q", "--short", "HEAD"],
         capture_output=True, text=True, check=False)
-    default_ref = ("HEAD" if current_branch.returncode == 0
-                   and current_branch.stdout.strip() == default_branch
-                   else default_remote_ref)
+    default_ref = ref or ("HEAD" if current_branch.returncode == 0
+                          and current_branch.stdout.strip() == default_branch
+                          else default_remote_ref)
     try:
         out = git(root, "log", default_ref, "--first-parent", "--merges",
                  "--diff-merges=first-parent", "--name-only",

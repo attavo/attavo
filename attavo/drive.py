@@ -46,6 +46,7 @@ from attavo.records import (
 )
 from attavo.stops import RETRYABLE_CLASSES, counsel_record_for, signature_of
 from attavo.verify import cmd_verify, read_forge_checks
+from attavo import workcopy
 
 if TYPE_CHECKING:
     from attavo.types import DriveReport
@@ -967,22 +968,41 @@ def _until_ready(root: Path, m: dict[str, Any], item_id: str, again: str | None)
 
 
 def _drive_all() -> int:
-    """--all: one pass, in its own process, in every ../attavo-worktree-N
-    beside this checkout -- each one derives its own item from its own
-    attavo/N-* branch. Every line either prints is prefixed with the
-    worktree's own directory name, so an operator reading them together
-    can tell which item each line is about."""
+    """--all, from the tenant's checkout: one pass, in its own process
+    (`attavo drive N`, which ensures the working copy), for every origin
+    attavo/<N>-* branch whose item is not merged, and one for every
+    existing ../attavo-worktree-N whose item is merged, to remove it.
+    Every line either prints is prefixed with the working copy's own
+    directory name, so an operator reading them together can tell which
+    item each line is about."""
     root = Path(".").resolve()
-    siblings = sorted(p for p in root.parent.glob("attavo-worktree-*") if p.is_dir())
-    if not siblings:
-        print("attavo drive: --all found no ../attavo-worktree-N beside this checkout")
+    if workcopy.on_item_branch(root):
+        print("attavo drive: --all runs from the tenant's checkout, not from an item's working copy",
+              file=sys.stderr)
+        return 2
+    m = read_manifest(root)
+    if m is None:
+        print(f"attavo drive: no {MANIFEST} at {root}", file=sys.stderr)
+        return 2
+    try:
+        on_origin = workcopy.fetch_origin_items(root)
+    except RuntimeError as exc:
+        print(f"attavo drive: stopped: could not read origin's attavo/* branches: {exc}")
+        return 1
+    have = workcopy.existing_copy_items(root)
+    items = sorted(set(on_origin) | set(have), key=int)
+    if not items:
+        print("attavo drive: --all found no attavo/<N>-* branch on origin and no ../attavo-worktree-N")
         return 0
+    merged = workcopy.merged_items(root, m["paths"]["records"], items)
     worst = 0
-    for copy in siblings:
-        run = subprocess.run([sys.executable, str(PRODUCT_ROOT / "bin" / "attavo"), "drive"],
-                             cwd=str(copy), capture_output=True, text=True, check=False)
+    for n in items:
+        if n in merged and n not in have:
+            continue
+        run = subprocess.run([sys.executable, str(PRODUCT_ROOT / "bin" / "attavo"), "drive", n],
+                             cwd=str(root), capture_output=True, text=True, check=False)
         for line in (run.stdout + run.stderr).splitlines():
-            print(f"{copy.name}: {line}")
+            print(f"attavo-worktree-{n}: {line}")
         worst = max(worst, run.returncode)
     return worst
 
@@ -1047,6 +1067,19 @@ def cmd_drive(argv: list[str]) -> int:
             print("attavo drive: --report reads and does nothing else; drop --until-ready "
                   "and --again", file=sys.stderr)
             return 2
+        if not workcopy.on_item_branch(root):
+            copy = workcopy.copy_path(root, item_id)
+            if copy.resolve() in workcopy.registered_copies(root) and copy.is_dir():
+                root = copy
+            else:
+                with workcopy.read_only_copy(root, item_id) as (tree, why):
+                    if tree is None:
+                        print(f"attavo drive: stopped: {why}")
+                        return 1
+                    from attavo.report import drive_report
+                    print(json.dumps(drive_report(tree, m, item_id), indent=2))
+                    return 0
+        os.chdir(root)
         refusal = fast_forward_to_origin(root, m, item_id)
         if refusal:
             print(f"attavo drive: note: {refusal}", file=sys.stderr)
@@ -1054,7 +1087,27 @@ def cmd_drive(argv: list[str]) -> int:
         print(json.dumps(drive_report(root, m, item_id), indent=2))
         return 0
 
+    if not workcopy.on_item_branch(root):
+        ensured = workcopy.ensure(root, item_id, m["paths"]["records"])
+        if ensured.path is None:
+            if ensured.refusal is None:
+                print(f"attavo drive: merged: item {item_id} is merged on origin and has no working copy")
+                return 0
+            print(f"attavo drive: stopped: {ensured.refusal}")
+            return 1
+        root = ensured.path
+        os.chdir(root)
+        m = read_manifest(root) or m
+
     if until_ready:
-        return _until_ready(root, m, item_id, again)
-    rc, _ = _pass_once(root, m, item_id, again)
+        rc = _until_ready(root, m, item_id, again)
+        r = None
+    else:
+        rc, r = _pass_once(root, m, item_id, again)
+    if r is None or r["state"] == "merged":
+        from attavo.report import drive_report
+        if (r or drive_report(root, m, item_id))["state"] == "merged":
+            done = workcopy.remove_when_merged(root, item_id, m["paths"]["records"])
+            if done:
+                print(f"attavo drive: {done}")
     return rc
