@@ -1,0 +1,61 @@
+{
+  "sha": "98cfff8a4c1185376f1f77cbe7cdcef1d0b1ed24",
+  "record_stage": "verify",
+  "record": "verify-01",
+  "at": "2026-09-30T01:08:27Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 202210,
+    "output": 2268
+  },
+  "cost_usd": null,
+  "wall_clock_s": 63.375,
+  "status": "done",
+  "class": "returned",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "attest/records/267/verify-01.json",
+      "symbol": "stop",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/attavo/stops.py",
+      "symbol": "returned_stop",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/attavo/drive.py",
+      "symbol": "_budget_stage",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "Verification was correctly returned because the recorded pre-marker forge read found the `doctor` check concluded failure. The counsel-time forge snapshot has no checks for the later marker SHA, so it is unknown\u2014not evidence that the recorded failure became green. A returned review spends the build budget: let drive start the next build attempt and hand it the recorded doctor rejection. The supplied failing-check log could not be read because the forge was unreachable, so this ruling does not infer or prescribe the underlying doctor fix.",
+    "patch": null,
+    "question": null,
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": []
+  },
+  "question": null,
+  "record_version": 3,
+  "item": "267",
+  "product_version": "v0.30.0-63-g61c4fb4",
+  "product_pin": "v0.30.0"
+}
