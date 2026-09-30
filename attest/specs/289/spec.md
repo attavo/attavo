@@ -40,4 +40,4 @@ Retires: a live worker in another checkout on the same host read as died; the fl
 
 ## Criteria
 
-- a-second-checkout-reads-the-holders-heartbeat-where-its-marker-says.sh: `tests/test_pass.py` runs the three new tests and `test_two_passes_at_once_start_one_worker_and_the_loser_says_so`, and all four pass; `attavo/doctor.py` defines `holder_heartbeat_path` and writes the marker's `events` field
+- a-second-checkout-reads-the-holders-heartbeat-where-its-marker-says.sh: on the fixture tenant, with no test runner, `write_invocation_marker` writes `events` as the checkout's own `<git-dir>/attavo`; `read_invocation` reads a marker from this host naming another directory as running with a fresh heartbeat there, running with none yet while younger than the stall bound, and died when older; a marker naming no directory reads died as before; and `tests/test_pass.py` carries the three tests named
