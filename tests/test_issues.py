@@ -129,3 +129,12 @@ def test_this_repositorys_command_translates_the_forges_words_into_the_shape(tmp
     failed = subprocess.run([sys.executable, str(ROOT / ".attavo" / "bin" / "forge-issues")],
                             capture_output=True, text=True, env=env, check=False)
     assert failed.returncode != 0 and failed.stdout == ""
+
+
+def test_the_class_is_read_from_the_body_line_or_a_single_label_and_is_none_otherwise() -> None:
+    assert issues.parse_class("x\n\nClass: core\n\n## Claims\n\n- a\n", []) == "core"
+    assert issues.parse_class("Class: fix\n", ["class:core"]) == "fix", "the body's line is the declaration"
+    assert issues.parse_class("Unclassed: waits for triage.\n", ["class:fix"]) == "fix"
+    assert issues.parse_class("", ["class:fix", "class:core"]) is None
+    assert issues.parse_class("## Claims\n\nClass: core\n", []) is None, "only the problem section declares"
+    assert issues.parse_class("Class: maybe\n", []) is None

@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 from typing import Any, TypedDict
 
+from attavo.spec import CLASS_LINE, CLASSES
 from attavo.testtool import run_bounded
 
 TIMEOUT_S = 60
@@ -35,6 +36,7 @@ class Issue(TypedDict):
     closed_at: str | None
     labels: list[str]
     claims: list[str] | None
+    item_class: str | None
 
 
 def parse_claims(body: str) -> list[str] | None:
@@ -55,6 +57,21 @@ def parse_claims(body: str) -> list[str] | None:
             if path:
                 claims.append(path)
     return claims
+
+
+def parse_class(body: str, labels: list[str]) -> str | None:
+    """The class the operator declared: a "Class: core" or "Class: fix"
+    line in the body (the spec's own line, read by the spec's own
+    pattern), else a class:core or class:fix label. None when neither
+    says, which is the unclassed queue's own reading."""
+    for line in body.splitlines():
+        if line.startswith("## "):
+            break
+        m = CLASS_LINE.match(line)
+        if m and m.group(1) in CLASSES:
+            return m.group(1)
+    found = [lb.split(":", 1)[1] for lb in labels if lb in ("class:core", "class:fix")]
+    return found[0] if len(found) == 1 else None
 
 
 def _shape_error(raw: Any) -> str | None:
@@ -100,5 +117,7 @@ def read_issues(root: Path, m: dict[str, Any]) -> tuple[list[Issue] | None, str 
         return None, f"not read: [forge].issues_command: {bad}"
     issues: list[Issue] = [{"number": x["number"], "title": x["title"], "state": x["state"],
                             "closed_at": x.get("closed_at"), "labels": list(x.get("labels", [])),
-                            "claims": parse_claims(x.get("body", "") or "")} for x in raw]
+                            "claims": parse_claims(x.get("body", "") or ""),
+                            "item_class": parse_class(x.get("body", "") or "", list(x.get("labels", [])))}
+                           for x in raw]
     return sorted(issues, key=lambda i: i["number"]), None

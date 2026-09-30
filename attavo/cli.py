@@ -19,6 +19,7 @@
     attavo plan get [--version V] | put FILE --base V --by LOGIN | log
     attavo plan rank <EPIC|#N> (--before <EPIC|#M> | --last) --by LOGIN
     attavo plan move #N --epic EPIC --by LOGIN
+    attavo frontier [--json]
     attavo stops [N] [--json]
     attavo test [N] [--all | <test>...] [--fresh]
 
@@ -169,6 +170,18 @@ the latest version and its author; log lists versions; rank and move
 change one position or one membership and write the next version. A
 re-rank is a new version, not a commit: priority is working material the
 attestation does not bind to.
+
+frontier [--json] builds the waves from three reads and writes nothing:
+the plan's latest version in the store (the order: epic rank, then issue
+rank; an open issue the plan does not place is Backlog, last), the
+tenant's issues through [forge].issues_command (state, class, Claims),
+and work in flight from git (wave 0). Wave 1 takes each open issue in
+order whose predecessors are closed or placed, whose Claims overlap
+nothing held in flight or already in the wave, and nothing an open issue
+ranked above it claims (strict opportunism); each later wave does the
+same as if the earlier ones had merged. An issue with no Claims is not
+placed. Every issue says why it waits. Epic progress is closed over
+total. No plan, or no issues command, is "not read", exit 2.
 
 test [N] runs the tests [tests].select names for every path the item has
 changed since it left the default branch (refs/remotes/origin/HEAD),
@@ -419,6 +432,7 @@ from attavo.attest import cmd_attest
 from attavo.build import cmd_build
 from attavo.claims import cmd_claims
 from attavo.plan import cmd_plan
+from attavo.frontier import cmd_frontier
 from attavo.counsel import cmd_counsel
 from attavo.doctor import cmd_doctor
 from attavo.drive import cmd_drive, cmd_worker
@@ -477,11 +491,13 @@ def main(argv: list[str]) -> int:
         return cmd_claims(argv[1:])
     if argv[0] == "plan":
         return cmd_plan(argv[1:])
+    if argv[0] == "frontier":
+        return cmd_frontier(argv[1:])
     if argv[0] == "stops":
         return cmd_stops(argv[1:])
     if argv[0] == "test":
         return cmd_test(argv[1:])
     print(f"attavo: unknown subcommand {argv[0]!r}; only doctor, spec-gate, approve, "
           f"approval-status, build, verify, file-findings, file-stops, counsel, record-only, "
-          f"attest, drive, worker, ledger, claims, plan, stops, test exist at this commit", file=sys.stderr)
+          f"attest, drive, worker, ledger, claims, plan, frontier, stops, test exist at this commit", file=sys.stderr)
     return 2

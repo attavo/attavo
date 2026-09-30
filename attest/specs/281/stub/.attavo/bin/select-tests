@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""select-tests: [tests].select for attavo build/verify/test (issue #103,
+made fail-safe by issue #212).
+
+Reads changed paths on stdin, one per line, and prints test identifiers
+on stdout, one per line, for this repository's own test suite:
+
+  - prose (*.md, LICENSE) and this repository's own specs and records
+    (attest/specs/**, attest/records/**) select nothing;
+  - a test file (tests/test_*.py) selects itself, and the whole suite
+    when it no longer exists -- a deletion cannot select itself, and the
+    fail-safe rule below applies to it rather than exempting it (issue
+    #212's review);
+  - a path in MODULE_TESTS (a module of attavo/, and the few files that
+    are one thing's own) selects the tests written for it, and a prefix in
+    PREFIX_TESTS (adapters/, schema/, templates/) the tests written for
+    that directory;
+  - a path this selector does not know -- a module nobody mapped,
+    bin/attavo, scripts/, tests/helpers.py and the fixtures every test
+    stands on, the fixture adapter every build test invokes -- selects the
+    whole suite ("tests", the one path pytest needs to run everything),
+    and one such path is enough to make that the whole answer.
+
+A module that most of the others import (common, records, spec, ...) is
+left out of MODULE_TESTS on purpose: no table of tests-per-module can know
+what it breaks, so it is the whole suite. The forge runs the whole suite
+once, as the required `test` check, in any case.
+
+Usage: <changed paths> | select-tests
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+WHOLE_SUITE = "tests"
+
+SILENT_PREFIXES = ("attest/specs/", "attest/records/")
+
+WHOLE_SUITE_PREFIXES = ("adapters/fixture/",)
+
+MODULE_TESTS: dict[str, tuple[str, ...]] = {
+    "attavo/attest.py": ("tests/test_attest.py", "tests/test_attest_time.py"),
+    "attavo/build.py": ("tests/test_build.py", "tests/test_testtool.py"),
+    "attavo/claims.py": ("tests/test_claims.py",),
+    "attavo/clock.py": ("tests/test_clock.py", "tests/test_retry.py"),
+    "attavo/cli.py": ("tests/test_cli_help.py", "tests/test_testtool.py"),
+    "attavo/counsel.py": ("tests/test_counsel.py",),
+    "attavo/doctor.py": ("tests/test_doctor.py", "tests/test_doctor_sealed.py",
+                         "tests/test_proof_five_elsewhere.py",
+                         "tests/test_sealed_since_default.py"),
+    "attavo/drive.py": ("tests/test_drive.py",),
+    "attavo/workcopy.py": ("tests/test_working_copy.py",),
+    "attavo/filing.py": ("tests/test_file_findings.py", "tests/test_file_stops.py"),
+    "attavo/frontier.py": ("tests/test_frontier.py",),
+    "attavo/issues.py": ("tests/test_issues.py", "tests/test_frontier.py"),
+    "attavo/ledger.py": ("tests/test_ledger.py",),
+    "attavo/plan.py": ("tests/test_plan.py",),
+    "attavo/record_only.py": ("tests/test_record_only.py",),
+    "attavo/report.py": ("tests/test_report.py",),
+    "attavo/store.py": ("tests/test_store.py", "tests/test_plan.py"),
+    "attavo/testtool.py": ("tests/test_testtool.py",),
+    "attavo/types.py": ("tests/test_types_mirror_schemas.py",),
+    "attavo/verify.py": ("tests/test_verify.py", "tests/test_verify_polls.py",
+                         "tests/test_verify_codex_proof.py"),
+    "action.yml": ("tests/test_action_yml.py",),
+    "attavo.toml": ("tests/test_self_tenancy.py", "tests/test_testtool.py"),
+    "schema/plan.schema.json": ("tests/test_plan.py",),
+    "schema/manifest.schema.json": ("tests/test_self_tenancy.py", "tests/test_record_schemas.py",
+                                    "tests/test_testtool.py"),
+    ".attavo/bin/forge-issues": ("tests/test_issues.py",),
+    ".attavo/bin/select-tests": ("tests/test_self_tenancy.py", "tests/test_testtool.py"),
+}
+
+# The modules most of the others import: no table of tests-per-module can
+# know what a change to one of these breaks, so each selects the whole
+# suite, and each is named here so that a new module under attavo/ must be
+# placed -- in MODULE_TESTS or in this tuple -- before the suite accepts it
+# (tests/test_testtool.py).
+SHARED_MODULES: tuple[str, ...] = (
+    "attavo/__init__.py", "attavo/approval.py", "attavo/common.py", "attavo/events.py",
+    "attavo/records.py", "attavo/spec.py", "attavo/stops.py",
+)
+
+PREFIX_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("adapters/claude-code/", ("tests/test_adapters.py", "tests/test_adapter_claude_code.py",
+                               "tests/test_executor_conformance.py")),
+    ("adapters/codex/", ("tests/test_adapter_codex.py", "tests/test_adapters_codex.py",
+                         "tests/test_executor_conformance.py")),
+    ("adapters/", ("tests/test_adapters.py", "tests/test_executor_conformance.py")),
+    ("schema/", ("tests/test_record_schemas.py", "tests/test_attest.py",
+                 "tests/test_types_mirror_schemas.py")),
+    ("templates/", ("tests/test_approve_template.py", "tests/test_coherence_template.py",
+                    "tests/test_spec_gate_template.py", "tests/test_template_app_identity.py",
+                    "tests/test_templates_carry_no_repository_urls.py",
+                    "tests/test_self_tenancy.py")),
+)
+
+
+def repository_root() -> Path:
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def is_prose_or_record(path: str) -> bool:
+    return path.endswith(".md") or path == "LICENSE" or path.startswith(SILENT_PREFIXES)
+
+
+def select_one(path: str) -> tuple[str, ...] | None:
+    """The tests for one changed path, () for none, None for a path this
+    selector does not know."""
+    if is_prose_or_record(path):
+        return ()
+    if path.startswith(WHOLE_SUITE_PREFIXES):
+        return None
+    if path.startswith("tests/test_") and path.endswith(".py") and "/" not in path[len("tests/"):]:
+        # A deleted test file cannot select itself, and the gate must not
+        # pass a deletion unexamined (issue #212's review): fail safe to
+        # the whole suite rather than the () a present file's own removal
+        # would otherwise fall through to.
+        return (path,) if (repository_root() / path).is_file() else None
+    if path in MODULE_TESTS:
+        return MODULE_TESTS[path]
+    for prefix, tests in PREFIX_TESTS:
+        if path.startswith(prefix):
+            return tests
+    return None
+
+
+def select(paths: list[str]) -> list[str]:
+    tests: dict[str, None] = {}
+    for path in paths:
+        found = select_one(path)
+        if found is None:
+            return [WHOLE_SUITE]
+        tests.update(dict.fromkeys(found))
+    return list(tests)
+
+
+def main() -> int:
+    changed = [line.strip() for line in sys.stdin.read().splitlines() if line.strip()]
+    for t in select(changed):
+        print(t)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
