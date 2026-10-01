@@ -1,0 +1,83 @@
+{
+  "sha": "b8f1279de16039ef748136828844166fc32213ed",
+  "build_sha": "d2681831428bac0a7252391ce8d6359c71194389",
+  "build_record": "build-02",
+  "approval_sha": "90ffdfc14e757a0a31db7efc21d2c804a4ecdfff",
+  "at": "2026-10-01T14:13:48Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "9c0330354cb533a643b80ab4d3b056ca92adb000",
+    "conclusions": [
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "The losing checkout still reads the holder\u2019s event stream from the wrong checkout",
+      "specimen": "attavo/drive.py: read_invocation calls _events_path_for(root, stage, nn), which always resolves under the reader\u2019s git directory, even when marker[\"events\"] names the holder\u2019s directory",
+      "retires": "The claim that every liveness input is read from the holder\u2019s checkout, and that a healthy worker in another same-host checkout cannot be falsely recovered",
+      "rejection_test": "test_a_second_checkout_reads_the_holders_recent_events_before_calling_it_hung: create an old marker naming another checkout\u2019s events directory, put a fresh heartbeat and a recent build-01.events.jsonl event there, then assert read_invocation(...).cls == \"running\" rather than \"hung\"",
+      "severity": "Blocking when the marker is older than stall_after_s while the other checkout\u2019s worker has a fresh heartbeat and recent streamed events; harmless before the stall bound or for adapters that do not stream events"
+    }
+  ],
+  "tests_named": [
+    "test_a_second_checkout_on_this_host_reads_the_first_ones_worker_as_running",
+    "test_the_holders_heartbeat_is_read_where_its_marker_says",
+    "test_the_marker_a_pass_writes_names_its_checkouts_heartbeat_directory",
+    "test_a_second_checkout_reads_the_holders_recent_events_before_calling_it_hung"
+  ],
+  "commits": [],
+  "stub_ratio": 1.0,
+  "tokens": {
+    "input": 174690,
+    "output": 2351
+  },
+  "cost_usd": null,
+  "wall_clock_s": 58.126,
+  "status": "pass",
+  "report_class": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 10,
+  "item": "289",
+  "product_version": "v0.32.0-2-gadfb95b",
+  "product_pin": "v0.31.0"
+}
