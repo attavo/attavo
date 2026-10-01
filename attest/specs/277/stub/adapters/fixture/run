@@ -1,0 +1,168 @@
+#!/bin/sh
+# adapters/fixture/run -- see ../README.md for the contract. Exists for the
+# tests and the doctor; it is not an executor, and it never writes a record.
+set -eu
+
+write_name="${ATTAVO_FIXTURE_WRITE:-built.txt}"
+
+if [ -n "${ATTAVO_FIXTURE_TRANSIENT:-}" ]; then
+  # R3: a vendor's capacity, rate, or 5xx refusal, classed on the report
+  # line like every class is -- for the rejection fixture only; a real
+  # adapter's own tool reports this on its own transcript, mapped the
+  # same way non-question already is (issue #88).
+  printf '{"status":"failed","question":null,"class":"transient","detail":"%s","model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0}\n' \
+    "${ATTAVO_FIXTURE_TRANSIENT}, retry after 30s"
+  exit 1
+fi
+
+if [ -n "${ATTAVO_FIXTURE_CEILING_ERROR:-}" ]; then
+  # issue #89: a tool error line matching a declared ceiling (the
+  # specimen is codex's own "input_too_large" on a diff too large to
+  # judge, issue #86) -- for the ceiling/product rejection test only; a
+  # real adapter's own tool prints this, never the adapter itself.
+  echo "Error: input_too_large: request exceeds the maximum context length"
+  exit 1
+fi
+
+echo "ATTAVO_ADAPTER_CONFIG=${ATTAVO_ADAPTER_CONFIG:-}"
+echo "--- ATTAVO_FEEDBACK ---"
+cat "${ATTAVO_FEEDBACK:-/dev/null}" 2>/dev/null || true
+echo "--- end feedback ---"
+
+if [ -n "${ATTAVO_EVENTS:-}" ]; then
+  # issue #26: three canned events, one of each executor kind, so the
+  # conformance suite can assert the shape a real adapter's own mapping
+  # must also produce -- this fixture has no real executor stream to map.
+  at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"at":"%s","kind":"message","text":"fixture: starting"}\n' "$at" >> "$ATTAVO_EVENTS"
+  printf '{"at":"%s","kind":"tool_call","text":"fixture-tool arg1"}\n' "$at" >> "$ATTAVO_EVENTS"
+  printf '{"at":"%s","kind":"tool_result","text":"ok"}\n' "$at" >> "$ATTAVO_EVENTS"
+fi
+
+if [ "${ATTAVO_STAGE:-build}" = "counsel" ]; then
+  # issue #100: a read-only reading of a stop -- the record, its log, and
+  # the diff, all handed by path, plus the tenant manifest and this
+  # product's own root. Answers from a canned file
+  # (ATTAVO_FIXTURE_COUNSEL_RESPONSE) when one is set, so a test controls
+  # class/verdict/citations/proposal exactly; otherwise a canned "person"
+  # verdict, since a fixture has no rules of its own to answer from.
+  echo "--- ATTAVO_COUNSEL_RECORD ---"
+  cat "${ATTAVO_COUNSEL_RECORD:-/dev/null}" 2>/dev/null || true
+  echo "--- end record ---"
+  echo "--- ATTAVO_COUNSEL_LOG ---"
+  cat "${ATTAVO_COUNSEL_LOG:-/dev/null}" 2>/dev/null || true
+  echo "--- end log ---"
+  echo "--- ATTAVO_COUNSEL_DIFF ---"
+  cat "${ATTAVO_COUNSEL_DIFF:-/dev/null}" 2>/dev/null || true
+  echo "--- end diff ---"
+  echo "--- ATTAVO_COUNSEL_PRIOR ---"
+  cat "${ATTAVO_COUNSEL_PRIOR:-/dev/null}" 2>/dev/null || true
+  echo "--- end prior ---"
+  echo "--- ATTAVO_COUNSEL_EVENTS ---"
+  cat "${ATTAVO_COUNSEL_EVENTS:-/dev/null}" 2>/dev/null || true
+  echo "--- end events ---"
+  echo "--- ATTAVO_COUNSEL_READS ---"
+  printf '%s\n' "${ATTAVO_COUNSEL_READS:-}"
+  echo "--- end reads ---"
+  echo "log handed: ${ATTAVO_COUNSEL_LOG:+yes}${ATTAVO_COUNSEL_LOG:-no}"
+  echo "manifest: ${ATTAVO_MANIFEST:-}"
+  echo "product root: ${ATTAVO_PRODUCT_ROOT:-}"
+  if [ -n "${ATTAVO_FIXTURE_COUNSEL_WAIT_FOR:-}" ]; then
+    # holds the run open until a test creates this path (at most 30 s), so
+    # a test can read the worker while counsel is in progress without
+    # sleeping a fixed time for it.
+    waited=0
+    while [ ! -e "${ATTAVO_FIXTURE_COUNSEL_WAIT_FOR}" ] && [ "$waited" -lt 300 ]; do
+      sleep 0.1
+      waited=$((waited + 1))
+    done
+  fi
+  if [ -n "${ATTAVO_FIXTURE_COUNSEL_RESPONSE:-}" ]; then
+    cat "${ATTAVO_FIXTURE_COUNSEL_RESPONSE}"
+    echo
+  else
+    printf '{"model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0,"class":"unclassed","verdict":"person","citations":[],"proposal":{"ruling_text":null,"patch":null,"question":"what should we do about this stop?"}}\n'
+  fi
+  exit 0
+fi
+
+if [ "${ATTAVO_STAGE:-build}" = "verify" ]; then
+  echo "--- ATTAVO_DIFF ---"
+  cat "${ATTAVO_DIFF:-/dev/null}" 2>/dev/null || true
+  echo "--- end diff ---"
+  if [ -n "${ATTAVO_FIXTURE_COMMIT_DURING_VERIFY:-}" ]; then
+    # a verifier that commits anyway (issue #46) -- for the rejection
+    # test only; a real adapter must never do this.
+    echo "should not exist" > verify-side-effect.txt
+    git add verify-side-effect.txt
+    git commit -q -m "fixture: illegitimate commit during verify"
+  fi
+  if [ -n "${ATTAVO_FIXTURE_OMIT_FINDINGS:-}" ]; then
+    # no findings key at all -- the absent-channel case issue #46 fixes,
+    # distinct from an explicit empty list.
+    printf '{"model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0}\n'
+  else
+    # verify is a report, not a commit: one canned finding naming what
+    # the criteria did not assert.
+    printf '{"model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0,"findings":[{"title":"fixture finding","specimen":"fixture","retires":"nothing real","rejection_test":"none","severity":"info"}],"tests_named":["tests/test_fixture.py::test_marker"]}\n'
+  fi
+  exit 0
+fi
+
+if [ -n "${ATTAVO_FIXTURE_QUESTION:-}" ]; then
+  # ATTAVO_FIXTURE_REPORT_CLASS (issue #94): an optional "class" field on
+  # this report line, for a rejection test proving derive_stop reads
+  # payload.get("class") itself rather than scanning refusal/halted/log
+  # text for it -- the question text carries no such wording.
+  class_field=""
+  if [ -n "${ATTAVO_FIXTURE_REPORT_CLASS:-}" ]; then
+    class_field=",\"class\":\"${ATTAVO_FIXTURE_REPORT_CLASS}\""
+  fi
+  printf '{"status":"question","question":"%s","model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":0,"output":0},"cost_usd":0.0%s}\n' \
+    "$ATTAVO_FIXTURE_QUESTION" "$class_field"
+  exit 0
+fi
+
+if [ -n "${ATTAVO_FIXTURE_FOREIGN_COMMIT:-}" ]; then
+  # a commit not authored by the executor identity build exports (issue
+  # #33) -- for the rejection test only; unset the exported GIT_AUTHOR_*
+  # and GIT_COMMITTER_* first, since those env vars outrank -c user.name
+  # in git's own precedence and a real adapter never does either.
+  echo "built" > built.txt
+  git add built.txt
+  env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL \
+    git -c user.name="someone" -c user.email="someone@example.com" \
+    commit -q -m "fixture: a commit not authored by the executor"
+  echo '{"status":"done","question":null,"model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0}'
+  exit 0
+fi
+
+if [ -n "${ATTAVO_FIXTURE_REWIND:-}" ]; then
+  # #289 build-01's executor: a diagnostic `git reset -q HEAD^` after a
+  # commit that never happened, which moved HEAD off the commit the stage
+  # started on -- for the rejection test only.
+  git reset -q HEAD^
+fi
+
+should_write=1
+if [ -n "${ATTAVO_FIXTURE_REQUIRE_FEEDBACK:-}" ]; then
+  should_write=0
+  if [ -s "${ATTAVO_FEEDBACK:-/dev/null}" ]; then
+    should_write=1
+  fi
+fi
+
+if [ "$should_write" = "1" ]; then
+  mkdir -p "$(dirname "$write_name")"
+  echo "built" > "$write_name"
+  if [ -n "${ATTAVO_FIXTURE_NO_COMMIT:-}" ]; then
+    # item 227's executor: the change written into the tree and never
+    # committed, then "done" -- for the rejection tests only.
+    :
+  else
+    git add "$write_name"
+    git commit -q -m "fixture: write $write_name"
+  fi
+fi
+
+echo '{"status":"done","question":null,"model":"fixture","model_version":null,"adapter_version":"fixture-1","tokens":{"input":1,"output":1},"cost_usd":0.0}'

@@ -1,0 +1,930 @@
+#!/usr/bin/env python3
+"""adapters/codex/run -- see README.md (this directory) for the two
+configuration keys, and ../README.md for the shared adapter contract.
+
+The capability read (issue #41, recorded on the issue 2026-09-08 against
+codex-cli 0.153.4): `codex exec review --output-schema <FILE>` ignores
+the schema entirely -- confirmed live against a real planted-defect
+diff, its `-o` output is always free-text prose, never JSON, whatever
+schema is named. This adapter therefore never invokes `codex exec
+review`; both stages feed their own instruction to plain `codex exec -`
+on stdin (confirmed live: this path does honor --output-schema, and
+`-p` is codex's `--profile`, not a prompt flag, so stdin is the only
+channel and it is a positional `-`, not a flag).
+
+Two channels, not one. `--json` prints events to stdout as JSONL
+(thread.started, turn.started, item.*, and a terminal turn.completed or
+turn.failed carrying usage) -- read for the model's own account of
+usage and for the terminal event; codex's own exit code is 1 on
+turn.failed, 0 on turn.completed, read directly, so this adapter reads
+the terminal event for the reason, not for the verdict. The structured
+answer comes from `--output-schema <FILE>` plus `--output-last-message
+<FILE>`, written as one JSON object once the turn completes -- that is
+where findings and tests_named come from; parsing them out of the event
+stream would be the wrong shape.
+
+No model id appears anywhere codex reports -- not the event stream, not
+`codex doctor`, not any config file (confirmed live 2026-09-08; there is
+no ~/.codex/config.toml on this machine at all). [executor.codex].model
+is therefore required, not optional: this adapter refuses before ever
+invoking codex if it is absent, and reports back exactly the id it was
+given, never one derived from output.
+
+auth mirrors claude-code's auth = "subscription": the operator's own
+machine is logged in via a ChatGPT plan, and an OPENAI_API_KEY left in
+the environment would silently switch codex to API billing on a run
+meant for the plan. [executor.codex].auth names the mode this
+invocation is trusted to run under, checked against OPENAI_API_KEY
+alone (deterministic and testable without a live `codex doctor` call,
+which a canned-response or faked-tool_binary test situation cannot
+answer honestly anyway) -- this adapter refuses rather than silently
+falling back when they disagree, because a wrong credential here is a
+bill, not just a wrong answer. cost_usd is therefore always null on
+this adapter (no dollar figure appears anywhere under plan auth, and
+none is invented for API auth either): a codex record carrying a
+non-null cost would be evidence the wrong credential was used, a
+finding about the credential, not a measurement.
+
+Not exercised live by the test suite (judgment is measured, not
+tested); its argument construction is checked by ATTAVO_ADAPTER_DRY_RUN
+(prints {"argv", "instruction", "schema"} instead of running -- argv
+alone would carry no instruction, since it goes in on stdin), and its
+response handling is checked by ATTAVO_ADAPTER_RESPONSE_FILE, which
+feeds a canned {"events": [...JSONL objects...], "final": {...the
+output-file's parsed content, or null...}, "exit_code": N} instead of
+invoking codex -- codex's own canned-response hook, since codex itself
+has none (issue #41). A JSON array of such objects is a queue, one per
+invocation this adapter makes, its last element repeating once
+exhausted; a single object still repeats for every call (issue #88: the
+non-question retry below is a second invocation inside the same run).
+
+Issue #88 (class A: a report is not a question). Exactly claude-code's
+own fix, against the same build-side status/question channel: a
+"question" whose text clears MIN_QUESTION_CHARS but carries no "?" is a
+report, not a question, and this adapter re-invokes codex once more
+(REINSTRUCTION appended to the same instruction) before ever reporting a
+halt. A second report in a row still halts -- someone must look -- but
+its report line carries "class": "non-question" and both raw results
+already reached stdout above it.
+
+Issue #88 (class B: work that outlives the invocation). `codex exec`'s
+own surface -- `codex exec --help` (codex-cli 0.153.4), the JSONL event
+stream (thread.*, turn.*, item.*), and the --output-schema/
+--output-last-message response -- names no subagent or background-task
+concept at all: codex is a single agent driving sandboxed shell
+commands, with no tool of its own that could spawn work outliving this
+invocation the way claude-code's Agent/Workflow tools did (issue #88,
+confirmed live on claude-code, this adapter's own conformance.json
+declares codex's guard unsupported for exactly this reason rather than
+asserting a check against a concept that is not there).
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+# the helper beside adapters/, imported without leaving a __pycache__ there
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from executor_env import executor_env  # noqa: E402
+
+STATUS_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["status", "question"],
+    "properties": {
+        "status": {"type": "string", "enum": ["done", "question"]},
+        "question": {"type": ["string", "null"]},
+    },
+}
+
+VERIFY_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["findings", "tests_named"],
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["title", "specimen", "retires", "rejection_test", "severity"],
+                "properties": {
+                    "title": {"type": "string", "minLength": 1},
+                    "specimen": {"type": "string", "minLength": 1},
+                    "retires": {"type": "string", "minLength": 1},
+                    "rejection_test": {"type": "string", "minLength": 1},
+                    "severity": {"type": "string", "minLength": 1},
+                },
+            },
+        },
+        "tests_named": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    },
+}
+
+# The counsel objective (issue #100): a stop is read inside the product
+# first, before a person. Identical to claude-code's own COUNSEL_SCHEMA --
+# the counsel structured answer is the shared adapter contract, not
+# either tool's own shape.
+COUNSEL_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["class", "verdict", "citations", "proposal"],
+    "properties": {
+        "class": {"type": "string"},
+        "verdict": {"type": "string", "enum": ["answer", "patch", "person"]},
+        "citations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["kind", "path", "symbol", "ruling_id"],
+                "properties": {
+                    "kind": {"type": "string", "enum": ["instruction", "mechanism", "guard"]},
+                    "path": {"type": ["string", "null"]},
+                    "symbol": {"type": ["string", "null"]},
+                    "ruling_id": {"type": ["string", "null"]},
+                },
+            },
+        },
+        "proposal": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["ruling_text", "patch", "question", "issue"],
+            "properties": {
+                "ruling_text": {"type": ["string", "null"]},
+                "patch": {
+                    "type": ["object", "null"],
+                    "additionalProperties": False,
+                    "required": ["file", "symbol", "rejection_test", "diff"],
+                    "properties": {
+                        "file": {"type": "string", "minLength": 1},
+                        "symbol": {"type": "string", "minLength": 1},
+                        "rejection_test": {"type": "string", "minLength": 1},
+                        "diff": {"type": "string", "minLength": 1},
+                    },
+                },
+                "question": {"type": ["string", "null"]},
+                # issue #175: the fourth proposal shape, for a "patch" or
+                # "person" verdict whose remedy is better filed as an item
+                # than shipped as a diff or asked as a bare question.
+                "issue": {
+                    "type": ["object", "null"],
+                    "additionalProperties": False,
+                    "required": ["title", "body"],
+                    "properties": {
+                        "title": {"type": "string", "minLength": 1},
+                        "body": {"type": "string", "minLength": 1},
+                    },
+                },
+            },
+        },
+    },
+}
+
+
+def read_text(path_env: str) -> str:
+    path = os.environ.get(path_env)
+    if not path:
+        return ""
+    p = Path(path)
+    return p.read_text() if p.is_file() else ""
+
+
+def describe_file(path: str, text: str, diff_like: bool) -> str:
+    """Path, byte count, line count, and (for a diff) files touched --
+    named in the instruction instead of inlining the file's own text, so
+    the instruction stays a small fixed size whatever the file's size
+    (issue #86: a 27,367-line deletion diff inlined whole exceeded
+    codex's own input ceiling). Files touched counts unified-diff file
+    headers (`diff --git a/... b/...`), the shape `git diff` produces."""
+    size = Path(path).stat().st_size
+    lines = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
+    if not diff_like:
+        return f"`{path}` ({size} bytes, {lines} lines)"
+    files = sum(1 for l in text.splitlines() if l.startswith("diff --git "))
+    return f"`{path}` ({size} bytes, {lines} lines, {files} files touched)"
+
+
+def spec_sections() -> list[str]:
+    """The spec's Problem, Claims, and Criteria sections verbatim -- the
+    same contract adapters/claude-code/run reads, since what a verifier
+    must be told is a product fact, not a tool-specific one."""
+    spec_dir = Path(os.environ["ATTAVO_SPEC_DIR"])
+    lines = (spec_dir / "spec.md").read_text().splitlines()
+    idx = [i for i, l in enumerate(lines) if l.startswith("## ")]
+    headings = {lines[i].strip(): i for i in idx}
+    bounds = sorted(idx) + [len(lines)]
+
+    def section(heading: str) -> str:
+        start = headings[heading]
+        end = bounds[bounds.index(start) + 1] if start in bounds else len(lines)
+        return "\n".join(lines[start:end]).strip()
+
+    return [section("## Problem"), section("## Claims"), section("## Criteria")]
+
+
+def stub_note() -> str | None:
+    """None when ATTAVO_SPEC_DIR carries no stub/; else the sentence
+    naming what a stub is (issue #90, closed by #93). The stub is
+    evidence -- a criterion it satisfies trivially is weak -- but twice
+    the judge reported
+    a built tree as failing to match its stub as if the stub were the
+    intended change (tenant zero #664, #644): one sentence of vocabulary
+    was missing, not a smarter judge or a dropped stub."""
+    stub_dir = Path(os.environ["ATTAVO_SPEC_DIR"]) / "stub"
+    if not stub_dir.is_dir():
+        return None
+    return (
+        f"## The stub at `{stub_dir}`\n\n"
+        "The stub is the fixture the acceptance criteria were shown to "
+        "pass against; it is not the intended change. A difference "
+        "between the built tree and the stub is not a finding: a "
+        "criterion the stub satisfies trivially is.")
+
+
+def build_instruction() -> str:
+    parts = list(spec_sections())
+
+    rulings = read_text("ATTAVO_RULINGS")
+    if rulings.strip():
+        parts.append("## Rulings\n\n" + rulings.strip())
+
+    feedback_path = os.environ.get("ATTAVO_FEEDBACK")
+    feedback = read_text("ATTAVO_FEEDBACK")
+    if feedback.strip():
+        parts.append(
+            "## Feedback from the previous attempt\n\n"
+            f"The feedback is at {describe_file(feedback_path, feedback, diff_like=False)}. "
+            "It is not inlined here: read it yourself with your own tools "
+            "before continuing.")
+
+    parts.append(
+        "commit your work on the current branch; if you cannot proceed "
+        "without a decision that changes the criteria, do not guess: "
+        "answer with status question")
+
+    test_command = os.environ.get("ATTAVO_TEST_COMMAND")
+    if test_command:
+        bound = os.environ.get("ATTAVO_TEST_TIMEOUT_S")
+        parts.append(
+            f"to run tests while you work, run `{test_command}`: it runs the tests "
+            "selected for the files you have changed"
+            + (f" and stops at {bound} s" if bound else "")
+            + ". Run a single test with `" + test_command + " <path or test id>`. "
+            "Do not run the test runner directly, the whole test suite, or any "
+            "whole-tree check yourself: when the criteria and " + "`" + test_command + "`"
+            + " pass, commit and stop; the gates are run for you and any failure is "
+            "returned to you on the next iteration")
+
+    return "\n\n".join(parts)
+
+
+def verify_instruction() -> str:
+    parts = list(spec_sections())
+
+    note = stub_note()
+    if note:
+        parts.append(note)
+
+    diff_path = os.environ.get("ATTAVO_DIFF")
+    diff = read_text("ATTAVO_DIFF")
+    if diff.strip():
+        parts.append(
+            "## Diff since the approved spec\n\n"
+            f"The diff is at {describe_file(diff_path, diff, diff_like=True)}. "
+            "It is not inlined here: read it yourself with your own tools "
+            "before judging it.")
+    else:
+        parts.append("## Diff since the approved spec\n\n(the diff is empty)")
+
+    build_record_path = os.environ.get("ATTAVO_BUILD_RECORD")
+    build_record = read_text("ATTAVO_BUILD_RECORD")
+    if build_record.strip():
+        parts.append(
+            "## The build record\n\n"
+            f"The build record is at {describe_file(build_record_path, build_record, diff_like=False)}. "
+            "Read it yourself with your own tools.")
+
+    parts.append(
+        "you are verifying a completed build, not building: make no edits, "
+        "write no files, commit nothing. Read the diff named above against "
+        "the criteria and name what the criteria do not assert but the diff "
+        "should still be judged on, and name the tests that would assert "
+        "it if they existed. A spec whose approval commit does not "
+        "describe the working tree the build produced is itself a "
+        "finding: the diff is judged against what was approved, and a "
+        "divergence between them is reportable rather than assumed "
+        "away. Report each as a finding: title, specimen (the file or "
+        "commit the finding is about), retires (what having this "
+        "finding on record replaces or closes -- every finding must "
+        "carry one, or it is refused unfiled), rejection_test (the test "
+        "that would catch a regression of it), and severity. Severity "
+        "is derived rather than judged: the version, counter, "
+        "condition, or state change that flips a finding from harmless "
+        "to blocking; an adjective is not a severity. An empty "
+        "findings list means you looked and found nothing to report, not "
+        "that you did not look.")
+    return "\n\n".join(parts)
+
+
+def counsel_instruction() -> str:
+    """Issue #100 (extended by issue #175): a stop is read inside the
+    product first, before a person. Identical to claude-code's own
+    counsel_instruction -- the record, its log, the diff, the forge's
+    checks, the item's graph, the tenant manifest, and this product's own
+    root are all handed by path, named rather than inlined, the same
+    discipline verify_instruction already applies to the diff (issue
+    #86)."""
+    parts = list(spec_sections())
+
+    rulings = read_text("ATTAVO_RULINGS")
+    if rulings.strip():
+        parts.append("## Rulings\n\n" + rulings.strip())
+
+    note = stub_note()
+    if note:
+        parts.append(note)
+
+    record_path = os.environ.get("ATTAVO_COUNSEL_RECORD")
+    record_text = read_text("ATTAVO_COUNSEL_RECORD")
+    if record_text.strip():
+        parts.append(
+            "## The stage record\n\n"
+            f"The record is at {describe_file(record_path, record_text, diff_like=False)}. "
+            "Read it yourself with your own tools.")
+
+    # Counsel's own earlier readings of this item come first: a follow-up
+    # question about a stop counsel has already read is answered from that
+    # reading. The class an earlier reading states is not re-derived.
+    prior_path = os.environ.get("ATTAVO_COUNSEL_PRIOR")
+    prior_text = read_text("ATTAVO_COUNSEL_PRIOR")
+    if prior_text.strip():
+        parts.append(
+            "## Counsel's earlier readings of this item\n\n"
+            f"They are at {describe_file(prior_path, prior_text, diff_like=False)}: a JSON list, "
+            "oldest first, each with the record it read, its class, verdict, ruling text, "
+            "citations and any question it answered. Read them first. Do not re-derive a "
+            "class an earlier reading states; a question about a stop already read is "
+            "answered as a follow-up to that reading, citing it.")
+
+    reads = [line for line in os.environ.get("ATTAVO_COUNSEL_READS", "").splitlines() if line.strip()]
+    if reads:
+        parts.append(
+            "## The tenant's corpus\n\n"
+            "The tenant names these as what counsel reads before it answers -- method rules, "
+            "briefs, rulings. Read them with your own tools before answering:\n\n" +
+            "\n".join(f"- `{r}`" for r in reads))
+
+    log_path = os.environ.get("ATTAVO_COUNSEL_LOG")
+    log_text = read_text("ATTAVO_COUNSEL_LOG")
+    if log_text.strip():
+        parts.append(
+            "## The record's log\n\n"
+            f"The log is at {describe_file(log_path, log_text, diff_like=False)}. "
+            "Read it yourself with your own tools.")
+
+    events_path = os.environ.get("ATTAVO_COUNSEL_EVENTS")
+    events_text = read_text("ATTAVO_COUNSEL_EVENTS")
+    if events_text.strip():
+        parts.append(
+            "## The stage's last events\n\n"
+            f"They are at {describe_file(events_path, events_text, diff_like=False)}: the last "
+            "lines of the stage's own event stream (tool calls, messages, test runs, gate "
+            "lines), one JSON object per line. This stands in for the whole log; when the "
+            "log itself is handed above, read that instead.")
+
+    diff_path = os.environ.get("ATTAVO_COUNSEL_DIFF")
+    diff_text = read_text("ATTAVO_COUNSEL_DIFF")
+    if diff_text.strip():
+        parts.append(
+            "## The item's diff since approval\n\n"
+            f"The diff is at {describe_file(diff_path, diff_text, diff_like=True)}. "
+            "Read it yourself with your own tools.")
+
+    # issue #175: the forge in the evidence set. ATTAVO_COUNSEL_CHECKS is
+    # always written, a JSON {read, reason, checks} envelope -- read false
+    # names the missing manifest key rather than leaving the section out,
+    # since an unread forge must never be mistaken for a green one.
+    checks_path = os.environ.get("ATTAVO_COUNSEL_CHECKS")
+    checks_text = read_text("ATTAVO_COUNSEL_CHECKS")
+    if checks_text.strip():
+        parts.append(
+            "## The forge's checks on this stop's sha\n\n"
+            f"The checks are at {describe_file(checks_path, checks_text, diff_like=False)}: "
+            "a JSON object -- read: false means the forge was not read at "
+            "all (reason names the missing manifest key; treat this as "
+            "unknown, never as green) -- read: true carries one entry per "
+            "check, each naming, for a check that did not succeed, the "
+            "path of its own failed-step log. Read the failing check's "
+            "log before answering about the forge; a remedy that depends "
+            "on the forge's state cites the check and its log line.")
+
+    # issue #175: the graph in the evidence set -- the default branch's
+    # own log since this item's branch point, this branch's own commits,
+    # the markers and records present at the stop's sha, and the check
+    # runs on the last three shas, so "the checks are on the record
+    # commit, not the code commit" is readable without a terminal.
+    graph_path = os.environ.get("ATTAVO_COUNSEL_GRAPH")
+    graph_text = read_text("ATTAVO_COUNSEL_GRAPH")
+    if graph_text.strip():
+        parts.append(
+            "## The item's graph\n\n"
+            f"The graph is at {describe_file(graph_path, graph_text, diff_like=False)}. "
+            "Read it yourself with your own tools.")
+
+    manifest_path = os.environ.get("ATTAVO_MANIFEST", "")
+    parts.append(f"## The tenant manifest\n\nThe manifest is at `{manifest_path}`. "
+                 "Read it yourself with your own tools.")
+
+    product_root = os.environ.get("ATTAVO_PRODUCT_ROOT", "")
+    parts.append(
+        "## The product's own root\n\n"
+        f"The product that ran this stage is at `{product_root}` "
+        "(`bin/attavo`, `adapters/`, `schema/`, `templates/`). A stop "
+        "whose cause is the product's own mechanism, not the tenant's, "
+        "is read here.")
+
+    # issue #175: attavo counsel N --ask hands the operator's own text as
+    # the question to answer, over the same evidence set, rather than
+    # diagnosing a stop -- the record above is context, not necessarily a
+    # failure.
+    question = os.environ.get("ATTAVO_COUNSEL_QUESTION", "")
+    if question.strip():
+        parts.append(
+            "## The operator's question\n\n" + question.strip() +
+            "\n\nAnswer this question using the evidence above; the "
+            "record named above is context, not necessarily a failure.")
+
+    parts.append(
+        "you are counseling a stop, read-only: make no edits, write no "
+        "files, commit nothing. Read the record, its log, the spec, the "
+        "rulings, the diff, the forge's checks, the item's graph, the "
+        "tenant manifest, and the product's own root named above with "
+        "your own tools, then answer with exactly one class (the stop's "
+        "class, or \"unclassed\"), one verdict -- \"answer\" (the stop is "
+        "answerable inside the rules: a ruling text, in "
+        "proposal.ruling_text, with three citations -- instruction, "
+        "mechanism, guard, each a path and symbol or a ruling id), "
+        "\"patch\" (the stop is a product defect: the mechanism's file "
+        "and symbol, a rejection test, and a unified diff, in "
+        "proposal.patch -- or, when the remedy is better filed as an "
+        "item than shipped as a diff, a title and a body in this "
+        "repository's own issue format -- a Severity/Provenance line, "
+        "then Problem, Retires, Change, and Acceptance sections -- in "
+        "proposal.issue), or \"person\" (the answer would touch the "
+        "definition of done and no rule covers it: the question restated "
+        "in one line, in proposal.question -- or, when the remedy is "
+        "better filed as an item than asked as a bare question, a title "
+        "and a body in the same issue format, in proposal.issue) -- and "
+        "citations for whichever verdict you gave. You propose; you do "
+        "not act.")
+    return "\n\n".join(parts)
+
+
+def load_config() -> dict:
+    raw = os.environ.get("ATTAVO_ADAPTER_CONFIG")
+    return json.loads(raw) if raw else {}
+
+
+# codex's own ceiling (issue #93): "Input exceeds the maximum length of
+# 1048576 characters" -- confirmed live 2026-09-08 against codex-cli
+# 0.153.4, the same specimen issue #86 fixed by handing the diff over by
+# path (tenant zero #659, verify-01: input_too_large, max_chars 1048576,
+# actual_chars 1297762). Declared here and in conformance.json's own
+# input_limit so a test can assert the two agree.
+INPUT_LIMIT_CHARS = 1_048_576
+
+
+def input_limit_chars() -> int:
+    """The declared ceiling, chars. Overridable only for tests via
+    ATTAVO_ADAPTER_INPUT_LIMIT_CHARS -- never a tenant knob: the ceiling
+    is a fact about codex, not something [executor.codex] can set (a
+    tenant typing a number it does not know is the pattern rule 42
+    refuses)."""
+    override = os.environ.get("ATTAVO_ADAPTER_INPUT_LIMIT_CHARS")
+    return int(override) if override else INPUT_LIMIT_CHARS
+
+
+def ceiling_refusal(instruction: str) -> str | None:
+    """None if instruction stays at or under codex's declared ceiling;
+    else the refusal naming both numbers, checked before codex is ever
+    invoked -- so an oversized prompt never reaches the tool that would
+    refuse it anyway, three seconds and a wasted call later."""
+    limit = input_limit_chars()
+    size = len(instruction)
+    if size <= limit:
+        return None
+    return (f"ceiling exceeded -- instruction is {size} chars, over "
+           f"codex's declared limit of {limit} chars")
+
+
+def build_argv(schema_path: Path, output_path: Path, config: dict, stage: str) -> list[str]:
+    # verify and counsel (issue #100) are mechanically read-only, not
+    # just instructed to be: the sandbox enforces "make no edits, write
+    # no files, commit nothing" rather than trusting the instruction
+    # alone. Any stage other than "build" gets the read-only sandbox.
+    sandbox = "workspace-write" if stage == "build" else "read-only"
+    return ["codex", "exec", "-",
+           "--model", config["model"],
+           "--sandbox", sandbox,
+           "--output-schema", str(schema_path),
+           "--output-last-message", str(output_path),
+           "--json",
+           "--ignore-user-config", "--ignore-rules"]
+
+
+def check_auth(config: dict) -> str | None:
+    """None if the declared auth mode and OPENAI_API_KEY's presence
+    agree; else the mismatch, refused before codex is ever invoked."""
+    auth = config.get("auth", "subscription")
+    has_key = bool(os.environ.get("OPENAI_API_KEY"))
+    if auth == "subscription" and has_key:
+        return ("auth is \"subscription\" but OPENAI_API_KEY is set in the "
+                "environment -- codex would silently bill the API account "
+                "instead of running under the plan")
+    if auth == "api" and not has_key:
+        return "auth is \"api\" but OPENAI_API_KEY is not set in the environment"
+    return None
+
+
+def parse_events(stdout: str) -> list[dict]:
+    """One JSON object per JSONL line; a tracing line (e.g. "ERROR
+    codex_api::...") is not JSON and is skipped, not an error -- codex
+    writes both to the same stream under --json."""
+    events = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            continue
+    return events
+
+
+def terminal_event(events: list[dict]) -> dict | None:
+    for e in events:
+        if e.get("type") in ("turn.completed", "turn.failed"):
+            return e
+    return None
+
+
+EVENT_TEXT_MAX_CHARS = 400
+
+
+def append_event(events_path: str, kind: str, text: str) -> None:
+    """One {at, kind, text} JSON line appended to events_path and
+    flushed at once -- the same shape and the same open-write-close
+    discipline bin/attavo's own append_event and claude-code's own copy
+    use, kept independently here since an adapter is a separate process
+    with no import path into the product or into another adapter."""
+    line = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "kind": kind, "text": " ".join(text.split())[:EVENT_TEXT_MAX_CHARS]}
+    with open(events_path, "a") as fh:
+        fh.write(json.dumps(line) + "\n")
+
+
+def first_line(text: str) -> str:
+    stripped = text.strip()
+    return stripped.splitlines()[0] if stripped else ""
+
+
+def item_events(obj: dict) -> list[tuple[str, str]]:
+    """[(kind, text), ...] for one parsed codex --json stream line --
+    zero, one, or two (a command_execution item carries both the
+    command and, once it has run, its own output, so it maps to a
+    tool_call and a tool_result together). An agent_message item's own
+    text maps to "message" -- confirmed live (issue #41, recorded
+    2026-09-08 against codex-cli 0.153.4): conformance.json's own
+    "done" situation, `{"type": "item.completed", "item": {"type":
+    "agent_message", "text": "ok"}}`, is this exact shape. A
+    command_execution item's "command" maps to "tool_call" (the
+    command's own first line) and its "aggregated_output", once
+    present, to "tool_result" (the output's own first line) -- both
+    field names are confirmed, by tenant zero's own verify logs on
+    attavo/code-factory since #649: every command_execution item there
+    carries exactly the keys aggregated_output, command, exit_code, id,
+    status, type, the same shape tests/test_adapter_codex.py's recorded
+    fixture exercises this mapping through. Every other item type
+    (reasoning, file_change, mcp_tool_call, and the rest), and every
+    non-item.completed line (thread.*, turn.*, "result" itself), maps
+    to nothing here."""
+    if obj.get("type") != "item.completed":
+        return []
+    item = obj.get("item") or {}
+    kind = item.get("type")
+    events: list[tuple[str, str]] = []
+    if kind == "agent_message" and item.get("text"):
+        events.append(("message", first_line(item["text"])))
+    elif kind == "command_execution":
+        command = item.get("command")
+        if command:
+            events.append(("tool_call", first_line(str(command))))
+        output = item.get("aggregated_output")
+        if output:
+            events.append(("tool_result", first_line(str(output))))
+    return events
+
+
+def write_events(events_path: str, parsed_events: list[dict]) -> None:
+    for obj in parsed_events:
+        for kind, text in item_events(obj):
+            append_event(events_path, kind, text)
+
+
+def load_canned_responses() -> list[dict] | None:
+    """None when ATTAVO_ADAPTER_RESPONSE_FILE is unset. Otherwise the
+    queue of canned {"events", "final", "exit_code"} objects this run
+    answers from: a single object repeats for every invocation this
+    adapter makes (unchanged since v0.3.0 -- most tests make exactly
+    one), a JSON array is consumed in order, one response per
+    invocation, its last element repeating once exhausted (issue #88:
+    the non-question retry is a second invocation inside the same
+    adapter run, and a canned test needs to hand it a different answer
+    than the first)."""
+    response_file = os.environ.get("ATTAVO_ADAPTER_RESPONSE_FILE")
+    if not response_file:
+        return None
+    raw = json.loads(Path(response_file).read_text())
+    return raw if isinstance(raw, list) else [raw]
+
+
+def invoke(instruction: str, schema: dict, config: dict, stage: str,
+          responses: list[dict] | None, call_index: int
+          ) -> tuple[str, list[dict], dict | None, int]:
+    """(raw transcript text, parsed events, the output file's parsed
+    content or None, exit code) -- from responses[call_index] (clamped
+    to the last element) when responses is not None, else a real
+    `codex exec -` invocation."""
+    if responses is not None:
+        canned = responses[min(call_index, len(responses) - 1)]
+        events = canned.get("events") or []
+        final = canned.get("final")
+        exit_code = canned.get("exit_code", 0)
+        raw = "\n".join(json.dumps(e) for e in events)
+        return raw, events, final, exit_code
+
+    with tempfile.TemporaryDirectory() as tmp:
+        schema_path = Path(tmp) / "schema.json"
+        schema_path.write_text(json.dumps(schema))
+        output_path = Path(tmp) / "output.json"
+
+        argv = build_argv(schema_path, output_path, config, stage)
+        run = subprocess.run(argv, input=instruction, capture_output=True,
+                             text=True, check=False, env=executor_env())
+        raw = run.stdout
+        if run.returncode != 0 and run.stderr.strip():
+            raw = (raw + "\n" if raw else "") + run.stderr.rstrip("\n")
+
+        final = None
+        if output_path.is_file():
+            try:
+                final = json.loads(output_path.read_text())
+            except ValueError:
+                final = None
+        return raw, parse_events(run.stdout), final, run.returncode
+
+
+def adapter_version() -> str:
+    try:
+        out = subprocess.run(["codex", "--version"], capture_output=True,
+                             text=True, check=False)
+    except OSError:
+        return ""
+    return out.stdout.strip()
+
+
+MIN_QUESTION_CHARS = 40
+
+REINSTRUCTION = (
+    "your last answer was a report, not a question; either continue to "
+    "done, or ask one question ending in a question mark that names the "
+    "spec line or guard you cannot resolve")
+
+
+def question_class(status: str, question: str | None) -> str:
+    """"done" (no halt at all), "fail" (a question too short or absent to
+    be worth a person's judgment -- MIN_QUESTION_CHARS, unchanged since
+    v0.15.0), "report" (long enough but carries no "?" -- issue #88's
+    class A, a status update in the question channel), or "question" (a
+    real question). Identical to claude-code's own -- the build-side
+    status/question channel is the shared adapter contract, not either
+    tool's own shape."""
+    if status != "question":
+        return "done"
+    if not question or len(question) < MIN_QUESTION_CHARS:
+        # An absent or too-short question is a report with nothing in
+        # it: a status update in the question channel (issue #150, five
+        # specimens on 2026-09-17), never an exit with no report line.
+        return "report"
+    if "?" not in question:
+        return "report"
+    return "question"
+
+
+# R3: a vendor's capacity, rate, or 5xx refusal is transient -- classed
+# on this adapter's own report line, the same way non-question already
+# is (issue #88), so a pass retries it plainly instead of paying for a
+# counsel run on a stop the definition of done never touches.
+TRANSIENT_MARKERS = ("overloaded", "rate limit", "rate_limit", "429", "500", "502", "503", "529",
+                    "internal server error", "service unavailable", "temporarily unavailable")
+
+
+def transient_detail(events: list[dict]) -> str | None:
+    """The terminal turn.failed event's own message when it names one of
+    TRANSIENT_MARKERS; else None -- a turn.failed for any other reason
+    (an auth mismatch, a malformed request) is not this."""
+    term = terminal_event(events)
+    if term is None or term.get("type") != "turn.failed":
+        return None
+    message = str((term.get("error") or {}).get("message") or "")
+    low = message.lower()
+    return message if any(marker in low for marker in TRANSIENT_MARKERS) else None
+
+
+def usage_fields(events: list[dict]) -> tuple[int, int]:
+    """(tokens.input, tokens.output) for one call's own event stream --
+    split out from report_fields so a retry's first, discarded call
+    still counts (issue #88: a non-question costs two executor turns,
+    and a report line built from the second call alone undercounts by
+    exactly the first one)."""
+    term = terminal_event(events)
+    usage = (term or {}).get("usage") or {}
+    return usage.get("input_tokens", 0) or 0, usage.get("output_tokens", 0) or 0
+
+
+def report_fields(model: str, events: list[dict]) -> dict:
+    """The fields common to every final report line, derived from one
+    call's own event stream -- model is always the configured id (issue
+    #41: codex reports none of its own), cost_usd always null (issue
+    #41's auth addendum)."""
+    tokens_input, tokens_output = usage_fields(events)
+    return {
+        "model": model,
+        "model_version": None,
+        "adapter_version": adapter_version(),
+        "tokens": {"input": tokens_input, "output": tokens_output},
+        "cost_usd": None,
+    }
+
+
+def main() -> int:
+    config = load_config()
+    stage = os.environ.get("ATTAVO_STAGE", "build")
+    verifying = stage == "verify"
+    counseling = stage == "counsel"
+    if verifying:
+        instruction, schema = verify_instruction(), VERIFY_SCHEMA
+    elif counseling:
+        instruction, schema = counsel_instruction(), COUNSEL_SCHEMA
+    else:
+        instruction, schema = build_instruction(), STATUS_SCHEMA
+
+    model = config.get("model")
+    if not model:
+        sys.stderr.write(
+            "adapters/codex/run: refused: [executor.codex].model is "
+            "required -- no model id appears anywhere codex itself "
+            "reports (the event stream, codex doctor, or any config file)\n")
+        return 1
+
+    ceiling = ceiling_refusal(instruction)
+    if ceiling:
+        sys.stderr.write(f"adapters/codex/run: refused: {ceiling}\n")
+        # Reported, not left for the product to find in the words: nothing
+        # was invoked, so no adapter version and no tokens.
+        print(json.dumps({"model": model, "model_version": None, "adapter_version": None,
+                          "tokens": {"input": 0, "output": 0}, "cost_usd": None,
+                          "class": "ceiling", "detail": ceiling}))
+        return 1
+
+    if os.environ.get("ATTAVO_ADAPTER_DRY_RUN"):
+        argv = build_argv(Path("<schema.json>"), Path("<output.json>"), config, stage)
+        print(json.dumps({"argv": argv, "instruction": instruction, "schema": schema}))
+        return 0
+
+    if not os.environ.get("ATTAVO_ADAPTER_RESPONSE_FILE"):
+        auth_error = check_auth(config)
+        if auth_error:
+            sys.stderr.write(f"adapters/codex/run: refused: {auth_error}\n")
+            return 1
+
+    responses = load_canned_responses()
+    events_path = os.environ.get("ATTAVO_EVENTS")
+
+    raw, events, final, exit_code = invoke(instruction, schema, config, stage, responses, 0)
+    # keep the evidence: both channels, not just the fields below, are
+    # the transcript build-NN.log saves -- a halt otherwise cannot be
+    # explained after the fact. final is printed here too (issue #88):
+    # a question the executor answers on the first call otherwise never
+    # reaches the transcript at all, since only the terminal report line
+    # -- printed once, at the very end -- carried it before.
+    print(raw.rstrip("\n") if raw.strip() else "(codex produced no output)")
+    if final is not None:
+        print(json.dumps(final))
+    if events_path:
+        write_events(events_path, events)
+
+    if exit_code != 0:
+        detail = transient_detail(events)
+        if detail:
+            line = {**report_fields(model, events), "class": "transient", "detail": detail}
+            print(json.dumps(line))
+        return exit_code
+
+    # An absent or unparseable output file is a failure whether this is
+    # a build or a verify -- the same class as claude-code's absent
+    # structured_output.
+    if final is None:
+        return 1
+
+    if verifying:
+        common = report_fields(model, events)
+        line = {**common,
+               "findings": final.get("findings"),
+               "tests_named": final.get("tests_named")}
+        print(json.dumps(line))
+        return 0
+
+    if counseling:
+        common = report_fields(model, events)
+        line = {**common,
+               "class": final.get("class"),
+               "verdict": final.get("verdict"),
+               "citations": final.get("citations"),
+               "proposal": final.get("proposal")}
+        print(json.dumps(line))
+        return 0
+
+    status = final.get("status", "done")
+    question = final.get("question")
+    cls = question_class(status, question)
+
+    if cls == "fail":
+        return 1
+
+    if cls == "report":
+        # Issue #88, class A: a report in the question channel is
+        # re-instructed once, in this same invocation, before it ever
+        # reaches a person.
+        reinstruction = instruction + "\n\n" + REINSTRUCTION
+        raw2, events2, final2, exit_code2 = invoke(
+            reinstruction, schema, config, stage, responses, 1)
+        print(raw2.rstrip("\n") if raw2.strip() else "(codex produced no output)")
+        if final2 is not None:
+            print(json.dumps(final2))
+        if events_path:
+            write_events(events_path, events2)
+
+        if exit_code2 != 0:
+            return exit_code2
+        if final2 is None:
+            return 1
+
+        status2 = final2.get("status", "done")
+        question2 = final2.get("question")
+        cls2 = question_class(status2, question2)
+        if cls2 == "fail":
+            return 1
+
+        common2 = report_fields(model, events2)
+        # A non-question costs two executor turns, not one: sum both
+        # calls' tokens into the one report line this invocation gets,
+        # whatever the retry's own outcome. cost_usd stays null (issue
+        # #41): null plus null is still null.
+        tokens1_input, tokens1_output = usage_fields(events)
+        common2["tokens"]["input"] += tokens1_input
+        common2["tokens"]["output"] += tokens1_output
+
+        if cls2 == "report":
+            # Two reports in a row: still a halt (someone must look),
+            # but the transcript above already carries both raw
+            # results, and this report line names the class so a
+            # reader -- or a future record field, not this one -- can
+            # tell it apart from a genuine question.
+            print("adapters/codex/run: halted: class non-question -- the "
+                  "executor reported instead of asking, twice in a row")
+            line = {**common2, "status": "question", "question": question2,
+                   "class": "non-question"}
+            print(json.dumps(line))
+            return 0
+
+        line = {**common2, "status": status2, "question": question2}
+        print(json.dumps(line))
+        return 0
+
+    common = report_fields(model, events)
+    line = {**common, "status": status, "question": question}
+    print(json.dumps(line))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
