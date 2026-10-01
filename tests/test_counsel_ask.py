@@ -256,19 +256,23 @@ def test_ask_stdout_is_exactly_one_json_object_and_a_refusal_is_one_line(tmp_pat
 
 def test_turns_json_lists_the_turns_with_who_asked_and_which_record_cites_them(tmp_path: Path) -> None:
     """Screen contract 2 (#312 addition): `--turns --json` prints {"item",
-    "turns": [{n, at, by, question, sha, answer, sha256, recorded_as}]};
-    [] when nothing has been asked; recorded_as is the stem of the counsel
-    record whose turn field cites that turn's sha256, else null. It
-    writes nothing."""
-    root = halted_and_committed(tmp_path)
+    "turns": [{n, at, by, question, record, sha, answer, sha256,
+    recorded_as}]}; [] when nothing has been asked; record is the stage
+    record the turn read (null when it read none -- the screen disables
+    Record this on it); recorded_as is the stem of the counsel record whose
+    turn field cites that turn's sha256, else null. It writes nothing."""
+    root = make_tenant(tmp_path, "build_valid")
+    configure_counsel_adapter(root)
     empty = run_attavo(root, "counsel", "1", "--turns", "--json")
     assert empty.returncode == 0, empty.stdout + empty.stderr
     assert json.loads(empty.stdout) == {"item": "1", "turns": []}
     assert store.get(root, "conversation-1") is None, "--turns wrote a document"
 
     env = answer_response(tmp_path)
-    assert ask(root, "first?", env=env, by="alice").returncode == 0
-    assert ask(root, "second?", env=env, by="bob").returncode == 0
+    assert ask(root, "first?", env=env, by="alice").returncode == 0  # reads no stage record
+    approve_and_halt(root)
+    commit_all(root, "build record for item 1 (build-01)")
+    assert ask(root, "second?", env=env, by="bob").returncode == 0  # reads build-01
     assert run_attavo(root, "counsel", "1", "--record-turn", "2", "--by", "carol").returncode == 0
     before_store = tree_digest(store.store_root(root))
     before_records = tree_digest(records_dir(root))
@@ -280,9 +284,10 @@ def test_turns_json_lists_the_turns_with_who_asked_and_which_record_cites_them(t
     turns = out["turns"]
     assert [t["n"] for t in turns] == [1, 2]
     for t in turns:
-        assert set(t) == {"n", "at", "by", "question", "sha", "answer", "sha256", "recorded_as"}, t
-    assert [(t["by"], t["question"], t["recorded_as"]) for t in turns] == [
-        ("alice", "first?", None), ("bob", "second?", "counsel-01")]
+        assert set(t) == {"n", "at", "by", "question", "record", "sha", "answer", "sha256",
+                          "recorded_as"}, t
+    assert [(t["by"], t["question"], t["record"], t["recorded_as"]) for t in turns] == [
+        ("alice", "first?", None, None), ("bob", "second?", "build-01", "counsel-01")]
     assert tree_digest(store.store_root(root)) == before_store
     assert tree_digest(records_dir(root)) == before_records
 

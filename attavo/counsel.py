@@ -241,7 +241,7 @@ def cmd_turns(root: Path, item_id: str, m: dict[str, Any]) -> int:
         if turn:
             cited[turn["sha256"]] = f"counsel-{n:02d}"
     out = [{"n": t["n"], "at": t["at"], "by": t["by"], "question": t["question"],
-            "sha": t["sha"], "answer": t["answer"], "sha256": t["sha256"],
+            "record": t["record"], "sha": t["sha"], "answer": t["answer"], "sha256": t["sha256"],
             "recorded_as": cited.get(t["sha256"])} for t in turns]
     print(json.dumps({"item": item_id, "turns": out}))
     return 0
