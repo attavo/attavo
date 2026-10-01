@@ -41,7 +41,7 @@ jobs:
         run: python3 scripts/ci_inherit.py test
         env:
           GH_TOKEN: ${{ github.token }}
-      - run: pip install pytest jsonschema
+      - run: pip install pytest jsonschema pytest-xdist
       # issue #181, raised by #237: the suite's own clock is bounded.
       # --durations=5 puts the five slowest tests on every run's log; the
       # last step fails the job when the pytest step took more than 300 s
@@ -58,7 +58,7 @@ jobs:
       - name: pytest
         if: steps.inherit.outputs.inherit != 'true'
         run: >
-          python3 -m pytest tests -q --durations=5 -m 'not own_records'
+          python3 -m pytest tests -q --durations=5 -n auto -m 'not own_records'
       - name: pytest end
         if: steps.inherit.outputs.inherit != 'true'
         run: echo "PYTEST_END=$(date +%s)" >> "$GITHUB_ENV"
