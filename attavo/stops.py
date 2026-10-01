@@ -89,7 +89,8 @@ def derive_stop(status: str, *, report_class: str | None = None,
       - a halt carrying a non-empty question: question/spec, detail the
         question's first line
       - refused, by refusal_kind: claims -> claims-boundary/spec; protected
-        (paths.records or paths.specs) -> claims-boundary/executor;
+        (paths.records or paths.specs, or HEAD moved off the stage's start
+        commit, #289) -> claims-boundary/executor;
         foreign-commit -> foreign-commit/tenant; detail the refusal
       - failed with a red gate element: gate/executor, detail naming the
         first red one

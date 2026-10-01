@@ -553,6 +553,21 @@ def cmd_build(argv: list[str]) -> int:
                 halted = {"question": payload.get("question")}
                 break
 
+            # #289 build-01: an executor's own `git reset HEAD^` dropped the
+            # commit the stage started on, and every diff below then read
+            # that commit's removal as the executor's change. HEAD must
+            # still contain start_sha; when it does not, that is the
+            # refusal, named, before any path is read against it.
+            rewound = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor",
+                                      start_sha, "HEAD"],
+                                     capture_output=True, text=True, check=False).returncode != 0
+            if rewound:
+                status_out = "refused"
+                refusal = (f"HEAD no longer contains {start_sha[:12]}, the commit this stage "
+                           f"started on: the executor reset or rebased past it")
+                refusal_kind = "protected"
+                break
+
             foreign = next((c for c in commits_since(root, start_sha)
                            if c["name"] != identity["name"] or c["email"] != identity["email"]),
                           None)

@@ -127,6 +127,13 @@ if [ -n "${ATTAVO_FIXTURE_FOREIGN_COMMIT:-}" ]; then
   exit 0
 fi
 
+if [ -n "${ATTAVO_FIXTURE_REWIND:-}" ]; then
+  # #289 build-01's executor: a diagnostic `git reset -q HEAD^` after a
+  # commit that never happened, which moved HEAD off the commit the stage
+  # started on -- for the rejection test only.
+  git reset -q HEAD^
+fi
+
 should_write=1
 if [ -n "${ATTAVO_FIXTURE_REQUIRE_FEEDBACK:-}" ]; then
   should_write=0

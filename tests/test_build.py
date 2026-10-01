@@ -1068,3 +1068,32 @@ def test_a_build_record_that_passes_or_is_refused_by_the_environment_says_so(tmp
     assert (rec["refusal_kind"], rec["report_class"]) == ("environment", None)
     p = proof_no_stop_lacks_cause(root, read_manifest(root))
     assert p.holds, p.reason
+
+
+def test_build_refuses_by_name_when_the_executor_moves_head_off_the_start_commit(tmp_path: Path) -> None:
+    """#289 build-01: the executor ran a diagnostic `git reset -q HEAD^`
+    after a commit that never happened, which dropped the driver's marker
+    commit from under its own work. The build then read the marker's
+    removal as the executor's change and refused naming
+    records/289/build-01.started. HEAD must still contain the commit the
+    stage started on; when it does not, the refusal says so and names
+    that commit, and no path diff is read against a start HEAD no longer
+    holds."""
+    root = make_tenant(tmp_path, "build_valid")
+    approve_item(root)
+    (root / "records" / "1").mkdir(parents=True, exist_ok=True)
+    (root / "records" / "1" / "build-01.started").write_text("{}\n")
+    commit_all(root, "attavo: build invocation 01 started")
+    start = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                           capture_output=True, text=True, check=True).stdout.strip()
+
+    run = run_attavo(root, "build", "1", env={"ATTAVO_FIXTURE_REWIND": "1"})
+    assert run.returncode == 1, run.stdout + run.stderr
+
+    rec = latest_build(root)
+    assert rec["status"] == "refused"
+    assert rec["refusal"].startswith(f"HEAD no longer contains {start[:12]}"), rec["refusal"]
+    assert "reset or rebased" in rec["refusal"], rec["refusal"]
+    assert rec["stop"]["class"] == "claims-boundary"
+    assert rec["stop"]["provenance"] == "executor"
+    assert rec["stop"]["detail"] == rec["refusal"]
