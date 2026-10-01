@@ -301,6 +301,29 @@ def remove_when_merged(copy: Path, item_id: str, records_rel: str) -> str | None
     return f"merged: removed {copy.name}{where}"
 
 
+def item_events_file(root: Path, item_id: str, stem: str) -> Path | None:
+    """Where the product keeps an item's <stem>.events.jsonl, whichever
+    checkout asks: the item's working copy (../attavo-worktree-N beside the
+    tenant's checkout; its own git dir), else the archive a merged item's
+    copy leaves (<common git dir>/attavo/archive/<N>/, newest <N>.k first),
+    else the tenant's own checkout, where a stage run there wrote it. None
+    when no such file exists."""
+    name = f"{stem}.events.jsonl"
+    tenant = tenant_root(root)
+    candidates: list[Path] = []
+    copy = copy_path(tenant, item_id)
+    if copy.resolve() in registered_copies(root):
+        candidates.append(Path(git(copy, "rev-parse", "--absolute-git-dir").strip()) / "attavo" / name)
+    common = Path(git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
+    archive = common / "attavo" / "archive"
+    kept = [p for p in archive.glob(f"{item_id}*")
+            if re.fullmatch(rf"{re.escape(item_id)}(\.[0-9]+)?", p.name)] if archive.is_dir() else []
+    kept.sort(key=lambda p: int(p.name.partition(".")[2] or 1), reverse=True)
+    candidates += [p / name for p in kept]
+    candidates.append(Path(git(tenant, "rev-parse", "--absolute-git-dir").strip()) / "attavo" / name)
+    return next((c for c in candidates if c.is_file()), None)
+
+
 def merged_items(root: Path, records_rel: str, items: list[str]) -> set[str]:
     """Which of `items` are merged, judged on origin's default branch as the
     fetch the pass already made left it -- never this checkout's HEAD."""

@@ -9,6 +9,9 @@
     attavo file-findings [N]
     attavo file-stops [N]
     attavo counsel [N]
+    attavo counsel [N] --ask "<question>" --by LOGIN
+    attavo counsel [N] --turns --json
+    attavo counsel [N] --record-turn K --by LOGIN
     attavo record-only
     attavo attest [--partial] [N]
     attavo drive [N] [--until-ready] [--again --by LOGIN] [--report]
@@ -263,7 +266,8 @@ its class, verdict, ruling text, citations and the question it
 answered -- so a question about a stop already read is answered as a
 follow-up to that reading, not re-derived; the record written carries
 answers, the stem of the newest prior counsel record that read the
-same stage record, or null for a first reading. The stage's
+same stage record, or null for a first reading (--ask also hands the
+conversation's earlier turns, as turn-NN entries after the records). The stage's
 last events stand in for its log (ATTAVO_COUNSEL_EVENTS, its
 events.jsonl's last 200 lines); the stop path hands the log too,
 and a --ask only hands it when the question names the word "log". The
@@ -276,7 +280,7 @@ verdict (answer: a ruling text with citations; patch: a product
 defect's file, symbol, rejection test, and diff; person: a one-line
 question no rule covers), citations (instruction, mechanism, guard,
 each a path and symbol or a ruling id), and proposal (the ruling text,
-the patch, or the question). It writes the next counsel-NN.json under
+the patch, or the question). The stop path (no --ask) writes the next counsel-NN.json under
 paths.records/N/, with the adapter's transcript beside it as
 counsel-NN.log, and commits nothing -- the caller commits, as with
 every stage. It refuses (exit 1, nothing written) when the item
@@ -284,6 +288,34 @@ carries no non-pass build, verify, or spec-gate record to counsel. See
 issue #100's lane for the full rules it enforces, issue #133's for the
 spec-gate fallback, and the rulings of 2026-09-25 for the follow-up,
 the events tail and the corpus.
+
+counsel --ask "<question>" --by LOGIN is read-only (issue #312): it
+writes no record and no log, changes nothing under paths.records, and
+makes no commit. It runs the adapter in a detached temporary worktree
+of the HEAD commit of the checkout it was called in, removed on exit,
+so the executor's working copy is never touched, and it answers in every
+state -- no stage record, a stage running, stopped, ready -- refusing
+only an item with no spec. The turn goes to the store document
+conversation-<N>, {"item", "turns"}, each turn {n, at, by, question,
+record (the stem of the stage record the question read, or null), sha
+(the snapshot commit), answer, sha256 (of the turn without this field)},
+written under --by against the version it read and retried once on a
+lost race. On success stdout is exactly one JSON object, {"turn",
+"sha256", "answer"}; a refusal is a non-zero exit and one line. A
+question steers nothing. The events tail is read where the product keeps
+the item's events -- its working copy, else its archive, else the
+tenant's own checkout -- whichever checkout --ask was called from.
+counsel --turns --json prints the document's turns with recorded_as, the
+counsel record whose turn field cites it, or null; it writes nothing.
+--json is valid only with --turns (exit 2 otherwise).
+counsel --record-turn K --by LOGIN is the operator's act that turns
+turn K into counsel-NN.json (its class, verdict, citations, proposal
+and question, and turn: {n, sha256, by}), against the turn's own record
+-- never the latest stage record -- and refuses a turn asked with no
+stage record, prints "(counsel-NN.json)"
+as the stop path does, and refuses a turn whose sha256 does not match
+its content. It is the only way a question becomes a record, and so
+the only way one steers the next attempt.
 
 record-only exits 0 when HEAD, against its first parent, touches only
 paths.records; 1 otherwise; 2 with no manifest. Core logic about a git
