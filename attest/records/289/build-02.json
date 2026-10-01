@@ -1,0 +1,58 @@
+{
+  "sha": "d2681831428bac0a7252391ce8d6359c71194389",
+  "start_sha": "cfebb74d2ddc02c08f95e41ce868448922fb31b3",
+  "spec_sha": "220163ddcd8becebd76d34006f10a115b181ee7d",
+  "approval_sha": "90ffdfc14e757a0a31db7efc21d2c804a4ecdfff",
+  "at": "2026-10-01T14:08:49Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.286 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "a-second-checkout-reads-the-holders-heartbeat-where-its-marker-says.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q -m 'not own_records'",
+    "count": 6,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 3029935,
+    "output": 19014
+  },
+  "cost_usd": 1.1316804,
+  "wall_clock_s": 777.37,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "refusal_kind": null,
+  "report_class": null,
+  "retry_of": "build-01",
+  "steer": "counsel-01",
+  "stop": null,
+  "record_version": 11,
+  "item": "289",
+  "product_version": "v0.32.0-2-gadfb95b",
+  "product_pin": "v0.31.0"
+}
