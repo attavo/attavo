@@ -67,3 +67,6 @@ ceiling_s = 3600
 
 [drive.verify]
 ceiling_s = 1200
+
+[counsel]
+reads = ["docs/method-rules.md", "docs/counsel-rulings.md", "docs/r3-rulings.md", "docs/storage-ruling.md"]

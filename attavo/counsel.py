@@ -17,7 +17,8 @@ from attavo.build import (
     split_adapter_stdout,
 )
 from attavo.common import MANIFEST, PRODUCT_ROOT, derive_item_id, git, now_iso, read_manifest
-from attavo.records import latest_attempt_path, latest_record, write_record
+from attavo.events import stage_events_dir
+from attavo.records import latest_attempt_path, latest_record, parse_attempts, write_record
 from attavo.types import SpecRecord, StageRecord
 from attavo.verify import diff_since_approval, read_forge_checks
 
@@ -27,6 +28,10 @@ from attavo.verify import diff_since_approval, read_forge_checks
 # or names the one-line question a person must answer. ---
 
 COUNSEL_STAGES = ("build", "verify")
+
+# How many of the stage's last event lines a follow-up is handed in place
+# of the whole log.
+EVENTS_TAIL_LINES = 200
 
 
 def latest_non_pass_stage_record(records_dir: Path) -> tuple[str | None, StageRecord | None, Path | None]:
@@ -262,6 +267,42 @@ def cmd_counsel(argv: list[str]) -> int:
     spec_dir = root / specs_rel / item_id
     log_path = record_path.with_suffix(".log")
 
+    # The corpus counsel reads before it answers ([counsel].reads): method
+    # rules, briefs, rulings, in the repository under paths the manifest
+    # names. A path that does not exist is refused, not skipped -- a
+    # configured corpus nobody can read is prose.
+    reads_rel = [str(x) for x in ((m.get("counsel") or {}).get("reads") or [])]
+    reads_missing = [r for r in reads_rel if not (root / r).exists()]
+    if reads_missing:
+        print(f"attavo counsel: refused: [counsel].reads names {', '.join(reads_missing)}, "
+              "which does not exist")
+        return 1
+    reads_abs = [str((root / r).resolve()) for r in reads_rel]
+
+    # Counsel's own earlier readings of this item, oldest first: the first
+    # input to a follow-up, so a question about a stop counsel has already
+    # read is answered from that reading, not re-derived (ruling 1,
+    # 2026-09-25). `answers` names the newest prior reading of the same
+    # record, or null for a first reading.
+    prior_records = parse_attempts(item_records_dir, "counsel")
+    prior = [{"record": f"counsel-{n:02d}", "answers": rec.get("answers"),
+              "record_stage": rec.get("record_stage"), "reads": rec.get("record"),
+              "at": rec.get("at"), "status": rec.get("status"), "class": rec.get("class"),
+              "verdict": rec.get("verdict"), "question": rec.get("question"),
+              "ruling_text": (rec.get("proposal") or {}).get("ruling_text"),
+              "person_question": (rec.get("proposal") or {}).get("question"),
+              "citations": rec.get("citations") or []}
+             for n, rec in sorted(prior_records.items())]
+    same_stop = [p["record"] for p in prior if p["reads"] == record_path.stem]
+    answers = same_stop[-1] if same_stop else None
+
+    # The whole log is handed on the stop path, and on --ask only when the
+    # question is about the log; otherwise the stage's last events stand
+    # in for it (ruling: the record, the signature and the events tail,
+    # not 4.8 MB of transcript, unless asked).
+    hand_log = log_path.is_file() and (ask is None or "log" in ask.lower())
+    events_file = stage_events_dir(root) / f"{record_path.stem}.events.jsonl"
+
     diff_text, diff_refusal = diff_since_approval(root, stop_record.get("approval_sha"))
     if diff_refusal:
         print(f"attavo counsel: refused: {diff_refusal}")
@@ -283,13 +324,25 @@ def cmd_counsel(argv: list[str]) -> int:
         graph_path.write_text(counsel_graph_text(
             root, m, item_id, stop_sha, forge_cfg.get("checks_command")))
 
+        prior_path = tmp_path / "prior.json"
+        prior_path.write_text(json.dumps(prior, indent=2) + "\n")
+
+        events_path = tmp_path / "events.jsonl"
+        if events_file.is_file():
+            events_path.write_text("".join(events_file.read_text().splitlines(keepends=True)[-EVENTS_TAIL_LINES:]))
+        else:
+            events_path.write_text("")
+
         env = dict(os.environ)
         env["ATTAVO_SPEC_DIR"] = str(spec_dir)
         env["ATTAVO_RECORDS_DIR"] = str(item_records_dir)
         env["ATTAVO_RULINGS"] = str(root / m["paths"]["rulings"])
         env["ATTAVO_STAGE"] = "counsel"
         env["ATTAVO_COUNSEL_RECORD"] = str(record_path)
-        env["ATTAVO_COUNSEL_LOG"] = str(log_path) if log_path.is_file() else ""
+        env["ATTAVO_COUNSEL_LOG"] = str(log_path) if hand_log else ""
+        env["ATTAVO_COUNSEL_EVENTS"] = str(events_path) if events_file.is_file() else ""
+        env["ATTAVO_COUNSEL_PRIOR"] = str(prior_path) if prior else ""
+        env["ATTAVO_COUNSEL_READS"] = "\n".join(reads_abs)
         env["ATTAVO_COUNSEL_DIFF"] = str(diff_path)
         env["ATTAVO_COUNSEL_CHECKS"] = str(checks_path)
         env["ATTAVO_COUNSEL_GRAPH"] = str(graph_path)
@@ -351,6 +404,7 @@ def cmd_counsel(argv: list[str]) -> int:
         "proposal": proposal,
         "forge": forge,
         "question": ask,
+        "answers": answers,
     }
     record_out_path = write_record(item_records_dir, "counsel", record, m, item_id, log=transcript)
 

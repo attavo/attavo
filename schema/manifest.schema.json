@@ -200,6 +200,17 @@
         "rulings": {"type": "string", "minLength": 1, "description": "The tenant's rulings file, rendered read-only; the merge of a proposed amendment is the ruling."}
       }
     },
+    "counsel": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reads": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Repository-relative paths -- the method rules, briefs and rulings counsel reads before it answers. Every path must exist; attavo counsel refuses a manifest naming one that does not. Handed to the adapter as ATTAVO_COUNSEL_READS, one path per line."
+        }
+      }
+    },
     "operators": {
       "type": "object",
       "additionalProperties": false,

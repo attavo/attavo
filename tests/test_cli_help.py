@@ -143,3 +143,14 @@ def test_help_names_the_working_copys_convention_and_the_removal_rule() -> None:
     assert "../attavo-worktree-N" in flat
     assert "plain `git worktree remove`, never --force" in flat
     assert "<common git dir>/attavo/archive/<N>/" in flat
+
+
+def test_help_names_counsels_corpus_the_follow_up_and_the_events_tail() -> None:
+    """Counsel as a conversation with a record behind it (rulings of
+    2026-09-25). Red on the tree and on the stub: the words are the
+    build's."""
+    run = subprocess.run([sys.executable, str(ATTAVO), "--help"],
+                         capture_output=True, text=True, check=False)
+    assert run.returncode == 0
+    for phrase in ("[counsel].reads", "answers", "ATTAVO_COUNSEL_PRIOR", "last events"):
+        assert phrase in run.stdout, phrase

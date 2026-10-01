@@ -252,22 +252,38 @@ when neither exists, its latest refused spec-gate record, the earliest
 point a question can be answered inside the product, before any
 approval or executor spend (issue #133) -- and asks the tenant's
 [executor].counsel adapter (defaulting to [executor].verify) a
-read-only question about it: the record, its log, the spec (problem,
-claims, criteria, stub, including stub/.removed), paths.rulings, the
-item's diff since approval, the tenant manifest, and this product's own
-root (bin/attavo, adapters/, schema/, templates/) by path, under the
-same sandbox verify runs under. The adapter answers with class (the
-stop enumeration, or unclassed), verdict (answer: a ruling text with
-citations; patch: a product defect's file, symbol, rejection test, and
-diff; person: a one-line question no rule covers), citations
-(instruction, mechanism, guard, each a path and symbol or a ruling id),
-and proposal (the ruling text, the patch, or the question). It writes
-the next counsel-NN.json under paths.records/N/, with the adapter's
-transcript beside it as counsel-NN.log, and commits nothing -- the
-caller commits, as with every stage. It refuses (exit 1, nothing
-written) when the item carries no non-pass build, verify, or spec-gate
-record to counsel. See issue #100's lane for the full rules it
-enforces, and issue #133's for the spec-gate fallback.
+read-only question about it: the record, the spec (problem, claims,
+criteria, stub, including stub/.removed), paths.rulings, the item's
+diff since approval, the tenant manifest, and this product's own root
+(bin/attavo, adapters/, schema/, templates/) by path, under the same
+sandbox verify runs under (issue #100, extended by the rulings of
+2026-09-25). Counsel's own prior readings of the item come first, as
+ATTAVO_COUNSEL_PRIOR -- oldest first, each naming the record it read,
+its class, verdict, ruling text, citations and the question it
+answered -- so a question about a stop already read is answered as a
+follow-up to that reading, not re-derived; the record written carries
+answers, the stem of the newest prior counsel record that read the
+same stage record, or null for a first reading. The stage's
+last events stand in for its log (ATTAVO_COUNSEL_EVENTS, its
+events.jsonl's last 200 lines); the stop path hands the log too,
+and a --ask only hands it when the question names the word "log". The
+tenant's corpus, [counsel].reads -- repository-relative paths to the
+method rules, briefs and rulings counsel reads before it answers -- is
+handed as ATTAVO_COUNSEL_READS, one absolute path per line; a manifest
+naming a path that does not exist is refused (exit 1, no record). The
+adapter answers with class (the stop enumeration, or unclassed),
+verdict (answer: a ruling text with citations; patch: a product
+defect's file, symbol, rejection test, and diff; person: a one-line
+question no rule covers), citations (instruction, mechanism, guard,
+each a path and symbol or a ruling id), and proposal (the ruling text,
+the patch, or the question). It writes the next counsel-NN.json under
+paths.records/N/, with the adapter's transcript beside it as
+counsel-NN.log, and commits nothing -- the caller commits, as with
+every stage. It refuses (exit 1, nothing written) when the item
+carries no non-pass build, verify, or spec-gate record to counsel. See
+issue #100's lane for the full rules it enforces, issue #133's for the
+spec-gate fallback, and the rulings of 2026-09-25 for the follow-up,
+the events tail and the corpus.
 
 record-only exits 0 when HEAD, against its first parent, touches only
 paths.records; 1 otherwise; 2 with no manifest. Core logic about a git

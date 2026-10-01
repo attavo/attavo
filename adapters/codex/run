@@ -359,6 +359,28 @@ def counsel_instruction() -> str:
             f"The record is at {describe_file(record_path, record_text, diff_like=False)}. "
             "Read it yourself with your own tools.")
 
+    # Counsel's own earlier readings of this item come first: a follow-up
+    # question about a stop counsel has already read is answered from that
+    # reading. The class an earlier reading states is not re-derived.
+    prior_path = os.environ.get("ATTAVO_COUNSEL_PRIOR")
+    prior_text = read_text("ATTAVO_COUNSEL_PRIOR")
+    if prior_text.strip():
+        parts.append(
+            "## Counsel's earlier readings of this item\n\n"
+            f"They are at {describe_file(prior_path, prior_text, diff_like=False)}: a JSON list, "
+            "oldest first, each with the record it read, its class, verdict, ruling text, "
+            "citations and any question it answered. Read them first. Do not re-derive a "
+            "class an earlier reading states; a question about a stop already read is "
+            "answered as a follow-up to that reading, citing it.")
+
+    reads = [line for line in os.environ.get("ATTAVO_COUNSEL_READS", "").splitlines() if line.strip()]
+    if reads:
+        parts.append(
+            "## The tenant's corpus\n\n"
+            "The tenant names these as what counsel reads before it answers -- method rules, "
+            "briefs, rulings. Read them with your own tools before answering:\n\n" +
+            "\n".join(f"- `{r}`" for r in reads))
+
     log_path = os.environ.get("ATTAVO_COUNSEL_LOG")
     log_text = read_text("ATTAVO_COUNSEL_LOG")
     if log_text.strip():
@@ -366,6 +388,16 @@ def counsel_instruction() -> str:
             "## The record's log\n\n"
             f"The log is at {describe_file(log_path, log_text, diff_like=False)}. "
             "Read it yourself with your own tools.")
+
+    events_path = os.environ.get("ATTAVO_COUNSEL_EVENTS")
+    events_text = read_text("ATTAVO_COUNSEL_EVENTS")
+    if events_text.strip():
+        parts.append(
+            "## The stage's last events\n\n"
+            f"They are at {describe_file(events_path, events_text, diff_like=False)}: the last "
+            "lines of the stage's own event stream (tool calls, messages, test runs, gate "
+            "lines), one JSON object per line. This stands in for the whole log; when the "
+            "log itself is handed above, read that instead.")
 
     diff_path = os.environ.get("ATTAVO_COUNSEL_DIFF")
     diff_text = read_text("ATTAVO_COUNSEL_DIFF")
