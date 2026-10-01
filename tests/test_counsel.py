@@ -542,41 +542,6 @@ def test_counsel_ask_requires_nonempty_text(tmp_path: Path) -> None:
     assert not (records_dir(root) / "counsel-01.json").exists()
 
 
-def test_counsel_ask_reads_the_latest_record_even_when_it_passed(tmp_path: Path) -> None:
-    """Acceptance row 4. attavo counsel N --ask "<text>" reads the item's
-    latest records regardless of status -- a question is not bound to a
-    stop -- writes a record with question set, runs no stage, edits
-    nothing, and commits nothing."""
-    root = make_tenant(tmp_path, "build_valid")
-    configure_counsel_adapter(root)
-    assert run_attavo(root, "spec-gate", "1").returncode == 0
-    assert run_attavo(root, "approve", "1", "--by", "alice").returncode == 0
-    assert run_attavo(root, "build", "1").returncode == 0
-
-    pre_head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
-                              capture_output=True, text=True, check=True).stdout.strip()
-
-    run = run_attavo(root, "counsel", "1", "--ask", "why did the build write built.txt?")
-    assert run.returncode == 0, run.stdout + run.stderr
-
-    post_head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
-                               capture_output=True, text=True, check=True).stdout.strip()
-    assert post_head == pre_head, "counsel --ask must not create a commit"
-
-    record = json.loads((records_dir(root) / "counsel-01.json").read_text())
-    jsonschema.validate(record, COUNSEL_SCHEMA)
-    assert record["question"] == "why did the build write built.txt?"
-    assert record["record_stage"] == "build"
-    assert record["record"] == "build-01"
-
-    status = subprocess.run(["git", "-C", str(root), "status", "--porcelain",
-                             "--untracked-files=all"],
-                            capture_output=True, text=True, check=True).stdout
-    changed = [line[3:] for line in status.splitlines()]
-    assert changed, "counsel --ask should have written something"
-    assert all(p.startswith("records/1/") for p in changed), changed
-
-
 def test_counsel_question_is_null_without_ask(tmp_path: Path) -> None:
     """Regression: the ordinary stop path still writes question: null."""
     root = make_tenant(tmp_path, "build_valid")
@@ -718,35 +683,7 @@ def section(text: str, marker: str) -> str:
     return text[start:end]
 
 
-def test_a_follow_up_is_handed_the_prior_readings_and_names_the_one_it_answers(tmp_path: Path) -> None:
-    root = make_tenant(tmp_path, "build_valid")
-    configure_counsel_adapter(root)
-    approve_and_halt(root)
-    first = write_counsel_response(tmp_path, canned(
-        "answer", proposal={"ruling_text": "continue from the existing tree", "patch": None, "question": None}))
-    assert run_attavo(root, "counsel", "1", env={"ATTAVO_FIXTURE_COUNSEL_RESPONSE": str(first)}).returncode == 0
-    one = json.loads((records_dir(root) / "counsel-01.json").read_text())
-    assert one["answers"] is None and one["question"] is None, one
-    assert "--- end prior ---" in counsel_log_text(root, "counsel-01")
-    assert section(counsel_log_text(root, "counsel-01"), "ATTAVO_COUNSEL_PRIOR").strip() == "", "a first reading was handed prior readings"
-
-    assert run_attavo(root, "counsel", "1", "--ask", "why did it stop?",
-                      env={"ATTAVO_FIXTURE_COUNSEL_RESPONSE": str(first)}).returncode == 0
-    two = json.loads((records_dir(root) / "counsel-02.json").read_text())
-    assert (two["answers"], two["question"], two["record"]) == ("counsel-01", "why did it stop?", "build-01"), two
-    prior = json.loads(section(counsel_log_text(root, "counsel-02"), "ATTAVO_COUNSEL_PRIOR"))
-    assert [p["record"] for p in prior] == ["counsel-01"], prior
-    assert prior[0]["ruling_text"] == "continue from the existing tree" and prior[0]["verdict"] == "answer", prior
-
-    assert run_attavo(root, "counsel", "1", "--ask", "and then?",
-                      env={"ATTAVO_FIXTURE_COUNSEL_RESPONSE": str(first)}).returncode == 0
-    three = json.loads((records_dir(root) / "counsel-03.json").read_text())
-    assert three["answers"] == "counsel-02", three
-    prior = json.loads(section(counsel_log_text(root, "counsel-03"), "ATTAVO_COUNSEL_PRIOR"))
-    assert [p["record"] for p in prior] == ["counsel-01", "counsel-02"] and prior[1]["question"] == "why did it stop?", prior
-
-
-def test_a_follow_up_is_handed_the_events_tail_and_the_log_only_when_asked(tmp_path: Path) -> None:
+def test_the_stop_path_is_handed_the_events_tail_and_the_log(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "build_valid")
     configure_counsel_adapter(root)
     approve_and_halt(root)
@@ -757,14 +694,6 @@ def test_a_follow_up_is_handed_the_events_tail_and_the_log_only_when_asked(tmp_p
     assert "log handed: yes" in stop_path, stop_path
     events = section(stop_path, "ATTAVO_COUNSEL_EVENTS").strip().splitlines()
     assert events and all(json.loads(line)["kind"] for line in events), "the stage's events were not handed"
-
-    assert run_attavo(root, "counsel", "1", "--ask", "why did it stop?", env=env).returncode == 0
-    follow_up = counsel_log_text(root, "counsel-02")
-    assert "log handed: no" in follow_up, follow_up
-    assert section(follow_up, "ATTAVO_COUNSEL_EVENTS").strip(), "a follow-up was handed no events"
-
-    assert run_attavo(root, "counsel", "1", "--ask", "what does the log say at the end?", env=env).returncode == 0
-    assert "log handed: yes" in counsel_log_text(root, "counsel-03")
 
 
 def test_counsel_reads_the_tenants_corpus_and_refuses_a_missing_path(tmp_path: Path) -> None:

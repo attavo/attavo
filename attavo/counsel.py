@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shlex
@@ -10,8 +11,10 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
+from attavo import store
 from attavo.build import (
     adapter_reports,
+    gate_checkout,
     merge_adapter_config,
     resolve_adapter,
     split_adapter_stdout,
@@ -23,9 +26,12 @@ from attavo.types import SpecRecord, StageRecord
 from attavo.verify import diff_since_approval, read_forge_checks
 
 # --- counsel: a stop is read inside the product first, before a person
-# (issue #100). Read-only -- it commits nothing and writes nothing outside
-# paths.records/<N>/ -- and it never acts: it proposes a ruling, a patch,
-# or names the one-line question a person must answer. ---
+# (issue #100). It never acts: it proposes a ruling, a patch, or names the
+# one-line question a person must answer. The stop path writes
+# paths.records/<N>/counsel-NN.json and commits nothing. A question (--ask)
+# writes no record, no log and no commit: it runs in a detached snapshot
+# of HEAD and its turn goes to the store document conversation-<N>, which
+# --record-turn turns into a record, on purpose (issue #312). ---
 
 COUNSEL_STAGES = ("build", "verify")
 
@@ -207,15 +213,123 @@ def counsel_graph_text(root: Path, m: dict[str, Any], item_id: str, sha: str | N
     return "\n\n".join(parts)
 
 
+def turn_hash(turn: dict[str, Any]) -> str:
+    """The sha256 a turn carries: its own content without this field."""
+    return store.body_sha256({k: v for k, v in turn.items() if k != "sha256"})
+
+
+def conversation_name(item_id: str) -> str:
+    return f"conversation-{item_id}"
+
+
+def read_conversation(root: Path, item_id: str) -> tuple[int, list[dict[str, Any]]]:
+    """(version, turns) of the item's conversation; (0, []) when none."""
+    env = store.get(root, conversation_name(item_id))
+    if env is None:
+        return 0, []
+    return int(env["version"]), list(env["body"]["turns"])
+
+
+def cmd_turns(root: Path, item_id: str, m: dict[str, Any]) -> int:
+    """The conversation as JSON, each turn with who asked it and the counsel
+    record, if any, whose turn field cites its sha256. Writes nothing."""
+    name = conversation_name(item_id)
+    _, turns = read_conversation(root, item_id)
+    log = store.log(root, name)
+    cited: dict[str, str] = {}
+    item_records_dir = root / m["paths"]["records"] / item_id
+    for n, rec in sorted(parse_attempts(item_records_dir, "counsel").items()):
+        turn = rec.get("turn")
+        if turn:
+            cited[turn["sha256"]] = f"counsel-{n:02d}"
+    out = []
+    for t in turns:
+        version = next((e for e in log if (store.get(root, name, e["version"]) or {})
+                        .get("body", {}).get("turns", [])[t["n"] - 1:t["n"]]), None)
+        out.append({"n": t["n"], "at": t["at"], "by": version["by"] if version else None,
+                    "question": t["question"], "sha": t["sha"], "answer": t["answer"],
+                    "sha256": t["sha256"], "recorded_as": cited.get(t["sha256"])})
+    print(json.dumps({"item": item_id, "turns": out}))
+    return 0
+
+
+def cmd_record_turn(root: Path, item_id: str, m: dict[str, Any], k: int, by: str) -> int:
+    """Write counsel-NN.json from turn k: the operator's explicit act, the
+    only way a question becomes a record and so the only way it steers."""
+    name = conversation_name(item_id)
+    turns = read_conversation(root, item_id)[1]
+    turn = next((t for t in turns if t["n"] == k), None)
+    if turn is None:
+        print(f"attavo counsel: refused: no turn {k} in {name}")
+        return 1
+    if turn.get("sha256") != turn_hash(turn):
+        print(f"attavo counsel: refused: turn {k} of {name} does not match its sha256")
+        return 1
+    item_records_dir = root / m["paths"]["records"] / item_id
+    stage, stage_record, record_path = latest_stage_record(item_records_dir)
+    if stage_record is None or record_path is None:
+        print(f"attavo counsel: refused: no build, verify, or spec-gate record for item {item_id}")
+        return 1
+    executor = m.get("executor") or {}
+    adapter_name = executor.get("counsel") or executor.get("verify")
+    adapter_path = resolve_adapter(root, adapter_name) if adapter_name else None
+    answer = turn["answer"]
+    earlier = [f"counsel-{n:02d}" for n, rec in sorted(parse_attempts(item_records_dir, "counsel").items())
+               if rec.get("record") == record_path.stem]
+    record = {
+        "sha": turn["sha"],
+        "record_stage": stage,
+        "record": record_path.stem,
+        "at": now_iso(),
+        "adapter": adapter_name,
+        "adapter_config": merge_adapter_config(m, adapter_name, "counsel") if adapter_name else {},
+        "adapter_version": None,
+        "model": answer.get("model"),
+        "model_version": None,
+        "reports": adapter_reports(adapter_path) if adapter_path else [],
+        "tokens": answer.get("tokens") or {"input": 0, "output": 0},
+        "cost_usd": answer.get("cost_usd"),
+        "wall_clock_s": answer.get("wall_clock_s") or 0,
+        "status": "done",
+        "class": answer.get("class"),
+        "verdict": answer.get("verdict"),
+        "citations": answer.get("citations") or [],
+        "proposal": {"ruling_text": None, "patch": None, "question": None, "issue": None,
+                     **(answer.get("proposal") or {})},
+        "forge": {"read": False, "reason": f"not read: recorded from turn {k} of {name}",
+                  "checks": []},
+        "question": turn["question"],
+        "answers": earlier[-1] if earlier else None,
+        "turn": {"n": k, "sha256": turn["sha256"], "by": by},
+    }
+    out_path = write_record(item_records_dir, "counsel", record, m, item_id)
+    print(f"attavo counsel: done ({out_path.name})")
+    return 0
+
+
 def cmd_counsel(argv: list[str]) -> int:
     root = Path(".").resolve()
     ask: str | None = None
+    by: str | None = None
+    record_turn: str | None = None
+    turns_mode = False
     positional: list[str] = []
     i = 0
     while i < len(argv):
         if argv[i] == "--ask":
             ask = argv[i + 1] if i + 1 < len(argv) else None
             i += 2
+        elif argv[i] == "--by":
+            by = argv[i + 1] if i + 1 < len(argv) else None
+            i += 2
+        elif argv[i] == "--record-turn":
+            record_turn = argv[i + 1] if i + 1 < len(argv) else ""
+            i += 2
+        elif argv[i] == "--turns":
+            turns_mode = True
+            i += 1
+        elif argv[i] == "--json":
+            i += 1
         else:
             positional.append(argv[i])
             i += 1
@@ -227,29 +341,55 @@ def cmd_counsel(argv: list[str]) -> int:
     if ask is not None and not ask.strip():
         print("attavo counsel: --ask requires non-empty text", file=sys.stderr)
         return 2
+    if ask is not None and not (by or "").strip():
+        print("attavo counsel: --ask requires --by <login>", file=sys.stderr)
+        return 2
+    if record_turn is not None and not (by or "").strip():
+        print("attavo counsel: --record-turn requires --by <login>", file=sys.stderr)
+        return 2
+    if record_turn is not None and not record_turn.isdigit():
+        print("attavo counsel: --record-turn requires a turn number", file=sys.stderr)
+        return 2
     m = read_manifest(root)
     if m is None:
         print(f"attavo counsel: no {MANIFEST} at {root}", file=sys.stderr)
         return 2
+    if turns_mode:
+        return cmd_turns(root, item_id, m)
+    if record_turn is not None:
+        return cmd_record_turn(root, item_id, m, int(record_turn), cast(str, by))
 
+    # issue #312: a question reads a detached snapshot of HEAD, never the
+    # working copy, which is the executor's while a stage runs.
+    with contextlib.ExitStack() as stack:
+        ev = stack.enter_context(gate_checkout(root)) if ask is not None else root
+        return _counsel(root, ev, m, item_id, ask, by)
+
+
+def _counsel(root: Path, ev: Path, m: dict[str, Any], item_id: str, ask: str | None,
+             by: str | None) -> int:
+    """The reading itself. root is the checkout it was called in; ev is the
+    tree it reads from -- root for the stop path, a snapshot for --ask."""
     specs_rel = m["paths"]["specs"]
     records_rel = m["paths"]["records"]
-    item_records_dir = root / records_rel / item_id
+    item_records_dir = ev / records_rel / item_id
 
-    # issue #175: --ask reads the item's latest records regardless of
-    # status -- a question is not bound to a stop -- everything else
-    # about the evidence set and the write is shared with the stop path.
+    stage: str | None
+    stop_record: Any
+    record_path: Path | None
     if ask is not None:
+        # issue #312: a question is answerable in every state; only an item
+        # with no spec is refused.
+        if not (ev / specs_rel / item_id / "spec.md").is_file():
+            print(f"attavo counsel: refused: no spec for item {item_id}")
+            return 1
         stage, stop_record, record_path = latest_stage_record(item_records_dir)
-        no_record_msg = f"no build, verify, or spec-gate record for item {item_id}"
     else:
         stage, stop_record, record_path = latest_non_pass_stage_record(item_records_dir)
-        no_record_msg = f"no non-pass build, verify, or spec-gate record for item {item_id}"
-    if stop_record is None:
-        print(f"attavo counsel: refused: {no_record_msg}")
-        return 1
-    # latest_*_stage_record returns all three of (stage, record, path) or none.
-    stage, record_path = cast(str, stage), cast(Path, record_path)
+        if stop_record is None:
+            print(f"attavo counsel: refused: no non-pass build, verify, or spec-gate record "
+                  f"for item {item_id}")
+            return 1
 
     executor = m.get("executor") or {}
     adapter_name = executor.get("counsel") or executor.get("verify")
@@ -257,33 +397,34 @@ def cmd_counsel(argv: list[str]) -> int:
         print("attavo counsel: refused: no [executor].counsel or [executor].verify "
               "in the manifest")
         return 1
-    adapter_path = resolve_adapter(root, adapter_name)
+    adapter_path = resolve_adapter(ev, adapter_name)
     if adapter_path is None:
         print(f"attavo counsel: refused: no adapter named {adapter_name!r}")
         return 1
 
     adapter_config = merge_adapter_config(m, adapter_name, "counsel")
     reports = adapter_reports(adapter_path)
-    spec_dir = root / specs_rel / item_id
-    log_path = record_path.with_suffix(".log")
+    spec_dir = ev / specs_rel / item_id
+    log_path = record_path.with_suffix(".log") if record_path else None
 
     # The corpus counsel reads before it answers ([counsel].reads): method
     # rules, briefs, rulings, in the repository under paths the manifest
     # names. A path that does not exist is refused, not skipped -- a
     # configured corpus nobody can read is prose.
     reads_rel = [str(x) for x in ((m.get("counsel") or {}).get("reads") or [])]
-    reads_missing = [r for r in reads_rel if not (root / r).exists()]
+    reads_missing = [r for r in reads_rel if not (ev / r).exists()]
     if reads_missing:
         print(f"attavo counsel: refused: [counsel].reads names {', '.join(reads_missing)}, "
               "which does not exist")
         return 1
-    reads_abs = [str((root / r).resolve()) for r in reads_rel]
+    reads_abs = [str((ev / r).resolve()) for r in reads_rel]
 
     # Counsel's own earlier readings of this item, oldest first: the first
     # input to a follow-up, so a question about a stop counsel has already
     # read is answered from that reading, not re-derived (ruling 1,
     # 2026-09-25). `answers` names the newest prior reading of the same
-    # record, or null for a first reading.
+    # record, or null for a first reading. A follow-up is also handed the
+    # earlier turns of the conversation (issue #312), after the records.
     prior_records = parse_attempts(item_records_dir, "counsel")
     prior = [{"record": f"counsel-{n:02d}", "answers": rec.get("answers"),
               "record_stage": rec.get("record_stage"), "reads": rec.get("record"),
@@ -293,23 +434,37 @@ def cmd_counsel(argv: list[str]) -> int:
               "person_question": (rec.get("proposal") or {}).get("question"),
               "citations": rec.get("citations") or []}
              for n, rec in sorted(prior_records.items())]
-    same_stop = [p["record"] for p in prior if p["reads"] == record_path.stem]
-    answers = same_stop[-1] if same_stop else None
+    answers = None
+    if record_path is not None:
+        same_stop = [p["record"] for p in prior if p["reads"] == record_path.stem]
+        answers = same_stop[-1] if same_stop else None
+    if ask is not None:
+        for t in read_conversation(root, item_id)[1]:
+            a = t["answer"]
+            prior.append({"record": f"turn-{t['n']:02d}", "answers": None, "record_stage": None,
+                          "reads": None, "at": t["at"], "status": "done", "class": a.get("class"),
+                          "verdict": a.get("verdict"), "question": t["question"],
+                          "ruling_text": (a.get("proposal") or {}).get("ruling_text"),
+                          "person_question": (a.get("proposal") or {}).get("question"),
+                          "citations": a.get("citations") or []})
 
     # The whole log is handed on the stop path, and on --ask only when the
     # question is about the log; otherwise the stage's last events stand
     # in for it (ruling: the record, the signature and the events tail,
     # not 4.8 MB of transcript, unless asked).
-    hand_log = log_path.is_file() and (ask is None or "log" in ask.lower())
-    events_file = stage_events_dir(root) / f"{record_path.stem}.events.jsonl"
+    hand_log = (log_path is not None and log_path.is_file()
+                and (ask is None or "log" in ask.lower()))
+    events_file = (stage_events_dir(root) / f"{record_path.stem}.events.jsonl"
+                   if record_path else None)
 
-    diff_text, diff_refusal = diff_since_approval(root, stop_record.get("approval_sha"))
+    diff_text, diff_refusal = diff_since_approval(
+        ev, stop_record.get("approval_sha") if stop_record else None)
     if diff_refusal:
         print(f"attavo counsel: refused: {diff_refusal}")
         return 1
 
     forge_cfg = m.get("forge") or {}
-    stop_sha = stop_record.get("sha")
+    stop_sha = stop_record.get("sha") if stop_record else None
 
     started = time.monotonic()
 
@@ -318,17 +473,18 @@ def cmd_counsel(argv: list[str]) -> int:
         diff_path = tmp_path / "diff.patch"
         diff_path.write_text(diff_text)
 
-        forge, checks_path = counsel_forge_evidence(root, forge_cfg, stop_sha, tmp_path)
+        forge, checks_path = counsel_forge_evidence(ev, forge_cfg, stop_sha, tmp_path)
 
         graph_path = tmp_path / "graph.txt"
         graph_path.write_text(counsel_graph_text(
-            root, m, item_id, stop_sha, forge_cfg.get("checks_command")))
+            ev, m, item_id, stop_sha, forge_cfg.get("checks_command")))
 
         prior_path = tmp_path / "prior.json"
         prior_path.write_text(json.dumps(prior, indent=2) + "\n")
 
         events_path = tmp_path / "events.jsonl"
-        if events_file.is_file():
+        has_events = events_file is not None and events_file.is_file()
+        if events_file is not None and has_events:
             events_path.write_text("".join(events_file.read_text().splitlines(keepends=True)[-EVENTS_TAIL_LINES:]))
         else:
             events_path.write_text("")
@@ -336,23 +492,23 @@ def cmd_counsel(argv: list[str]) -> int:
         env = dict(os.environ)
         env["ATTAVO_SPEC_DIR"] = str(spec_dir)
         env["ATTAVO_RECORDS_DIR"] = str(item_records_dir)
-        env["ATTAVO_RULINGS"] = str(root / m["paths"]["rulings"])
+        env["ATTAVO_RULINGS"] = str(ev / m["paths"]["rulings"])
         env["ATTAVO_STAGE"] = "counsel"
-        env["ATTAVO_COUNSEL_RECORD"] = str(record_path)
+        env["ATTAVO_COUNSEL_RECORD"] = str(record_path) if record_path else ""
         env["ATTAVO_COUNSEL_LOG"] = str(log_path) if hand_log else ""
-        env["ATTAVO_COUNSEL_EVENTS"] = str(events_path) if events_file.is_file() else ""
+        env["ATTAVO_COUNSEL_EVENTS"] = str(events_path) if has_events else ""
         env["ATTAVO_COUNSEL_PRIOR"] = str(prior_path) if prior else ""
         env["ATTAVO_COUNSEL_READS"] = "\n".join(reads_abs)
         env["ATTAVO_COUNSEL_DIFF"] = str(diff_path)
         env["ATTAVO_COUNSEL_CHECKS"] = str(checks_path)
         env["ATTAVO_COUNSEL_GRAPH"] = str(graph_path)
-        env["ATTAVO_MANIFEST"] = str(root / MANIFEST)
+        env["ATTAVO_MANIFEST"] = str(ev / MANIFEST)
         env["ATTAVO_PRODUCT_ROOT"] = str(PRODUCT_ROOT)
         env["ATTAVO_ADAPTER_CONFIG"] = json.dumps(adapter_config)
         if ask is not None:
             env["ATTAVO_COUNSEL_QUESTION"] = ask
 
-        run = subprocess.run([str(adapter_path)], cwd=str(root), env=env,
+        run = subprocess.run([str(adapter_path)], cwd=str(ev), env=env,
                              capture_output=True, text=True, check=False)
         transcript, payload = split_adapter_stdout(run.stdout)
         if run.returncode != 0:
@@ -383,6 +539,17 @@ def cmd_counsel(argv: list[str]) -> int:
         citations = payload.get("citations") or []
         proposal = {**proposal, **(payload.get("proposal") or {})}
 
+    wall_clock_s = round(time.monotonic() - started, 3)
+
+    if ask is not None:
+        if status_out != "done":
+            print("attavo counsel: failed: the adapter returned no usable answer")
+            return 1
+        return _record_turn_in_store(root, item_id, ask, cast(str, by), {
+            "class": cls, "verdict": verdict, "citations": citations, "proposal": proposal,
+            "model": model, "tokens": tokens, "cost_usd": cost_usd, "wall_clock_s": wall_clock_s})
+
+    assert stage is not None and record_path is not None
     record = {
         "sha": git(root, "rev-parse", "HEAD").strip(),
         "record_stage": stage,
@@ -396,17 +563,42 @@ def cmd_counsel(argv: list[str]) -> int:
         "reports": reports,
         "tokens": tokens,
         "cost_usd": cost_usd,
-        "wall_clock_s": round(time.monotonic() - started, 3),
+        "wall_clock_s": wall_clock_s,
         "status": status_out,
         "class": cls,
         "verdict": verdict,
         "citations": citations,
         "proposal": proposal,
         "forge": forge,
-        "question": ask,
+        "question": None,
         "answers": answers,
+        "turn": None,
     }
     record_out_path = write_record(item_records_dir, "counsel", record, m, item_id, log=transcript)
 
     print(f"attavo counsel: {status_out} ({record_out_path.name})")
     return 0 if status_out == "done" else 1
+
+
+def _record_turn_in_store(root: Path, item_id: str, question: str, by: str,
+                          answer: dict[str, Any]) -> int:
+    """Append one turn to conversation-<N>: written against the version it
+    read, retried once when another writer landed first. Prints the turn's
+    number, hash and answer as one JSON object, for the screen."""
+    name = conversation_name(item_id)
+    snapshot = git(root, "rev-parse", "HEAD").strip()
+    refusal = ""
+    for _ in range(2):
+        version, turns = read_conversation(root, item_id)
+        turn: dict[str, Any] = {"n": len(turns) + 1, "at": now_iso(), "question": question,
+                                "sha": snapshot, "answer": answer}
+        turn["sha256"] = turn_hash(turn)
+        try:
+            store.put(root, name, {"item": item_id, "turns": [*turns, turn]}, version, by)
+        except store.StoreRefusal as exc:
+            refusal = str(exc)
+            continue
+        print(json.dumps({"turn": turn["n"], "sha256": turn["sha256"], "answer": answer}))
+        return 0
+    print(f"attavo counsel: refused: {refusal}")
+    return 1
