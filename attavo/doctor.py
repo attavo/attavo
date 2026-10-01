@@ -179,6 +179,21 @@ def heartbeat_path(root: Path, stage: str, nn: int) -> Path:
     return stage_events_dir(root) / f"{stage}-{nn:02d}.heartbeat"
 
 
+def holder_heartbeat_path(root: Path, info: dict[str, Any], stage: str, nn: int) -> Path | None:
+    """Where the holder of an invocation writes its heartbeat, as far as
+    this host can read it: the directory its marker names, when the
+    marker is from this host and names one; this checkout's own, for a
+    marker from this host written before markers named it; None for a
+    marker from another host, whose heartbeat no file here holds."""
+    import socket
+    if info.get("host") != socket.gethostname():
+        return None
+    events = info.get("events")
+    if isinstance(events, str) and events:
+        return Path(events) / f"{stage}-{nn:02d}.heartbeat"
+    return heartbeat_path(root, stage, nn)
+
+
 def heartbeat_pid(path: Path) -> int | None:
     """The pid the worker wrote as its heartbeat file's one line on its
     first beat -- the holder's own, the only pid anyone signals. None when
@@ -203,7 +218,7 @@ def heartbeat_age_s(path: Path) -> float | None:
 
 
 def write_invocation_marker(root: Path, records_dir: Path, stage: str, nn: int,
-                            again_by: str | None = None) -> Path:
+                            again_by: str | None = None, events_dir: Path | None = None) -> Path:
     """The fact that an invocation began, written before it does: at,
     host, the sha it starts on, and the product that started it. No pid:
     the writer is `attavo drive`, which returns seconds later, and the
@@ -212,7 +227,12 @@ def write_invocation_marker(root: Path, records_dir: Path, stage: str, nn: int,
     marker; a marker with no record is an invocation that died or hangs,
     and proof five names it. again_by is the login that pressed `--again`
     to reset a stage whose budget was spent (or whose last two signatures
-    matched) -- absent on every ordinary marker, never a bare false."""
+    matched) -- absent on every ordinary marker, never a bare false.
+    events names the directory the holder's heartbeat will be written in
+    (the checkout's own <git-dir>/attavo, events_dir when the marker is
+    written from a detached worktree for another checkout): two checkouts
+    on one host each keep their own, so the host alone never says where
+    the holder's heartbeat can be read."""
     import socket
     from datetime import datetime, timezone
     records_dir.mkdir(parents=True, exist_ok=True)
@@ -220,7 +240,8 @@ def write_invocation_marker(root: Path, records_dir: Path, stage: str, nn: int,
     sha = git(root, "rev-parse", "HEAD").strip()
     info: dict[str, Any] = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                             "host": socket.gethostname(), "sha": sha,
-                            "product_version": product_version()}
+                            "product_version": product_version(),
+                            "events": str(events_dir or stage_events_dir(root))}
     if again_by:
         info["again_by"] = again_by
     path.write_text(json.dumps(info, indent=2) + "\n")
@@ -340,20 +361,23 @@ def proof_no_invocation_lacks_record(root: Path, m: dict[str, Any] | None) -> Pr
             name = f"item {item_dir.name} {marker.stem}"
             stage, nn_text = marker.stem.rsplit("-", 1)
             try:
-                beat_age = heartbeat_age_s(heartbeat_path(root, stage, int(nn_text)))
+                beat_file = holder_heartbeat_path(root, info, stage, int(nn_text))
+                beat_age = heartbeat_age_s(beat_file) if beat_file is not None else None
             except (RuntimeError, ValueError):
-                beat_age = None
+                beat_file, beat_age = None, None
             if beat_age is not None:
                 # The holder's own fact: fresh within three beats is
                 # running, older is a holder that stopped touching it.
                 if beat_age <= heartbeat_s() * 3:
                     running.append(f"{name} (heartbeat {int(beat_age)} s old, since {info.get('at')})")
                     continue
-            elif info.get("host") != this_host:
-                # No heartbeat file readable from here for a marker from
-                # another host: not yet a failure. An invocation younger
-                # than the tenant's own stall bound may simply be running
-                # elsewhere, still writing toward its own record.
+            elif info.get("host") != this_host or info.get("events"):
+                # No heartbeat readable for a marker from another host, or
+                # none yet where a marker from this host says its holder
+                # beats (another checkout's worker not yet at its first
+                # beat): not yet a failure. An invocation younger than the
+                # tenant's own stall bound may simply be running, still
+                # writing toward its own record.
                 age = invocation_age_s(info)
                 if age is not None and age < bound:
                     in_flight.append(f"{name} (host {info.get('host')} since {info.get('at')})")

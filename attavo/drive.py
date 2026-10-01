@@ -27,6 +27,7 @@ from attavo.doctor import (
     heartbeat_age_s,
     heartbeat_path,
     heartbeat_pid,
+    holder_heartbeat_path,
     heartbeat_s,
     invocation_age_s,
     invocations_without_record,
@@ -385,11 +386,15 @@ def read_invocation(root: Path, bound: int | None, marker: Path, info: dict[str,
     declared and the last event (the marker's own `at` when there is
     none) older than it, hung. A stale heartbeat is died, whether or not
     any pid lives -- a worker stuck somewhere that never reaches its own
-    heartbeat loop again is exactly what this is for. With no heartbeat
-    file a marker from this host is died -- the holder never touched its
-    first beat, or is gone -- and one from another host follows the stall
-    bound as proof five does: running while younger, died after. The
-    stall bound decides hung, never died.
+    heartbeat loop again is exactly what this is for. The heartbeat is
+    read where the marker says its holder writes it (holder_heartbeat_path),
+    never in this checkout by assumption: two checkouts on one host each
+    keep their own. With no heartbeat file there, a marker from this host
+    that names no directory is died -- the holder never touched its first
+    beat, or is gone -- and one from another host, or one naming a
+    directory with no heartbeat yet, follows the stall bound as proof five
+    does: running while younger, died after. The stall bound decides
+    hung, never died.
 
     R3: the stage's own ceiling (wall clock from the marker's own `at`)
     is judged first, before any of that -- alive past it is hung by the
@@ -409,7 +414,8 @@ def read_invocation(root: Path, bound: int | None, marker: Path, info: dict[str,
     stall_bound = bound
     if not _streams_events(root, m, stage):
         bound = None
-    beat_age = heartbeat_age_s(heartbeat_path(root, stage, nn))
+    beat_file = holder_heartbeat_path(root, info, stage, nn)
+    beat_age = heartbeat_age_s(beat_file) if beat_file is not None else None
     if beat_age is not None:
         if beat_age > heartbeat_s() * 3:
             return InvocationReading(stage, nn, log, last_at, beat_age, "died")
@@ -417,7 +423,11 @@ def read_invocation(root: Path, bound: int | None, marker: Path, info: dict[str,
         if bound is None or age is None or age <= bound:
             return InvocationReading(stage, nn, log, last_at, beat_age, "running")
         return InvocationReading(stage, nn, log, last_at, age, "hung", "stall")
-    if info.get("host") != socket.gethostname():
+    if info.get("host") != socket.gethostname() or info.get("events"):
+        # No heartbeat to read: another host's, or, from this host, none
+        # yet where the marker says its holder beats -- another
+        # checkout's worker that has not reached its first beat. Running
+        # while younger than the stall bound, as proof five reads it.
         marker_age = invocation_age_s(info)
         if stall_bound is not None and marker_age is not None and marker_age < stall_bound:
             return InvocationReading(stage, nn, log, last_at, marker_age, "running")
@@ -650,7 +660,7 @@ def _start_stage(root: Path, m: dict[str, Any], item_id: str, stage: str,
 
     def write_marker(tree: Path) -> list[Path]:
         return [write_invocation_marker(tree, tree / records_dir.relative_to(root), stage, nn,
-                                        again_by=again_by)]
+                                        again_by=again_by, events_dir=stage_events_dir(root))]
 
     outcome, err = transport_records(
         root, branch, f"attavo: {stage} invocation {nn:02d} started for item {item_id}",
@@ -709,7 +719,8 @@ def _recover_one(root: Path, m: dict[str, Any], item_id: str, records_dir: Path)
         return 1
 
     if cls == "hung":
-        holder = heartbeat_pid(heartbeat_path(root, stage, nn))
+        holder_file = holder_heartbeat_path(root, info, stage, nn)
+        holder = heartbeat_pid(holder_file) if holder_file is not None else None
         if holder is None:
             print(f"attavo drive: no holder to signal for {marker.stem}: its heartbeat names no pid")
             ended = "no holder to signal"
