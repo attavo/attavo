@@ -1,0 +1,21 @@
+{
+  "sha": "220163ddcd8becebd76d34006f10a115b181ee7d",
+  "spec_sha": "220163ddcd8becebd76d34006f10a115b181ee7d",
+  "at": "2026-09-30T23:04:25Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "a-second-checkout-reads-the-holders-heartbeat-where-its-marker-says.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "class": "core",
+  "research": "not required by policy",
+  "record_version": 3,
+  "item": "289",
+  "product_version": "v0.31.0",
+  "product_pin": "v0.31.0"
+}

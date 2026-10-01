@@ -1,0 +1,61 @@
+{
+  "sha": "afe2b7f22ceb1fa7a0baa8330162c6b611886274",
+  "record_stage": "build",
+  "record": "build-01",
+  "at": "2026-09-30T23:19:38Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 717617,
+    "output": 3912
+  },
+  "cost_usd": null,
+  "wall_clock_s": 103.758,
+  "status": "done",
+  "class": "claims-boundary",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "/Users/davidbean/Projects/attest/adapters/claude-code/run",
+      "symbol": "build_instruction",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "attest/records/289/build-01.log",
+      "symbol": "toolu_018a2DrQ2iPoG4iJHNJ8yPfg",
+      "ruling_id": null
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/attavo/build.py",
+      "symbol": "protected_path_touched",
+      "ruling_id": null
+    }
+  ],
+  "proposal": {
+    "ruling_text": "The stop stands. The executor was instructed to commit its work on the current branch, but during an identity experiment it created an empty commit and ran `git reset HEAD^`. That reset moved HEAD from the product\u2019s `build-01.started` marker commit to its parent and left the marker untracked. The final implementation commit was therefore a sibling of the marker commit, so the diff from the build\u2019s start SHA correctly showed deletion of the protected record path. `protected_path_touched` consequently refused the build. Retry the build without the history-mutating diagnostic; neither the item\u2019s definition of done nor the claims boundary needs amendment. The forge state is unknown because no checks exist for the stopped SHA.",
+    "patch": null,
+    "question": null,
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": []
+  },
+  "question": null,
+  "record_version": 3,
+  "item": "289",
+  "product_version": "v0.31.0-52-gfa51116",
+  "product_pin": "v0.31.0"
+}

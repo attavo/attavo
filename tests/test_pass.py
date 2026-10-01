@@ -189,6 +189,84 @@ def test_two_passes_at_once_start_one_worker_and_the_loser_says_so(tmp_path: Pat
         ["git", "-C", str(bare), "log", "--format=%s", "attavo/1-x"], capture_output=True, text=True).stdout)
 
 
+def test_a_second_checkout_on_this_host_reads_the_first_ones_worker_as_running(tmp_path: Path) -> None:
+    """XLOCK (#289), the race made deterministic. A pass in one clone
+    takes the lease and starts its worker; a pass in a second clone on the
+    same host then fetches that marker. The holder's heartbeat is in the
+    first clone's git dir, not the second's: read where the marker says,
+    it is running, and the second pass starts nothing. On main the second
+    pass looked in its own git dir, found no heartbeat from its own host,
+    read died, and started or recovered a second invocation."""
+    root, bare = built_tenant(tmp_path, seconds=4)
+    publish_approval(root)
+    clone = tmp_path / "second"
+    git(root.parent, "clone", "-q", "-b", git(root, "rev-parse", "--abbrev-ref", "HEAD").strip(), str(bare), str(clone))
+    git(clone, "config", "user.email", "test@example.com")
+    git(clone, "config", "user.name", "Attavo Test")
+    git(clone, "remote", "set-head", "origin", "-a")
+    first = run_attavo(root, "drive", "1", env=FAST)
+    assert first.returncode == 0 and "Build started" in first.stdout, first.stdout + first.stderr
+    wait_for((git_dir(root) / "attavo" / "build-01.heartbeat").exists, 5)
+    second = run_attavo(clone, "drive", "1", env=FAST)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "Build started" not in second.stdout, second.stdout
+    assert "died" not in second.stdout.lower(), second.stdout
+    log = subprocess.run(["git", "-C", str(bare), "log", "--format=%s", "attavo/1-x"],
+                         capture_output=True, text=True).stdout
+    assert log.count("build invocation 01 started") == 1 and "build invocation 02" not in log, log
+    assert (report(clone)["state"]) == "running"
+    wait_for(lambda: "build record for item 1" in subprocess.run(
+        ["git", "-C", str(bare), "log", "--format=%s", "attavo/1-x"], capture_output=True, text=True).stdout)
+
+
+def test_the_holders_heartbeat_is_read_where_its_marker_says(tmp_path: Path) -> None:
+    """A marker from this host names the directory its holder beats in.
+    A fresh heartbeat there is running though this checkout has none; no
+    heartbeat there yet is running while the marker is younger than the
+    stall bound and died after it; a marker that names no directory (one
+    written before markers did) keeps the old reading, died."""
+    root = make_tenant(tmp_path, "build_valid")
+    git(root, "checkout", "-q", "-b", "attavo/1-x")
+    add_forge(root, GREEN_FORGE)
+    add_drive_stall_bound(root, 600)
+    approve_item(root)
+    d = records_dir(root)
+    d.mkdir(parents=True, exist_ok=True)
+    elsewhere = tmp_path / "other-checkout-git" / "attavo"
+    elsewhere.mkdir(parents=True)
+    marker = d / "build-01.started"
+
+    def write_marker(at: str, events: str | None) -> None:
+        info: dict[str, Any] = {"at": at, "host": socket.gethostname(), "sha": head_of(root),
+                                "product_version": "fixture"}
+        if events is not None:
+            info["events"] = events
+        marker.write_text(json.dumps(info))
+        commit_all(root, f"a marker at {at}")
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    write_marker(now, str(elsewhere))
+    beat = elsewhere / "build-01.heartbeat"
+    beat.write_text(str(os.getpid()))
+    assert report(root)["state"] == "running"
+    beat.unlink()
+    assert report(root)["state"] == "running", "no first beat yet, marker younger than the stall bound"
+    write_marker("2026-09-17T13:16:08Z", str(elsewhere))
+    r = report(root)
+    assert (r["state"], r["stop_class"]) == ("owes-recovery", "died"), r
+    write_marker(now, None)
+    r = report(root)
+    assert (r["state"], r["stop_class"]) == ("owes-recovery", "died"), r
+
+
+def test_the_marker_a_pass_writes_names_its_checkouts_heartbeat_directory(tmp_path: Path) -> None:
+    root, _ = built_tenant(tmp_path, seconds=2)
+    assert run_attavo(root, "drive", "1", env=FAST).returncode == 0
+    info = json.loads((records_dir(root) / "build-01.started").read_text())
+    assert info["events"] == str(git_dir(root) / "attavo"), info
+    wait_for(lambda: record_files(root, "build") != [])
+
+
 def test_a_pass_recovers_a_dead_invocation_and_recover_is_gone(tmp_path: Path) -> None:
     root = make_tenant(tmp_path, "build_valid")
     git(root, "checkout", "-q", "-b", "attavo/1-x")
