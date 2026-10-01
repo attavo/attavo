@@ -216,7 +216,8 @@ def test_the_turn_is_in_the_store_with_a_correct_hash_and_a_second_appends(tmp_p
     turn = body["turns"][0]
     assert printed == {"turn": 1, "sha256": turn["sha256"], "answer": turn["answer"]}
     assert (turn["n"], turn["question"], turn["sha"]) == (1, "why did it stop?", snapshot)
-    assert set(turn) == {"n", "at", "question", "sha", "answer", "sha256"}
+    assert (turn["by"], turn["record"]) == ("alice", "build-01")
+    assert set(turn) == {"n", "at", "by", "question", "record", "sha", "answer", "sha256"}
     assert set(turn["answer"]) == {"class", "verdict", "citations", "proposal", "model",
                                    "tokens", "cost_usd", "wall_clock_s"}
     assert turn["sha256"] == store.body_sha256({k: v for k, v in turn.items() if k != "sha256"})
@@ -284,6 +285,103 @@ def test_turns_json_lists_the_turns_with_who_asked_and_which_record_cites_them(t
         ("alice", "first?", None), ("bob", "second?", "counsel-01")]
     assert tree_digest(store.store_root(root)) == before_store
     assert tree_digest(records_dir(root)) == before_records
+
+
+def test_a_turn_with_no_stage_record_stores_a_null_record_and_cannot_be_recorded(tmp_path: Path) -> None:
+    """Review of #319: a turn asked with no stage record carries record:
+    null, and --record-turn refuses it by name -- there is nothing to
+    record it against."""
+    root = make_tenant(tmp_path, "build_valid")
+    configure_counsel_adapter(root)
+    assert ask(root, "what is this for?", env=answer_response(tmp_path)).returncode == 0
+    turn = conversation(root)["turns"][0]
+    assert turn["record"] is None and turn["by"] == "alice"
+
+    run = run_attavo(root, "counsel", "1", "--record-turn", "1", "--by", "carol")
+    assert run.returncode == 1
+    assert ("turn 1 was asked with no stage record; there is nothing to record it against"
+            in run.stdout), run.stdout
+    assert not records_dir(root).exists() or not list(records_dir(root).glob("counsel-*"))
+
+
+def test_a_turn_about_an_earlier_stop_does_not_steer_a_later_attempt(tmp_path: Path) -> None:
+    """The failure #312 exists to close, in sequence: a question about
+    build-01, build-02 stops, and the operator records the turn after.
+    The record cites build-01, the turn's own record -- not build-02, the
+    latest stage record at the time of recording -- so build-03 is not
+    steered by an answer about build-01."""
+    root = halted_and_committed(tmp_path)
+    assert ask(root, "what about build-01?",
+               env=answer_response(tmp_path, "about build-01 only")).returncode == 0
+    second = run_attavo(root, "build", "1", env={"ATTAVO_FIXTURE_QUESTION": "which overlay now?"})
+    assert second.returncode == 3, second.stdout + second.stderr
+    assert (records_dir(root) / "build-02.json").is_file()
+    commit_all(root, "build record for item 1 (build-02)")
+
+    run = run_attavo(root, "counsel", "1", "--record-turn", "1", "--by", "carol")
+    assert run.returncode == 0, run.stdout + run.stderr
+    record = json.loads((records_dir(root) / "counsel-01.json").read_text())
+    assert (record["record"], record["record_stage"]) == ("build-01", "build")
+
+    third = run_attavo(root, "build", "1")
+    assert third.returncode == 0, third.stdout + third.stderr
+    latest = json.loads(sorted(records_dir(root).glob("build-0[0-9].json"))[-1].read_text())
+    assert latest["steer"] is None, latest["steer"]
+
+
+def test_json_is_valid_only_with_turns(tmp_path: Path) -> None:
+    """Review of #319: --json on any other path is a usage error, exit 2."""
+    root = halted_and_committed(tmp_path)
+    for args in (("--ask", "why?", "--by", "alice"), ("--record-turn", "1", "--by", "alice"), ()):
+        run = run_attavo(root, "counsel", "1", *args, "--json")
+        assert run.returncode == 2, (args, run.stdout, run.stderr)
+        assert "--json is valid only with --turns" in run.stderr
+    assert store.get(root, "conversation-1") is None
+
+
+EVENTS_PROBE = (
+    "#!/usr/bin/env python3\n"
+    "import json, os\n"
+    "p = os.environ.get('ATTAVO_COUNSEL_EVENTS', '')\n"
+    "print(json.dumps({'model': 'probe', 'tokens': {'input': 1, 'output': 1}, 'cost_usd': 0.0,\n"
+    "  'class': 'unclassed', 'verdict': 'answer', 'citations': [],\n"
+    "  'proposal': {'ruling_text': open(p).read() if p else '', 'patch': None, 'question': None}}))\n")
+
+
+def events_seen(root: Path) -> str:
+    out = json.loads(ask(root, "what happened?").stdout)
+    return str(out["answer"]["proposal"]["ruling_text"])
+
+
+def test_an_ask_from_a_second_worktree_reads_the_items_events_where_the_product_keeps_them(
+        tmp_path: Path) -> None:
+    """Review of #319: the screen calls --ask from a scratch worktree, whose
+    own git dir holds no events. The tail is read from where the product
+    keeps them: the item's working copy, else the archive, else the
+    tenant's own checkout -- in that order."""
+    root = halted_and_committed(tmp_path)
+    write_probe_adapter(root, "probe", EVENTS_PROBE)
+    use_probe_adapter(root)
+    scratch = tmp_path / "scratch"
+    git(root, "worktree", "add", "-q", "--detach", str(scratch), "HEAD")
+    tenant_events = Path(git(root, "rev-parse", "--absolute-git-dir").strip()) / "attavo" / "build-01.events.jsonl"
+    assert tenant_events.is_file()
+    assert Path(git(scratch, "rev-parse", "--absolute-git-dir").strip()) != tenant_events.parent.parent
+
+    assert '"kind"' in events_seen(scratch), "the tenant's events were not read from a second worktree"
+
+    archive = Path(git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()) \
+        / "attavo" / "archive" / "1"
+    archive.mkdir(parents=True)
+    (archive / "build-01.events.jsonl").write_text('{"kind":"archive"}\n')
+    assert events_seen(scratch).strip() == '{"kind":"archive"}', "the archive did not outrank the checkout"
+
+    copy = tmp_path / "attavo-worktree-1"
+    git(root, "worktree", "add", "-q", "--detach", str(copy), "HEAD")
+    copy_events = Path(git(copy, "rev-parse", "--absolute-git-dir").strip()) / "attavo"
+    copy_events.mkdir(parents=True, exist_ok=True)
+    (copy_events / "build-01.events.jsonl").write_text('{"kind":"copy"}\n')
+    assert events_seen(scratch).strip() == '{"kind":"copy"}', "the working copy did not outrank the archive"
 
 
 def test_a_follow_up_is_handed_the_earlier_turns_and_the_events_tail(tmp_path: Path) -> None:

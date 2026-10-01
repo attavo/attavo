@@ -296,17 +296,23 @@ of the HEAD commit of the checkout it was called in, removed on exit,
 so the executor's working copy is never touched, and it answers in every
 state -- no stage record, a stage running, stopped, ready -- refusing
 only an item with no spec. The turn goes to the store document
-conversation-<N>, {"item", "turns"}, each turn {n, at, question, sha (the
-snapshot commit), answer, sha256 (of the turn without this field)},
+conversation-<N>, {"item", "turns"}, each turn {n, at, by, question,
+record (the stem of the stage record the question read, or null), sha
+(the snapshot commit), answer, sha256 (of the turn without this field)},
 written under --by against the version it read and retried once on a
 lost race. On success stdout is exactly one JSON object, {"turn",
 "sha256", "answer"}; a refusal is a non-zero exit and one line. A
-question steers nothing. counsel --turns --json prints the document's
-turns with who asked each (by) and recorded_as, the counsel record
-whose turn field cites it, or null; it writes nothing.
+question steers nothing. The events tail is read where the product keeps
+the item's events -- its working copy, else its archive, else the
+tenant's own checkout -- whichever checkout --ask was called from.
+counsel --turns --json prints the document's turns with recorded_as, the
+counsel record whose turn field cites it, or null; it writes nothing.
+--json is valid only with --turns (exit 2 otherwise).
 counsel --record-turn K --by LOGIN is the operator's act that turns
 turn K into counsel-NN.json (its class, verdict, citations, proposal
-and question, and turn: {n, sha256, by}), prints "(counsel-NN.json)"
+and question, and turn: {n, sha256, by}), against the turn's own record
+-- never the latest stage record -- and refuses a turn asked with no
+stage record, prints "(counsel-NN.json)"
 as the stop path does, and refuses a turn whose sha256 does not match
 its content. It is the only way a question becomes a record, and so
 the only way one steers the next attempt.

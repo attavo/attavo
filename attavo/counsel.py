@@ -20,10 +20,10 @@ from attavo.build import (
     split_adapter_stdout,
 )
 from attavo.common import MANIFEST, PRODUCT_ROOT, derive_item_id, git, now_iso, read_manifest
-from attavo.events import stage_events_dir
 from attavo.records import latest_attempt_path, latest_record, parse_attempts, write_record
 from attavo.types import SpecRecord, StageRecord
 from attavo.verify import diff_since_approval, read_forge_checks
+from attavo.workcopy import item_events_file
 
 # --- counsel: a stop is read inside the product first, before a person
 # (issue #100). It never acts: it proposes a ruling, a patch, or names the
@@ -231,24 +231,18 @@ def read_conversation(root: Path, item_id: str) -> tuple[int, list[dict[str, Any
 
 
 def cmd_turns(root: Path, item_id: str, m: dict[str, Any]) -> int:
-    """The conversation as JSON, each turn with who asked it and the counsel
-    record, if any, whose turn field cites its sha256. Writes nothing."""
-    name = conversation_name(item_id)
+    """The conversation as JSON, each turn with the counsel record, if any,
+    whose turn field cites its sha256. Writes nothing."""
     _, turns = read_conversation(root, item_id)
-    log = store.log(root, name)
     cited: dict[str, str] = {}
     item_records_dir = root / m["paths"]["records"] / item_id
     for n, rec in sorted(parse_attempts(item_records_dir, "counsel").items()):
         turn = rec.get("turn")
         if turn:
             cited[turn["sha256"]] = f"counsel-{n:02d}"
-    out = []
-    for t in turns:
-        version = next((e for e in log if (store.get(root, name, e["version"]) or {})
-                        .get("body", {}).get("turns", [])[t["n"] - 1:t["n"]]), None)
-        out.append({"n": t["n"], "at": t["at"], "by": version["by"] if version else None,
-                    "question": t["question"], "sha": t["sha"], "answer": t["answer"],
-                    "sha256": t["sha256"], "recorded_as": cited.get(t["sha256"])})
+    out = [{"n": t["n"], "at": t["at"], "by": t["by"], "question": t["question"],
+            "sha": t["sha"], "answer": t["answer"], "sha256": t["sha256"],
+            "recorded_as": cited.get(t["sha256"])} for t in turns]
     print(json.dumps({"item": item_id, "turns": out}))
     return 0
 
@@ -265,21 +259,26 @@ def cmd_record_turn(root: Path, item_id: str, m: dict[str, Any], k: int, by: str
     if turn.get("sha256") != turn_hash(turn):
         print(f"attavo counsel: refused: turn {k} of {name} does not match its sha256")
         return 1
-    item_records_dir = root / m["paths"]["records"] / item_id
-    stage, stage_record, record_path = latest_stage_record(item_records_dir)
-    if stage_record is None or record_path is None:
-        print(f"attavo counsel: refused: no build, verify, or spec-gate record for item {item_id}")
+    # The turn's own record, never the latest stage record at the time of
+    # recording: a turn about build-01 recorded after build-02 stopped would
+    # otherwise steer build-03 with an answer about build-01.
+    read_stem = turn.get("record")
+    if not read_stem:
+        print(f"attavo counsel: refused: turn {k} was asked with no stage record; "
+              "there is nothing to record it against")
         return 1
+    item_records_dir = root / m["paths"]["records"] / item_id
+    stage = read_stem.split("-")[0]
     executor = m.get("executor") or {}
     adapter_name = executor.get("counsel") or executor.get("verify")
     adapter_path = resolve_adapter(root, adapter_name) if adapter_name else None
     answer = turn["answer"]
     earlier = [f"counsel-{n:02d}" for n, rec in sorted(parse_attempts(item_records_dir, "counsel").items())
-               if rec.get("record") == record_path.stem]
+               if rec.get("record") == read_stem]
     record = {
         "sha": turn["sha"],
         "record_stage": stage,
-        "record": record_path.stem,
+        "record": read_stem,
         "at": now_iso(),
         "adapter": adapter_name,
         "adapter_config": merge_adapter_config(m, adapter_name, "counsel") if adapter_name else {},
@@ -313,6 +312,7 @@ def cmd_counsel(argv: list[str]) -> int:
     by: str | None = None
     record_turn: str | None = None
     turns_mode = False
+    json_flag = False
     positional: list[str] = []
     i = 0
     while i < len(argv):
@@ -329,6 +329,7 @@ def cmd_counsel(argv: list[str]) -> int:
             turns_mode = True
             i += 1
         elif argv[i] == "--json":
+            json_flag = True
             i += 1
         else:
             positional.append(argv[i])
@@ -337,6 +338,9 @@ def cmd_counsel(argv: list[str]) -> int:
     if not item_id:
         print("attavo counsel: cannot derive item id; pass N or run on an attavo/N-* branch",
               file=sys.stderr)
+        return 2
+    if json_flag and not turns_mode:
+        print("attavo counsel: --json is valid only with --turns", file=sys.stderr)
         return 2
     if ask is not None and not ask.strip():
         print("attavo counsel: --ask requires non-empty text", file=sys.stderr)
@@ -454,8 +458,7 @@ def _counsel(root: Path, ev: Path, m: dict[str, Any], item_id: str, ask: str | N
     # not 4.8 MB of transcript, unless asked).
     hand_log = (log_path is not None and log_path.is_file()
                 and (ask is None or "log" in ask.lower()))
-    events_file = (stage_events_dir(root) / f"{record_path.stem}.events.jsonl"
-                   if record_path else None)
+    events_file = item_events_file(root, item_id, record_path.stem) if record_path else None
 
     diff_text, diff_refusal = diff_since_approval(
         ev, stop_record.get("approval_sha") if stop_record else None)
@@ -545,7 +548,8 @@ def _counsel(root: Path, ev: Path, m: dict[str, Any], item_id: str, ask: str | N
         if status_out != "done":
             print("attavo counsel: failed: the adapter returned no usable answer")
             return 1
-        return _record_turn_in_store(root, item_id, ask, cast(str, by), {
+        return _record_turn_in_store(root, item_id, ask, cast(str, by),
+                                     record_path.stem if record_path else None, {
             "class": cls, "verdict": verdict, "citations": citations, "proposal": proposal,
             "model": model, "tokens": tokens, "cost_usd": cost_usd, "wall_clock_s": wall_clock_s})
 
@@ -581,7 +585,7 @@ def _counsel(root: Path, ev: Path, m: dict[str, Any], item_id: str, ask: str | N
 
 
 def _record_turn_in_store(root: Path, item_id: str, question: str, by: str,
-                          answer: dict[str, Any]) -> int:
+                          record: str | None, answer: dict[str, Any]) -> int:
     """Append one turn to conversation-<N>: written against the version it
     read, retried once when another writer landed first. Prints the turn's
     number, hash and answer as one JSON object, for the screen."""
@@ -590,8 +594,9 @@ def _record_turn_in_store(root: Path, item_id: str, question: str, by: str,
     refusal = ""
     for _ in range(2):
         version, turns = read_conversation(root, item_id)
-        turn: dict[str, Any] = {"n": len(turns) + 1, "at": now_iso(), "question": question,
-                                "sha": snapshot, "answer": answer}
+        turn: dict[str, Any] = {"n": len(turns) + 1, "at": now_iso(), "by": by,
+                                "question": question, "record": record, "sha": snapshot,
+                                "answer": answer}
         turn["sha256"] = turn_hash(turn)
         try:
             store.put(root, name, {"item": item_id, "turns": [*turns, turn]}, version, by)
