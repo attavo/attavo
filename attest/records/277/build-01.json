@@ -1,0 +1,66 @@
+{
+  "sha": "12bb329355dd117695e0ed8493342205d9fb29b0",
+  "start_sha": "bf88e2624558782a93c889d9d11e199287954902",
+  "spec_sha": "512d963a0016821bcb5d68cc82b56ddec5210087",
+  "approval_sha": "81eb10ca8bb952a831c7e13e0a406295a91d246a",
+  "at": "2026-10-01T20:44:08Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.287 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "a-follow-up-answers-from-the-prior-reading.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-events-stand-in-for-the-log-unless-the-log-is-asked-about.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-corpus-is-handed-and-a-missing-path-is-refused.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q -m 'not own_records'",
+    "count": 1,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 14296391,
+    "output": 47406
+  },
+  "cost_usd": 3.944069,
+  "wall_clock_s": 3398.773,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "refusal_kind": null,
+  "report_class": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 11,
+  "item": "277",
+  "product_version": "v0.32.0-15-g2a6fc89",
+  "product_pin": "v0.32.0"
+}
