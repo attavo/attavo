@@ -175,6 +175,7 @@ CounselRecord = TypedDict("CounselRecord", {
     "proposal": dict[str, Any],
     "forge": dict[str, Any],
     "question": str | None,
+    "answers": str | None,
     "product_version": str,
     "product_pin": str | None,
 })

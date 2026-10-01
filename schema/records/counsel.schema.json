@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/counsel/3",
+  "$id": "https://attavo.dev/schema/records/counsel/4",
   "title": "attavo counsel record (counsel-NN.json)",
   "type": "object",
   "additionalProperties": false,
@@ -8,7 +8,8 @@
     "record_version", "item", "sha", "record_stage", "record", "at", "adapter",
     "adapter_config", "adapter_version", "model", "model_version", "reports",
     "tokens", "cost_usd", "wall_clock_s", "status", "class", "verdict",
-    "citations", "proposal", "forge", "question", "product_version", "product_pin"
+    "citations", "proposal", "forge", "question", "product_version", "product_pin",
+    "answers"
   ],
   "properties": {
     "record_version": {"type": "integer", "minimum": 1},
@@ -143,6 +144,10 @@
     "question": {
       "type": ["string", "null"],
       "description": "The operator's own text from `attavo counsel N --ask \"<text>\"` -- null for the ordinary stop path."
+    },
+    "answers": {
+      "type": ["string", "null"],
+      "description": "The stem of the counsel record this one follows (a --ask on a stop counsel already read), or null for a first reading. The prior record was the first input; the class it states is not re-derived."
     },
     "product_version": {"type": "string", "minLength": 1},
     "product_pin": {"type": ["string", "null"]}

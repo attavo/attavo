@@ -1,0 +1,88 @@
+{
+  "sha": "cb168d69cbeff18039c48ae5cbca6dfb462376ca",
+  "build_sha": "12bb329355dd117695e0ed8493342205d9fb29b0",
+  "build_record": "build-01",
+  "approval_sha": "81eb10ca8bb952a831c7e13e0a406295a91d246a",
+  "at": "2026-10-01T20:49:33Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "68628e853d6d148009b41d9acb03fc28892d0d45",
+    "conclusions": [
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "Prior readings are not placed before everything else in either adapter instruction",
+      "specimen": "adapters/claude-code/run and adapters/codex/run, counsel_instruction()",
+      "retires": "the claim that counsel receives its earlier reading as the first input instead of re-deriving the stop",
+      "rejection_test": "test_counsel_instruction_places_prior_readings_before_all_other_evidence",
+      "severity": "Blocking whenever ATTAVO_COUNSEL_PRIOR is non-empty; harmless only on a first reading."
+    },
+    {
+      "title": "[counsel].reads accepts paths outside the repository",
+      "specimen": "attavo/counsel.py, cmd_counsel() corpus-path resolution",
+      "retires": "the operator's project or other host paths remaining an admissible source for counsel's governing corpus",
+      "rejection_test": "test_counsel_refuses_absolute_and_parent_traversal_reads_outside_the_repository",
+      "severity": "Blocking when a configured absolute path or `..` path exists outside the tenant root; harmless while every configured path resolves within the repository."
+    }
+  ],
+  "tests_named": [
+    "test_counsel_instruction_places_prior_readings_before_all_other_evidence",
+    "test_counsel_refuses_absolute_and_parent_traversal_reads_outside_the_repository"
+  ],
+  "commits": [],
+  "stub_ratio": 0.8773946360153256,
+  "tokens": {
+    "input": 184076,
+    "output": 1884
+  },
+  "cost_usd": null,
+  "wall_clock_s": 55.423,
+  "status": "pass",
+  "report_class": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 10,
+  "item": "277",
+  "product_version": "v0.32.0-15-g2a6fc89",
+  "product_pin": "v0.32.0"
+}

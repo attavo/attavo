@@ -55,6 +55,16 @@ if [ "${ATTAVO_STAGE:-build}" = "counsel" ]; then
   echo "--- ATTAVO_COUNSEL_DIFF ---"
   cat "${ATTAVO_COUNSEL_DIFF:-/dev/null}" 2>/dev/null || true
   echo "--- end diff ---"
+  echo "--- ATTAVO_COUNSEL_PRIOR ---"
+  cat "${ATTAVO_COUNSEL_PRIOR:-/dev/null}" 2>/dev/null || true
+  echo "--- end prior ---"
+  echo "--- ATTAVO_COUNSEL_EVENTS ---"
+  cat "${ATTAVO_COUNSEL_EVENTS:-/dev/null}" 2>/dev/null || true
+  echo "--- end events ---"
+  echo "--- ATTAVO_COUNSEL_READS ---"
+  printf '%s\n' "${ATTAVO_COUNSEL_READS:-}"
+  echo "--- end reads ---"
+  echo "log handed: ${ATTAVO_COUNSEL_LOG:+yes}${ATTAVO_COUNSEL_LOG:-no}"
   echo "manifest: ${ATTAVO_MANIFEST:-}"
   echo "product root: ${ATTAVO_PRODUCT_ROOT:-}"
   if [ -n "${ATTAVO_FIXTURE_COUNSEL_WAIT_FOR:-}" ]; then

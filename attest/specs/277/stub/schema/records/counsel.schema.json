@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://attavo.dev/schema/records/counsel/4",
+  "title": "attavo counsel record (counsel-NN.json)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record_version", "item", "sha", "record_stage", "record", "at", "adapter",
+    "adapter_config", "adapter_version", "model", "model_version", "reports",
+    "tokens", "cost_usd", "wall_clock_s", "status", "class", "verdict",
+    "citations", "proposal", "forge", "question", "product_version", "product_pin",
+    "answers"
+  ],
+  "properties": {
+    "record_version": {"type": "integer", "minimum": 1},
+    "item": {"type": "string", "minLength": 1},
+    "sha": {"type": "string", "minLength": 1},
+    "record_stage": {
+      "type": "string",
+      "enum": ["build", "verify", "spec"],
+      "description": "Which stage's non-pass record this counsel invocation read -- \"spec\" is a refused spec-gate record, read only when no build or verify record exists yet."
+    },
+    "record": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The stem (e.g. \"build-01\" or \"spec-01\") of the non-pass record counsel read."
+    },
+    "at": {"type": "string", "minLength": 1},
+    "adapter": {"type": ["string", "null"]},
+    "adapter_config": {
+      "type": "object",
+      "description": "Copied verbatim from [executor.<adapter>] merged with [executor.<adapter>.counsel]."
+    },
+    "adapter_version": {"type": ["string", "null"]},
+    "model": {"type": ["string", "null"]},
+    "model_version": {"type": ["string", "null"]},
+    "reports": {
+      "type": "array",
+      "description": "Field names adapters/<name>/conformance.json declares this adapter can supply with a real value (vendor independence, 2026-09-09 ruling) -- [] when no adapter was called or it declares no conformance.json.",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "tokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "output"],
+      "properties": {
+        "input": {"type": "integer", "minimum": 0},
+        "output": {"type": "integer", "minimum": 0}
+      }
+    },
+    "cost_usd": {"type": ["number", "null"]},
+    "wall_clock_s": {"type": "number", "minimum": 0},
+    "status": {
+      "type": "string",
+      "enum": ["done", "failed"],
+      "description": "\"failed\" when the adapter exited non-zero or returned no usable structured answer; class, verdict, citations, and proposal are then null/empty."
+    },
+    "class": {
+      "type": ["string", "null"],
+      "enum": ["non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
+               "ceiling", "claims-boundary", "repeated-act", "unclassed", null],
+      "description": "The stop's class as counsel itself reads it -- independent of, and possibly disagreeing with, the stop.class the counseled record already carries."
+    },
+    "verdict": {
+      "type": ["string", "null"],
+      "enum": ["answer", "patch", "person", null],
+      "description": "\"answer\": the stop is answerable inside the rules. \"patch\": the stop is a product defect. \"person\": the answer would touch the definition of done and no rule covers it."
+    },
+    "citations": {
+      "type": "array",
+      "description": "instruction, mechanism, guard -- each a path and symbol or a ruling id.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "path", "symbol", "ruling_id"],
+        "properties": {
+          "kind": {"type": "string", "enum": ["instruction", "mechanism", "guard"]},
+          "path": {"type": ["string", "null"]},
+          "symbol": {"type": ["string", "null"]},
+          "ruling_id": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "proposal": {
+      "type": "object",
+      "description": "The ruling text (verdict \"answer\"), the patch or the issue (verdict \"patch\"), or the one-line question or the issue (verdict \"person\") -- exactly one of the four populated, matching verdict. issue is the remedy filed as an item rather than shipped as a diff or asked as a bare question (issue #175).",
+      "additionalProperties": false,
+      "required": ["ruling_text", "patch", "question", "issue"],
+      "properties": {
+        "ruling_text": {"type": ["string", "null"]},
+        "patch": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["file", "symbol", "rejection_test", "diff"],
+          "properties": {
+            "file": {"type": "string", "minLength": 1},
+            "symbol": {"type": "string", "minLength": 1},
+            "rejection_test": {"type": "string", "minLength": 1},
+            "diff": {"type": "string", "minLength": 1}
+          }
+        },
+        "question": {"type": ["string", "null"]},
+        "issue": {
+          "type": ["object", "null"],
+          "description": "A title and a body in this repository's own issue format (a Severity/Provenance line, then Problem, Retires, Change, and Acceptance sections) -- the shape attavo file-stops already files a stop as.",
+          "additionalProperties": false,
+          "required": ["title", "body"],
+          "properties": {
+            "title": {"type": "string", "minLength": 1},
+            "body": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "forge": {
+      "type": "object",
+      "description": "counsel's own read of the forge on the counseled record's sha (issue #175) -- independent of, and read fresh from, whatever the counseled record's own forge_checks (verify only) already carries.",
+      "additionalProperties": false,
+      "required": ["read", "reason", "checks"],
+      "properties": {
+        "read": {
+          "type": "boolean",
+          "description": "false only for missing manifest configuration or a counseled record with no sha -- never silently treated as a green forge."
+        },
+        "reason": {
+          "type": ["string", "null"],
+          "description": "Set, naming the missing key, exactly when read is false; null when read is true."
+        },
+        "checks": {
+          "type": "array",
+          "description": "One entry per check [forge].checks_command reported on the counseled sha -- [] both when read is false and when a real read found no checks at all.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "conclusion"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "conclusion": {"type": ["string", "null"]}
+            }
+          }
+        }
+      }
+    },
+    "question": {
+      "type": ["string", "null"],
+      "description": "The operator's own text from `attavo counsel N --ask \"<text>\"` -- null for the ordinary stop path."
+    },
+    "answers": {
+      "type": ["string", "null"],
+      "description": "The stem of the counsel record this one follows (a --ask on a stop counsel already read), or null for a first reading. The prior record was the first input; the class it states is not re-derived."
+    },
+    "product_version": {"type": "string", "minLength": 1},
+    "product_pin": {"type": ["string", "null"]}
+  }
+}

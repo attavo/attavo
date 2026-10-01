@@ -693,3 +693,96 @@ def test_counsel_158_specimen_cites_the_marker_not_retry_with_codex(tmp_path: Pa
 
     record = json.loads((records_dir(root) / "counsel-01.json").read_text())
     assert_158_citation_and_no_retry(record)
+
+
+# --- counsel as a conversation with a record behind it (rulings of
+# 2026-09-25): a follow-up is handed counsel's earlier readings first and
+# names the one it answers; the stage's last events stand in for the
+# whole log unless the log is asked about; the tenant's corpus under
+# docs/ is handed and a missing path is refused. Specimen: #219's
+# counsel-02, 73 s and three turns re-deriving what counsel-01 already
+# said, searching the checkout for briefs that lived elsewhere. Written
+# red first against v0.29.0. ---
+
+
+MANIFEST_SCHEMA = json.loads((Path(__file__).resolve().parent.parent / "schema" / "manifest.schema.json").read_text())
+
+
+def counsel_log_text(root: Path, name: str) -> str:
+    return (records_dir(root) / f"{name}.log").read_text()
+
+
+def section(text: str, marker: str) -> str:
+    start = text.index(f"--- {marker} ---") + len(f"--- {marker} ---")
+    end = text.index("--- end ", start)
+    return text[start:end]
+
+
+def test_a_follow_up_is_handed_the_prior_readings_and_names_the_one_it_answers(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "build_valid")
+    configure_counsel_adapter(root)
+    approve_and_halt(root)
+    first = write_counsel_response(tmp_path, canned(
+        "answer", proposal={"ruling_text": "continue from the existing tree", "patch": None, "question": None}))
+    assert run_attavo(root, "counsel", "1", env={"ATTAVO_FIXTURE_COUNSEL_RESPONSE": str(first)}).returncode == 0
+    one = json.loads((records_dir(root) / "counsel-01.json").read_text())
+    assert one["answers"] is None and one["question"] is None, one
+    assert "--- end prior ---" in counsel_log_text(root, "counsel-01")
+    assert section(counsel_log_text(root, "counsel-01"), "ATTAVO_COUNSEL_PRIOR").strip() == "", "a first reading was handed prior readings"
+
+    assert run_attavo(root, "counsel", "1", "--ask", "why did it stop?",
+                      env={"ATTAVO_FIXTURE_COUNSEL_RESPONSE": str(first)}).returncode == 0
+    two = json.loads((records_dir(root) / "counsel-02.json").read_text())
+    assert (two["answers"], two["question"], two["record"]) == ("counsel-01", "why did it stop?", "build-01"), two
+    prior = json.loads(section(counsel_log_text(root, "counsel-02"), "ATTAVO_COUNSEL_PRIOR"))
+    assert [p["record"] for p in prior] == ["counsel-01"], prior
+    assert prior[0]["ruling_text"] == "continue from the existing tree" and prior[0]["verdict"] == "answer", prior
+
+    assert run_attavo(root, "counsel", "1", "--ask", "and then?",
+                      env={"ATTAVO_FIXTURE_COUNSEL_RESPONSE": str(first)}).returncode == 0
+    three = json.loads((records_dir(root) / "counsel-03.json").read_text())
+    assert three["answers"] == "counsel-02", three
+    prior = json.loads(section(counsel_log_text(root, "counsel-03"), "ATTAVO_COUNSEL_PRIOR"))
+    assert [p["record"] for p in prior] == ["counsel-01", "counsel-02"] and prior[1]["question"] == "why did it stop?", prior
+
+
+def test_a_follow_up_is_handed_the_events_tail_and_the_log_only_when_asked(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "build_valid")
+    configure_counsel_adapter(root)
+    approve_and_halt(root)
+    response = write_counsel_response(tmp_path, canned("answer"))
+    env = {"ATTAVO_FIXTURE_COUNSEL_RESPONSE": str(response)}
+    assert run_attavo(root, "counsel", "1", env=env).returncode == 0
+    stop_path = counsel_log_text(root, "counsel-01")
+    assert "log handed: yes" in stop_path, stop_path
+    events = section(stop_path, "ATTAVO_COUNSEL_EVENTS").strip().splitlines()
+    assert events and all(json.loads(line)["kind"] for line in events), "the stage's events were not handed"
+
+    assert run_attavo(root, "counsel", "1", "--ask", "why did it stop?", env=env).returncode == 0
+    follow_up = counsel_log_text(root, "counsel-02")
+    assert "log handed: no" in follow_up, follow_up
+    assert section(follow_up, "ATTAVO_COUNSEL_EVENTS").strip(), "a follow-up was handed no events"
+
+    assert run_attavo(root, "counsel", "1", "--ask", "what does the log say at the end?", env=env).returncode == 0
+    assert "log handed: yes" in counsel_log_text(root, "counsel-03")
+
+
+def test_counsel_reads_the_tenants_corpus_and_refuses_a_missing_path(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "build_valid")
+    configure_counsel_adapter(root)
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text() + '\n[counsel]\nreads = ["docs/rules.md", "docs/brief.md"]\n')
+    approve_and_halt(root)
+    response = write_counsel_response(tmp_path, canned("answer"))
+    env = {"ATTAVO_FIXTURE_COUNSEL_RESPONSE": str(response)}
+    refused = run_attavo(root, "counsel", "1", env=env)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "refused: [counsel].reads names docs/rules.md, docs/brief.md, which does not exist" in refused.stdout, refused.stdout
+    assert not list(records_dir(root).glob("counsel-*")), "a refused counsel wrote a record"
+    (root / "docs").mkdir()
+    (root / "docs" / "rules.md").write_text("# rules\n")
+    (root / "docs" / "brief.md").write_text("# brief\n")
+    assert run_attavo(root, "counsel", "1", env=env).returncode == 0
+    reads = section(counsel_log_text(root, "counsel-01"), "ATTAVO_COUNSEL_READS").split()
+    assert reads == [str(root / "docs" / "rules.md"), str(root / "docs" / "brief.md")], reads
+    jsonschema.validate({"reads": ["docs/rules.md"]}, MANIFEST_SCHEMA["properties"]["counsel"])

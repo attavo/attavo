@@ -10,6 +10,7 @@ Run: python3 -m pytest tests -q
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -206,3 +207,21 @@ def test_rejection_no_product_file_names_a_tenancy_path() -> None:
                 if needle in line:
                     offenders.append(f"{relpath}: {needle!r} in {stripped!r}")
     assert not offenders, offenders
+
+
+def test_the_manifests_counsel_reads_exist_and_docs_carries_the_corpus() -> None:
+    """[counsel].reads names what counsel reads before it answers; every
+    path exists, is under docs/, and is not empty. Red first against
+    v0.29.0, whose manifest had no [counsel] table and whose tree had no
+    docs/ (counsel-02 on #219 searched the checkout for the briefs and
+    found nothing)."""
+    m = tomllib.loads(MANIFEST.read_text())
+    reads = m["counsel"]["reads"]
+    assert len(reads) >= 3, reads
+    for rel in reads:
+        assert rel.startswith("docs/"), rel
+        path = ROOT / rel
+        assert path.is_file() and path.stat().st_size > 200, rel
+    assert "docs/method-rules.md" in reads, reads
+    schema = json.loads(MANIFEST_SCHEMA.read_text())
+    jsonschema.validate(m["counsel"], schema["properties"]["counsel"])

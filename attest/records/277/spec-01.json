@@ -1,0 +1,31 @@
+{
+  "sha": "512d963a0016821bcb5d68cc82b56ddec5210087",
+  "spec_sha": "512d963a0016821bcb5d68cc82b56ddec5210087",
+  "at": "2026-10-01T19:41:17Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "a-follow-up-answers-from-the-prior-reading.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "the-events-stand-in-for-the-log-unless-the-log-is-asked-about.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "the-corpus-is-handed-and-a-missing-path-is-refused.sh",
+      "on_tree": 1,
+      "on_stub": 0
+    }
+  ],
+  "refusal": null,
+  "class": "core",
+  "research": "not required by policy",
+  "record_version": 3,
+  "item": "277",
+  "product_version": "v0.32.0",
+  "product_pin": "v0.32.0"
+}
