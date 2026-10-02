@@ -427,12 +427,13 @@ def test_only_load_record_parses_record_file_content() -> None:
     stream from a tool's plain-text error (issue #94), proof five's own
     read of the forge's attestation statement (issue #158), and verify's
     own read of the forge checks a drive pass already wrote (issue #217,
-    ATTAVO_FORGE_CHECKS), and the Plan store's two: a version
+    ATTAVO_FORGE_CHECKS), the build's own events file, one line at a time, read by
+    the gate on how tests were run (#317, never a record), and the Plan store's two: a version
     of a store document, and the file `attavo plan put` is given -- working
     material outside git, never a record -- and the tenant's issues as
     [forge].issues_command prints them."""
     text = "\n".join(p.read_text() for p in sorted((ROOT / "attavo").rglob("*.py")))
-    assert text.count("json.loads(") == 12, (
+    assert text.count("json.loads(") == 13, (
         "a new json.loads( site was added; review it against issue #60 acceptance 6 "
         "and update this count")
     assert "data = json.loads(path.read_text())" in text

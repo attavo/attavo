@@ -61,13 +61,18 @@
         },
         "run": {
           "type": "string",
-          "description": "A command that reads test identifiers on stdin, one per line; its exit code is the verdict.",
+          "description": "A command that reads test identifiers on stdin, one per line; its exit code is the verdict. `attavo test` exports ATTAVO_TEST_WORKERS to it: the workers this call takes of the machine's cores, max(1, cores // calls running at once), counted from the lock files under <common git dir>/attavo/test-slots/. A runner that can run in parallel reads it (pytest-xdist: `-n ${ATTAVO_TEST_WORKERS:-auto}`).",
           "minLength": 1
         },
         "call_timeout_s": {
           "type": "integer",
           "minimum": 1,
           "description": "Seconds one `attavo test` run is given before its process group is ended and it exits 124. The executor's own test runs are bounded; the gate's are not."
+        },
+        "progress": {
+          "type": "string",
+          "enum": ["pytest"],
+          "description": "The runner's kind, when `attavo test` may read its per-test results as they happen (attavo/pytest_progress.py). With it, a run that reaches call_timeout_s prints what passed, what failed and what did not run, and the command that narrows it; without it, it prints that the run was ended and the narrowing command, and nothing about what ran."
         }
       }
     },

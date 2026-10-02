@@ -10,6 +10,8 @@ Run: python3 -m pytest tests -q
 from __future__ import annotations
 
 import json
+import os
+import re
 import subprocess
 import sys
 import time
@@ -17,7 +19,9 @@ from pathlib import Path
 from typing import Any
 
 import jsonschema
+import pytest
 
+from attavo.testtool import bound_report, read_progress, runner_calls_outside_the_tool
 from helpers import commit_all, git, make_tenant
 from test_drive import approve_item, record_files, run_attavo
 
@@ -147,16 +151,18 @@ def test_attavo_test_ends_a_run_past_its_bound_with_everything_it_started(tmp_pa
                                   'run = "sh -c \'cat >/dev/null; sleep 30 & echo $! > child.pid; wait\'"')
     (root / ".gitignore").write_text("child.pid\n")
     (root / "anything.txt").write_text("z\n")
-    started = time.monotonic()
-    run = run_attavo(root, "test", "1")
-    assert time.monotonic() - started < 15
+    run = run_attavo(root, "test", "1", timeout=300)
     assert run.returncode == 124, run.stdout + run.stderr
     assert "did not finish within 1 s" in run.stdout, run.stdout
     child = int((root / "child.pid").read_text())
-    time.sleep(0.5)
-    # a process that was ended but not yet reaped still has a pid; its state says Z
-    state = subprocess.run(["ps", "-o", "stat=", "-p", str(child)], capture_output=True, text=True,
-                           check=False).stdout.strip()
+    # a process that was ended but not yet reaped still has a pid; its state says Z.
+    # Ended means ended before the sleep it was started with would have: poll for the state.
+    for _ in range(100):
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(child)], capture_output=True, text=True,
+                               check=False).stdout.strip()
+        if state == "" or state.startswith("Z"):
+            break
+        time.sleep(0.1)
     assert state == "" or state.startswith("Z"), f"the run's own child outlived the timeout (state {state!r})"
 
 
@@ -207,12 +213,13 @@ def test_this_repositorys_selector_fails_safe_on_a_path_it_does_not_know() -> No
     assert select("attavo/a_module_nobody_mapped.py") == ["tests"]
     assert select("attavo/report.py", "attavo/a_module_nobody_mapped.py") == ["tests"]
     assert select("scripts/anything.py") == ["tests"]
-    assert select("bin/attavo") == ["tests"]
-    assert select("attavo/common.py") == ["tests"], "a module every test stands on selects everything"
+    # #317: these are placed now (rows and the import graph), not fail-safed
+    assert select("bin/attavo") != ["tests"] and select("attavo/common.py") != ["tests"]
 
 
 def test_this_repositorys_selector_maps_a_module_to_its_own_tests_and_prose_to_nothing() -> None:
-    assert select("attavo/report.py") == ["tests/test_report.py"]
+    picked = select("attavo/report.py")
+    assert "tests/test_report.py" in picked and picked != ["tests"], picked
     assert select("tests/test_ledger.py") == ["tests/test_ledger.py"]
     assert select("README.md", "attest/records/1/build-01.json", "attest/specs/9/spec.md") == []
     assert "tests/test_executor_conformance.py" in select("adapters/codex/run")
@@ -332,7 +339,7 @@ def test_attavo_test_writes_one_event_per_run(tmp_path: Path) -> None:
     assert len(texts) == 4, rows
     assert "mode named, 1 selected, exit 0" in texts[0], texts
     assert "mode all, 1 selected, exit 0" in texts[1], texts
-    assert "mode mapped, 1 selected, exit 0" in texts[2] and texts[2].endswith(" s"), texts
+    assert "mode mapped, 1 selected, exit 0" in texts[2] and re.search(r", \d+ s, \d+ workers$", texts[2]), texts
     assert texts[3].endswith("cached"), texts
 
 
@@ -361,33 +368,334 @@ def test_the_transport_refuses_inside_an_executor(tmp_path: Path) -> None:
     assert run_attavo(root, "drive", "1", "--report", env={"ATTAVO_STAGE": "build"}).returncode == 2
 
 
-def test_the_claude_code_adapter_denies_the_raw_runner_and_says_when_to_stop(tmp_path: Path) -> None:
+def test_the_claude_code_adapter_denies_no_test_runner_and_says_one_sentence(tmp_path: Path) -> None:
+    """#317: the runner deny-list is retired; the product reads the events
+    afterwards. The instruction says one thing about tests."""
     from test_adapters import dry_run
     argv = dry_run(tmp_path, extra_env={"ATTAVO_TEST_COMMAND": "python3 /product/bin/attavo test 7"})
     denied = argv[argv.index("--disallowedTools") + 1].split(",")
-    for pattern in ("Bash(pytest:*)", "Bash(python3 -m pytest:*)", "Bash(python -m pytest:*)",
-                    "Bash(attavo drive:*)", "Bash(attavo worker:*)"):
-        assert pattern in denied, denied
+    assert not [d for d in denied if d.startswith("Bash(")], denied
     assert "Agent" in denied and "Workflow" in denied, denied
     instruction = argv[argv.index("-p") + 1]
-    assert "Run a single test with `python3 /product/bin/attavo test 7 <path or test id>`" in instruction
-    assert "Do not run the test runner directly" in instruction, instruction
-    assert "when the criteria and `python3 /product/bin/attavo test 7` pass, commit and stop" in instruction
+    assert ("run tests only with `python3 /product/bin/attavo test 7 [path]`, which chooses the tests "
+            "for your changes and says what it did not run; when it and the criteria pass, commit and "
+            "stop, because the gates run for you and return any failure") in instruction, instruction
+    for gone in ("Do not run the test runner directly", "whole-tree check", "stops at"):
+        assert gone not in instruction, gone
     for adapter in ("claude-code", "codex"):
         conformance = json.loads((ROOT / "adapters" / adapter / "conformance.json").read_text())
         assert set(conformance["denied_commands"]) == {"mechanism", "patterns"}, adapter
     claude = json.loads((ROOT / "adapters" / "claude-code" / "conformance.json").read_text())
     assert set(claude["denied_commands"]["patterns"]) <= set(denied), "conformance.json and the adapter disagree"
+    assert not [p for p in claude["denied_commands"]["patterns"] if p.startswith("Bash(")]
 
 
-def test_every_module_under_attavo_is_mapped_or_named_shared() -> None:
-    namespace: dict[str, Any] = {}
-    exec(compile(SELECT.read_text(), str(SELECT), "exec"), {"__name__": "selector"}, namespace)
-    mapped = set(namespace["MODULE_TESTS"]) | set(namespace["SHARED_MODULES"])
-    modules = {p.relative_to(ROOT).as_posix() for p in (ROOT / "attavo").glob("*.py")}
-    unplaced = sorted(modules - mapped)
-    assert not unplaced, f"module(s) neither in MODULE_TESTS nor SHARED_MODULES: {unplaced}"
-    gone = sorted(m for m in namespace["SHARED_MODULES"] if m not in modules)
-    assert not gone, f"SHARED_MODULES names module(s) that do not exist: {gone}"
-    doubled = sorted(set(namespace["MODULE_TESTS"]) & set(namespace["SHARED_MODULES"]))
-    assert not doubled, f"module(s) both mapped and shared: {doubled}"
+def test_every_module_under_attavo_is_placed_by_a_row_or_the_import_graph() -> None:
+    """#317: no module of attavo/ selects the whole suite. A new module is
+    placed by a MODULE_TESTS row or because a test file imports it,
+    directly or through another module -- or this fails, naming it."""
+    modules = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "attavo").glob("*.py"))
+    whole = []
+    for module in modules:
+        picked = subprocess.run([sys.executable, str(SELECT)], input=module + "\n", capture_output=True,
+                                text=True, check=True).stdout.split()
+        if picked == ["tests"] or not picked:
+            whole.append(module)
+    assert not whole, f"module(s) the selector cannot place: {whole}"
+
+
+
+# --- #317: tests run only through the tool, and the product reads how they were run ---
+
+EVASIONS = ["cd tests && pytest", "bash -c 'pytest'", "timeout 60 python3 -m pytest",
+            "python3.11 -m pytest", "env X=1 pytest"]
+THE_TOOL = "python3 /product/bin/attavo test 1"
+
+
+def tool_call(command: str, at: str = "2026-10-01T10:00:00Z") -> list[dict[str, str]]:
+    return [{"at": at, "kind": "tool_call", "text": "Bash " + command},
+            {"at": at, "kind": "tool_result", "text": "ok"}]
+
+
+@pytest.mark.parametrize("command", EVASIONS + ["pytest -q", "python3 -m pytest -q tests/x.py",
+                                                "python3 -m unittest", "npm test", "cargo test"])
+def test_a_test_runner_run_outside_the_tool_is_named(command: str) -> None:
+    found = runner_calls_outside_the_tool(tool_call(command))
+    assert found == [("2026-10-01T10:00:00Z", command)], found
+
+
+@pytest.mark.parametrize("command", [
+    f"{THE_TOOL} tests/test_a.py 2>&1 | tail -50",
+    f"for f in tests/test_*.py; do {THE_TOOL} $f; done",
+    "pip install pytest", "grep -rn pytest tests | head", "git commit -m 'run pytest'",
+    "python3 -c 'import pytest; print(pytest.__version__)'", "ls tests && cat tests/conftest.py",
+])
+def test_the_tool_and_a_mention_of_a_runner_are_not_a_runner_run(command: str) -> None:
+    assert runner_calls_outside_the_tool(tool_call(command)) == []
+
+
+def test_a_call_the_permission_layer_denied_did_not_run() -> None:
+    events = [{"at": "t", "kind": "tool_call", "text": "Bash pytest -q"},
+              {"at": "t", "kind": "tool_result",
+               "text": "Permission to use Bash with command pytest -q has been denied."}]
+    assert runner_calls_outside_the_tool(events) == []
+
+
+def gated_tenant(tmp_path: Path, calls: list[str]) -> tuple[Path, dict[str, str]]:
+    """A tenant whose build adapter appends the given Bash calls to the
+    stage's events as an executor's stream would, then commits."""
+    root = tenant(tmp_path, checks='[checks]\ncommand = "true"')
+    feed = tmp_path / "executor-events.jsonl"
+    feed.write_text("".join(json.dumps(e) + "\n" for c in calls for e in tool_call(c)))
+    (root / "attavo" / "adapters" / "fixture").mkdir(parents=True)
+    run = root / "attavo" / "adapters" / "fixture" / "run"
+    run.write_text('#!/bin/sh\ncat "$FIXTURE_EVENTS" >> "$ATTAVO_EVENTS"\n'
+                   'cp "$ATTAVO_FEEDBACK" "$SEEN_FEEDBACK"\n'
+                   'if [ -f built.txt ]; then echo again >> built.txt; else echo built > built.txt; fi\ngit add built.txt\ngit commit -q -m built\n'
+                   'printf \'{"status": "done", "question": null, "model": "fixture"}\\n\'\n')
+    run.chmod(0o755)
+    commit_all(root, "an adapter that streams the given calls")
+    approve_item(root)
+    return root, {"FIXTURE_EVENTS": str(feed), "SEEN_FEEDBACK": str(tmp_path / "seen-feedback.txt")}
+
+
+@pytest.mark.parametrize("command", EVASIONS)
+def test_a_build_that_ran_a_runner_outside_the_tool_is_returned_by_name(tmp_path: Path, command: str) -> None:
+    root, env = gated_tenant(tmp_path, [f"{THE_TOOL} tests/test_a.py", command])
+    run = run_attavo(root, "build", "1", env=env)
+    assert run.returncode == 1, run.stdout + run.stderr
+    rec = build_record(root)
+    assert rec["status"] == "refused" and rec["refusal_kind"] == "test-bypass", rec
+    assert rec["stop"]["class"] == "test-bypass" and rec["stop"]["provenance"] == "executor"
+    assert command in rec["stop"]["detail"] and "attavo test" in rec["stop"]["detail"], rec["stop"]
+    jsonschema.validate(rec, json.loads((ROOT / "schema" / "records" / "build.schema.json").read_text()))
+
+
+def test_a_build_that_used_only_the_tool_is_not_returned(tmp_path: Path) -> None:
+    root, env = gated_tenant(tmp_path, [f"{THE_TOOL} tests/test_a.py 2>&1 | tail -20", "pip install pytest",
+                                        "grep -rn pytest tests"])
+    run = run_attavo(root, "build", "1", env=env)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert build_record(root)["status"] == "pass"
+
+
+def test_the_retry_of_a_returned_build_is_steered_to_the_tool(tmp_path: Path) -> None:
+    from attavo.stops import RETRYABLE_CLASSES
+    assert "test-bypass" in RETRYABLE_CLASSES
+    root, env = gated_tenant(tmp_path, ["cd tests && pytest -q"])
+    assert run_attavo(root, "build", "1", env=env).returncode == 1
+    (tmp_path / "executor-events.jsonl").write_text("")
+    assert run_attavo(root, "build", "1", env=env).returncode == 0
+    seen = (tmp_path / "seen-feedback.txt").read_text()
+    assert "stopped as test-bypass" in seen and "cd tests && pytest -q" in seen, seen
+    assert "run tests only with attavo test" in seen, seen
+
+
+# --- #317: the selector's rows and its import graph ---
+
+def selector(*paths: str, script: Path = SELECT) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([sys.executable, str(script)], input="".join(p + "\n" for p in paths),
+                          capture_output=True, text=True, check=True)
+
+
+def test_workflows_bin_attavo_and_the_fixture_adapter_select_the_tests_that_name_them() -> None:
+    for path, expected in ((".github/workflows/ci.yml", "tests/test_ci_inherit.py"),
+                           ("bin/attavo", "tests/test_cli_help.py"),
+                           ("adapters/fixture/run", "tests/test_executor_conformance.py")):
+        picked = selector(path).stdout.split()
+        assert expected in picked and picked != ["tests"], (path, picked)
+
+
+def test_a_module_most_others_import_selects_the_files_that_reach_it_not_the_whole_suite() -> None:
+    run = selector("attavo/common.py")
+    picked = run.stdout.split()
+    assert picked != ["tests"] and len(picked) < len(list((ROOT / "tests").glob("test_*.py"))), picked
+    assert "tests/test_drive.py" in picked and "tests/test_build.py" in picked, picked
+    assert run.stderr == ""
+
+
+def test_a_path_the_graph_cannot_place_selects_the_whole_suite_and_says_why() -> None:
+    for path, reason in (("pyproject.toml", "no row maps it"),
+                         ("tests/conftest.py", "pytest loads it for every test"),
+                         (".attavo/bin/forge-checks", "no row maps it")):
+        run = selector(path)
+        assert run.stdout.split() == ["tests"], (path, run.stdout)
+        assert f"select-tests: whole suite -- {path}: " in run.stderr and reason in run.stderr, run.stderr
+
+
+def test_the_import_graph_is_built_from_source_and_follows_imports_through_modules(tmp_path: Path) -> None:
+    """A repository the selector has never seen, whose modules would fail
+    if imported: a changed module selects the test files that import it
+    directly or through another module; one nothing imports is the whole
+    suite, with the reason."""
+    repo = tmp_path / "repo"
+    (repo / ".attavo" / "bin").mkdir(parents=True)
+    (repo / "attavo").mkdir()
+    (repo / "tests").mkdir()
+    script = repo / ".attavo" / "bin" / "select-tests"
+    script.write_text(SELECT.read_text())
+    (repo / "attavo" / "__init__.py").write_text("")
+    (repo / "attavo" / "a.py").write_text("from attavo import b\nraise RuntimeError('never imported')\n")
+    (repo / "attavo" / "b.py").write_text("raise RuntimeError('never imported')\n")
+    (repo / "attavo" / "c.py").write_text("x = 1\n")
+    (repo / "tests" / "test_x.py").write_text("from attavo.a import f\n")
+    (repo / "tests" / "test_y.py").write_text("import json\n")
+    assert selector("attavo/b.py", script=script).stdout.split() == ["tests/test_x.py"]
+    assert selector("attavo/a.py", script=script).stdout.split() == ["tests/test_x.py"]
+    run = selector("attavo/c.py", script=script)
+    assert run.stdout.split() == ["tests"] and "attavo/c.py: no table row, and no test file imports it" in run.stderr
+
+
+# --- #317: the worker budget ---
+
+def slot_tenant(tmp_path: Path, run: str) -> Path:
+    return tenant(tmp_path, tests=f'[tests]\nselect = "cat"\ncall_timeout_s = 60\nrun = "{run}"')
+
+
+WORKERS_RUN = "sh -c 'cat >/dev/null; echo workers=$ATTAVO_TEST_WORKERS'"
+
+
+def slot_dir(root: Path) -> Path:
+    return root / ".git" / "attavo" / "test-slots"
+
+
+def test_one_call_alone_gets_every_core_and_gives_its_slot_back(tmp_path: Path) -> None:
+    root = slot_tenant(tmp_path, WORKERS_RUN)
+    run = run_attavo(root, "test", "1", "tests/test_a.py", env={"ATTAVO_TEST_CORES": "6"})
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "workers=6" in run.stdout, run.stdout
+    assert "6 worker(s) of 6 cores, 1 call(s) running" in run.stdout, run.stdout
+    assert list(slot_dir(root).glob("*.slot")) == []
+
+
+def holder(root: Path, alive: bool) -> "subprocess.Popen[bytes]":
+    """A process standing in for another call: its pid in a slot file."""
+    proc = subprocess.Popen(["sleep", "60"])
+    if not alive:
+        proc.kill()
+        proc.wait()
+    slot_dir(root).mkdir(parents=True, exist_ok=True)
+    (slot_dir(root) / f"{proc.pid}-held.slot").write_text(f"{proc.pid}\n")
+    return proc
+
+
+def test_a_call_among_three_takes_a_third_of_the_cores(tmp_path: Path) -> None:
+    root = slot_tenant(tmp_path, WORKERS_RUN)
+    others = [holder(root, alive=True), holder(root, alive=True)]
+    try:
+        run = run_attavo(root, "test", "1", "tests/test_a.py", env={"ATTAVO_TEST_CORES": "6"})
+    finally:
+        for proc in others:
+            proc.kill()
+            proc.wait()
+    assert "workers=2" in run.stdout and "2 worker(s) of 6 cores, 3 call(s) running" in run.stdout, run.stdout
+    assert len(list(slot_dir(root).glob("*.slot"))) == 2   # its own is gone, the two holders' remain
+
+
+def test_a_dead_holders_slot_is_reaped_and_not_counted(tmp_path: Path) -> None:
+    root = slot_tenant(tmp_path, WORKERS_RUN)
+    holder(root, alive=False)
+    run = run_attavo(root, "test", "1", "tests/test_a.py", env={"ATTAVO_TEST_CORES": "6"})
+    assert "workers=6" in run.stdout and "1 call(s) running" in run.stdout, run.stdout
+    assert list(slot_dir(root).glob("*.slot")) == []
+
+
+def test_concurrent_calls_hold_one_slot_each_and_the_last_to_arrive_sees_all_three(tmp_path: Path) -> None:
+    barrier = tmp_path / "barrier"
+    barrier.mkdir()
+    seen = tmp_path / "slots-held-at-barrier"
+    run_cmd = (f"sh -c 'cat >/dev/null; touch {barrier}/$$; "
+               f"while [ $(ls {barrier} | grep -vc done) -lt 3 ]; do sleep 0.05; done; "
+               f"ls {slot_dir(tmp_path / 'build_valid')} | wc -l >> {seen}; touch {barrier}/done.$$; "
+               f"while [ $(ls {barrier} | grep -c done) -lt 3 ]; do sleep 0.05; done; "
+               f"echo workers=$ATTAVO_TEST_WORKERS'")
+    root = slot_tenant(tmp_path, run_cmd)
+    procs = [subprocess.Popen([sys.executable, str(ROOT / "bin" / "attavo"), "test", "1", f"tests/t{i}.py"],
+                              cwd=str(root), stdout=subprocess.PIPE, text=True,
+                              env={**os.environ, "ATTAVO_TEST_CORES": "6"}) for i in range(3)]
+    outs = [p.communicate(timeout=120)[0] for p in procs]
+    workers = sorted(int(o.split("workers=")[1].split()[0]) for o in outs)
+    assert all(p.returncode == 0 for p in procs), outs
+    assert workers[0] == 2 and workers[-1] <= 6, workers     # the last to take a slot found three
+    assert set(seen.read_text().split()) == {"3"}, seen.read_text()   # three held at once
+    assert list(slot_dir(root).glob("*.slot")) == []
+
+
+# --- #317: the answer at the bound ---
+
+def test_the_bound_report_names_what_passed_failed_and_did_not_run() -> None:
+    collected = [f"tests/test_a.py::t{i}" for i in range(3)] + ["tests/test_b.py::t0", "tests/test_c.py::t0",
+                                                                   "tests/test_c.py::t1"]
+    results = {"tests/test_a.py::t0": "passed", "tests/test_a.py::t1": "passed",
+               "tests/test_a.py::t2": "failed", "tests/test_b.py::t0": "skipped"}
+    text = bound_report("9", 240, collected, results, "attavo test 9")
+    assert text.splitlines()[0] == ("attavo test 9: stopped at 240 s with 2 of 6 tests not run "
+                                    "(3 passed, 1 failed); the run and everything it started were ended.")
+    assert "failed: tests/test_a.py::t2" in text
+    assert "not run: tests/test_c.py (2)" in text
+    assert text.splitlines()[-1].startswith("narrow it: attavo test 9 <path>")
+    big = bound_report("9", 240, [f"tests/test_{i:02d}.py::t" for i in range(40)], {}, "attavo test 9")
+    assert "(+28 more files)" in big and len(big) < 1500
+
+
+PROGRESS_SCRIPT = """cat >/dev/null
+printf 'C t/a.py::one\\nC t/a.py::two\\nC t/b.py::three\\nR passed t/a.py::one\\nR failed t/a.py::two\\n' >> "$ATTAVO_TEST_PROGRESS"
+sleep 60
+"""
+
+
+def test_a_run_that_reaches_the_bound_prints_what_ran_and_how_to_narrow(tmp_path: Path) -> None:
+    root = tenant(tmp_path, tests='[tests]\nselect = "cat"\ncall_timeout_s = 3\nprogress = "pytest"\n'
+                                  'run = "sh progress.sh"')
+    (root / "progress.sh").write_text(PROGRESS_SCRIPT)
+    run = run_attavo(root, "test", "1", "t", timeout=120)
+    assert run.returncode == 124, run.stdout + run.stderr
+    assert "stopped at 3 s with 1 of 3 tests not run (1 passed, 1 failed)" in run.stdout, run.stdout
+    assert "failed: t/a.py::two" in run.stdout and "not run: t/b.py (1)" in run.stdout, run.stdout
+    assert "narrow it: python3 " in run.stdout and " test 1 <path>" in run.stdout, run.stdout
+    assert list((root / ".git" / "attavo").glob("test-progress-*")) == []
+    assert list(slot_dir(root).glob("*.slot")) == []
+
+
+def test_a_run_that_reaches_the_bound_with_no_progress_declared_still_says_how_to_narrow(tmp_path: Path) -> None:
+    root = tenant(tmp_path, tests='[tests]\nselect = "cat"\ncall_timeout_s = 1\nrun = "sleep 60"')
+    run = run_attavo(root, "test", "1", "t", timeout=120)
+    assert run.returncode == 124
+    assert "did not finish within 1 s" in run.stdout and "narrow it: python3 " in run.stdout, run.stdout
+    assert "[tests].progress" in run.stdout, run.stdout
+
+
+@pytest.mark.parametrize("workers", ["0", "2"])
+def test_the_progress_plugin_records_every_collected_and_finished_test(tmp_path: Path, workers: str) -> None:
+    """The plugin `attavo test` loads for a pytest tenant: a line per
+    collected test and per finished one, from every xdist worker."""
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "test_p.py").write_text("def test_ok():\n    pass\n\n\ndef test_bad():\n    assert False\n\n\n"
+                                     "import pytest\n\n\n@pytest.mark.skip\ndef test_skipped():\n    pass\n")
+    progress = tmp_path / "progress.txt"
+    progress.write_text("")
+    run = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-n", workers,
+                          "-p", "attavo.pytest_progress", str(suite)],
+                         cwd=str(suite), capture_output=True, text=True, check=False,
+                         env={**os.environ, "PYTHONPATH": str(ROOT), "ATTAVO_TEST_PROGRESS": str(progress)})
+    assert run.returncode == 1, run.stdout + run.stderr
+    collected, results = read_progress(progress)
+    ids = {i.split("::")[-1] for i in collected}
+    assert ids == {"test_ok", "test_bad", "test_skipped"}, collected
+    assert {i.split("::")[-1]: o for i, o in results.items()} == {
+        "test_ok": "passed", "test_bad": "failed", "test_skipped": "skipped"}, results
+
+
+def test_signalling_a_process_group_that_has_already_exited_is_not_an_error() -> None:
+    """On macOS killpg answers EPERM for a group whose members have all
+    exited and are not yet reaped; the bound's cleanup must treat that as
+    gone, as it does ESRCH. Seen as a PermissionError out of run_bounded
+    under load."""
+    from unittest import mock
+
+    from attavo.testtool import _signal_group
+    proc = mock.Mock(pid=1)
+    for error in (ProcessLookupError(), PermissionError(1, "Operation not permitted")):
+        with mock.patch("os.killpg", side_effect=error):
+            _signal_group(proc, 9)

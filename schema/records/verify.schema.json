@@ -108,7 +108,8 @@
           "type": "string",
           "enum": ["non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
                    "ceiling", "claims-boundary", "repeated-act", "unclassed", "question",
-                   "died", "hung", "transient", "returned", "empty", "foreign-commit"]
+                   "died", "hung", "transient", "returned", "empty", "foreign-commit",
+                   "test-bypass"]
         },
         "signature": {
           "type": ["string", "null"],

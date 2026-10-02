@@ -110,7 +110,11 @@ def test_a_transient_stop_retries_plainly_after_the_wait(tmp_path: Path) -> None
     counsel run and two presses on exactly this)."""
     prelude = ('  if [ ! -f "$ATTAVO_RECORDS_DIR/build-01.json" ]; then\n'
                f"    echo '{TRANSIENT_LINE}'\n    exit 1\n  fi")
-    root, bare = approved_tenant(tmp_path, prelude, retry_after_s=3)
+    # a wait an hour long: "inside the wait" holds however slow the machine is, and
+    # "past it" is the clock file, never the passing of time
+    # (the ceilings and the stall bound are a day, so the clock file moves only the wait)
+    root, bare = approved_tenant(tmp_path, prelude, retry_after_s=3600, build_ceiling_s=86400,
+                                 verify_ceiling_s=86400, stall_after_s=86400)
     assert run_attavo(root, "drive", "1", env=FAST).returncode == 0
     wait_for(lambda: pushed(bare, "build record for item 1 (build-01)"))
     assert stop_of(root, "build", 1)["class"] == "transient"
@@ -123,7 +127,7 @@ def test_a_transient_stop_retries_plainly_after_the_wait(tmp_path: Path) -> None
 
     # past the wait: the clock says so, and the pass starts the next attempt at once
     passes_until(root, lambda: len(record_files(root, "build")) == 2, seconds=40,
-                 env=clock_ahead(tmp_path, 10))
+                 env=clock_ahead(tmp_path, 7200))
     rec = latest_record(root, "build")
     assert rec["status"] == "pass" and rec["retry_of"] == "build-01", rec
     assert counsel_records(root) == []
@@ -387,7 +391,7 @@ def test_adapters_class_transient() -> None:
     classes carry it."""
     from attavo.stops import RETRYABLE_CLASSES, STOP_CLASSES
     assert "transient" in STOP_CLASSES and "returned" in STOP_CLASSES
-    assert RETRYABLE_CLASSES == ("died", "hung", "transient", "returned")
+    assert RETRYABLE_CLASSES == ("died", "hung", "transient", "returned", "test-bypass")
     for adapter in ("fixture", "claude-code", "codex"):
         conf = json.loads((ROOT / "adapters" / adapter / "conformance.json").read_text())
         assert "streams_events" in conf, adapter

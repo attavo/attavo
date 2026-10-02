@@ -38,7 +38,8 @@ retires = [
 [tests]
 select = "python3 .attavo/bin/select-tests"
 call_timeout_s = 240
-run = "xargs -r python3 -m pytest -q -m 'not own_records'"
+run = "xargs -r python3 -m pytest -q -n ${ATTAVO_TEST_WORKERS:-auto} -m 'not own_records'"
+progress = "pytest"
 
 [paths]
 specs = "attest/specs"
@@ -54,7 +55,7 @@ approvers = ["dbean10"]
 
 [checks]
 command = "python3 -m mypy"
-probe = "python3 -c 'import pytest, mypy, jsonschema'"
+probe = "python3 -c 'import pytest, xdist, mypy, jsonschema'"
 probe_timeout_s = 60
 
 [drive]

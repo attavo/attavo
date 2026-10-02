@@ -21,12 +21,14 @@ record.
 `attavo build` runs the tenant's gates after each commit and feeds a
 failure back on the next iteration — the executor is not the runner of the
 tenant's checks, and is not told what they are. When `ATTAVO_TEST_COMMAND`
-is set (`../README.md`), the instruction gives it: "to run tests while you
-work, run `<command>`: it runs the tests selected for the files you have
-changed and stops at `<N>` s. Do not run the whole test suite or any
-whole-tree check yourself: after you commit, the gates are run for you and
-any failure is returned to you on the next iteration." The "stops at" clause
-is present only when `ATTAVO_TEST_TIMEOUT_S` is set. When
+is set (`../README.md`), the instruction says one thing about tests: "run
+tests only with `<command> [path]`, which chooses the tests for your changes
+and says what it did not run; when it and the criteria pass, commit and
+stop, because the gates run for you and return any failure." The adapter
+denies no test runner by name (the deny-list of runner commands was retired
+in #317): a build whose events show a Bash call that ran a test runner
+other than through `attavo test` is returned by the product as class
+`test-bypass`, and its retry is steered to the tool. When
 `ATTAVO_TEST_COMMAND` is unset, the instruction says nothing about tests.
 
 ## The sandbox is the boundary, not an allowed_tools list

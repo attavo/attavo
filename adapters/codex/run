@@ -271,16 +271,10 @@ def build_instruction() -> str:
 
     test_command = os.environ.get("ATTAVO_TEST_COMMAND")
     if test_command:
-        bound = os.environ.get("ATTAVO_TEST_TIMEOUT_S")
         parts.append(
-            f"to run tests while you work, run `{test_command}`: it runs the tests "
-            "selected for the files you have changed"
-            + (f" and stops at {bound} s" if bound else "")
-            + ". Run a single test with `" + test_command + " <path or test id>`. "
-            "Do not run the test runner directly, the whole test suite, or any "
-            "whole-tree check yourself: when the criteria and " + "`" + test_command + "`"
-            + " pass, commit and stop; the gates are run for you and any failure is "
-            "returned to you on the next iteration")
+            f"run tests only with `{test_command} [path]`, which chooses the tests for your "
+            "changes and says what it did not run; when it and the criteria pass, commit and "
+            "stop, because the gates run for you and return any failure")
 
     return "\n\n".join(parts)
 

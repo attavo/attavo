@@ -102,7 +102,7 @@
     },
     "refusal_kind": {
       "type": ["string", "null"],
-      "enum": ["claims", "protected", "foreign-commit", "environment", null],
+      "enum": ["claims", "protected", "foreign-commit", "test-bypass", "environment", null],
       "description": "Issue #254: which guard refused this build -- the input derive_stop reads to class a refusal (environment: the [checks].command preflight, which builds its own stop). null unless status is \"refused\"."
     },
     "report_class": {
@@ -120,7 +120,7 @@
           "enum": ["non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
                    "ceiling", "claims-boundary", "repeated-act", "unclassed", "question",
                    "environment", "gate", "died", "hung", "transient", "returned", "empty",
-                   "foreign-commit"]
+                   "foreign-commit", "test-bypass"]
         },
         "signature": {
           "type": ["string", "null"],

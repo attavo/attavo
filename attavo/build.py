@@ -28,7 +28,8 @@ from attavo.events import append_event, stage_events_dir
 from attavo.records import latest_record, next_attempt_number, parse_attempts, write_record
 from attavo.spec import parse_spec, run_criterion
 from attavo.stops import _log_last_line, derive_stop, gate_of, signature_of
-from attavo.testtool import run_bounded, without_records
+from attavo.testtool import (TEST_BYPASS_STEER, read_events, run_bounded,
+                             runner_calls_outside_the_tool, without_records)
 
 # --- build: adapter, claims boundary, criteria, and the tenant's tests ---
 
@@ -268,6 +269,9 @@ def _retry_seed(root: Path, m: dict[str, Any], records_dir: Path
     stop: dict[str, Any] = prior.get("stop") or {}
     lines = [f"attempt {prior_stem} stopped as {stop.get('class')}: {stop.get('detail') or ''}",
             f"signature: {stop.get('signature') or ''}", ""]
+
+    if stop.get("class") == "test-bypass":
+        lines += [TEST_BYPASS_STEER, ""]
 
     forge = m.get("forge") or {}
     if stop.get("class") == "returned":
@@ -576,6 +580,18 @@ def cmd_build(argv: list[str]) -> int:
                 refusal = (f"commit {foreign['sha']} by {foreign['name']} <{foreign['email']}> "
                            f"not authored by the executor")
                 refusal_kind = "foreign-commit"
+                break
+
+            # #317: the tool is the one way tests are run in a build. A Bash
+            # call in this stage's events that ran a test runner any other
+            # way returns the build, by name; the retry is steered to the tool.
+            bypass = runner_calls_outside_the_tool(read_events(events_path))
+            if bypass:
+                at, command = bypass[0]
+                status_out = "refused"
+                refusal = (f"at {at} the executor ran a test runner outside `attavo test`: "
+                           f"{command}")
+                refusal_kind = "test-bypass"
                 break
 
             # An executor that committed nothing this iteration built

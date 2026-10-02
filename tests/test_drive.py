@@ -63,13 +63,17 @@ FAST_POLL_ENV = {"ATTAVO_DRIVE_POLL_BOUND_S": "0.9", "ATTAVO_DRIVE_POLL_INTERVAL
                  "ATTAVO_HEARTBEAT_S": "0.2"}
 
 
-def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
+def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None,
+               timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+    """`timeout` is a hang guard, not an assertion on speed: a run that
+    needs it has not finished at all (subprocess.TimeoutExpired)."""
     full_env = dict(os.environ)
     full_env.update(FAST_POLL_ENV)
     if env:
         full_env.update(env)
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
-                          capture_output=True, text=True, check=False, env=full_env)
+                          capture_output=True, text=True, check=False, env=full_env,
+                          timeout=timeout)
 
 
 def drive(root: Path, *args: str, env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
@@ -434,7 +438,9 @@ def test_drive_until_ready_runs_build_then_verify_to_ready_in_one_call(tmp_path:
     approve_item(root)
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
 
-    run = run_attavo(root, "drive", "1", "--until-ready")
+    # the poll ends on the forge's conclusion; a long bound keeps a slow machine from ending it early
+    slow_ok = {"ATTAVO_DRIVE_POLL_BOUND_S": "120"}
+    run = run_attavo(root, "drive", "1", "--until-ready", env=slow_ok, timeout=300)
     assert run.returncode == 0, run.stdout + run.stderr
     assert "ready to merge" in run.stdout.lower()
 
@@ -446,7 +452,7 @@ def test_drive_until_ready_runs_build_then_verify_to_ready_in_one_call(tmp_path:
 
     # Idempotence, same as the single-pass form: a further --until-ready
     # call repeats exactly the same ready-to-merge result, writing nothing.
-    run2 = run_attavo(root, "drive", "1", "--until-ready")
+    run2 = run_attavo(root, "drive", "1", "--until-ready", env=slow_ok, timeout=300)
     assert run2.returncode == 0
     assert "ready to merge" in run2.stdout.lower()
     assert len(record_files(root, "build")) == 1
@@ -560,7 +566,7 @@ def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_start_line_before_t
     add_bare_remote(root, tmp_path)
     approve_item(root)
 
-    sleep_s = 3.0
+    release = tmp_path / "release"
     adapter_dir = root / "attavo" / "adapters" / "slow"
     adapter_dir.mkdir(parents=True)
     adapter_run = adapter_dir / "run"
@@ -572,7 +578,8 @@ def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_start_line_before_t
         '"tokens":{"input":1,"output":1},"cost_usd":0.0,"findings":[],"tests_named":[]}\\n\'\n'
         "  exit 0\n"
         "fi\n"
-        f"sleep {sleep_s}\n"
+        # the stage ends when the test says so (a file), never after a time
+        f'n=0; while [ ! -f "{release}" ] && [ "$n" -lt 1200 ]; do sleep 0.1; n=$((n+1)); done\n'
         "echo built > built.txt\n"
         "git add built.txt\n"
         "git commit -q -m 'slow: write built.txt'\n"
@@ -602,15 +609,18 @@ def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_start_line_before_t
     thread.start()
 
     try:
-        first_line = lines.get(timeout=sleep_s / 2)
+        first_line = lines.get(timeout=60)
     except queue.Empty:
         proc.kill()
         raise
     assert first_line is not None and "Build started" in first_line, first_line
+    # the line arrived while the stage was still held: the process is alive and nothing is built
+    assert proc.poll() is None and not (root / "built.txt").exists()
+    release.write_text("go\n")
 
     collected = [first_line]
     while True:
-        line = lines.get(timeout=sleep_s + 30)
+        line = lines.get(timeout=120)
         if line is None:
             break
         collected.append(line)
@@ -670,21 +680,18 @@ def test_drive_until_ready_waits_out_the_bound_on_a_forge_still_running(tmp_path
 
     assert drive(root, "1").returncode == 0  # builds
 
-    started = time.monotonic()
-    run = drive(root, "1")
-    elapsed = time.monotonic() - started
+    # a pass reads the forge once and returns: with a bound of an hour, a pass
+    # that waited would not come back inside the hang guard (TimeoutExpired)
+    run = run_attavo(root, "drive", "1", env={"ATTAVO_DRIVE_POLL_BOUND_S": "3600"}, timeout=120)
     assert run.returncode == 0, run.stdout + run.stderr
     assert "Waiting on the checks" in run.stdout and "in_progress" in run.stdout
-    assert elapsed < 0.4, f"a pass reads the forge once and returns -- took {elapsed:.2f}s"
+    assert "did not conclude" not in run.stdout
 
-    started = time.monotonic()
-    run2 = run_attavo(root, "drive", "1", "--until-ready")
-    elapsed = time.monotonic() - started
+    # --until-ready repeats the pass, then gives up naming the check
+    run2 = run_attavo(root, "drive", "1", "--until-ready", timeout=120)
     assert run2.returncode == 1, run2.stdout + run2.stderr
     assert "in_progress" in run2.stdout and "did not conclude" in run2.stdout
-    assert elapsed >= 0.9, (
-        f"--until-ready should repeat the pass for the bound before giving up "
-        f"-- took only {elapsed:.2f}s")
+    assert run2.stdout.count("Waiting on the checks") >= 2, run2.stdout
 
     assert record_files(root, "verify") == []
 

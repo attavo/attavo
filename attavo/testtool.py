@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import json
 import os
+import re
+import shlex
 import signal
 import subprocess
 import sys
+import uuid
+from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +26,8 @@ from attavo.common import MANIFEST, derive_item_id, git, read_manifest
 
 TIMED_OUT_EXIT = 124
 
+PRODUCT_ROOT = Path(__file__).resolve().parent.parent
+
 # What an ended run is given to leave on its own after SIGTERM, before its
 # whole process group is sent SIGKILL.
 END_GRACE_S = 2
@@ -27,12 +36,15 @@ END_GRACE_S = 2
 def _signal_group(proc: "subprocess.Popen[str]", sig: int) -> None:
     try:
         os.killpg(proc.pid, sig)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
+        # gone, or -- on macOS -- a group whose every member has already exited
+        # and is waiting to be reaped, which answers EPERM, not ESRCH (seen under
+        # load: #317's full-suite runs at -n auto)
         pass
 
 
-def run_bounded(command: str, root: Path, stdin: str, timeout_s: int | None
-                ) -> tuple[int, str, str, bool]:
+def run_bounded(command: str, root: Path, stdin: str, timeout_s: int | None,
+                env: dict[str, str] | None = None) -> tuple[int, str, str, bool]:
     """(exit, stdout, stderr, timed_out) of `command` run through the shell
     from root. The command is its own process group's leader, so a run past
     timeout_s is ended with everything it started -- a test runner's
@@ -41,7 +53,7 @@ def run_bounded(command: str, root: Path, stdin: str, timeout_s: int | None
     that outlasts its bound exits 124, as timeout(1) does."""
     proc = subprocess.Popen(command, shell=True, cwd=str(root), stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                            start_new_session=True)
+                            start_new_session=True, env=env)
     try:
         out, err = proc.communicate(stdin, timeout=timeout_s)
     except subprocess.TimeoutExpired:
@@ -59,6 +71,222 @@ def run_bounded(command: str, root: Path, stdin: str, timeout_s: int | None
         return TIMED_OUT_EXIT, out, err, True
     _signal_group(proc, signal.SIGKILL)
     return proc.returncode, out, err, False
+
+
+# --- the worker budget (#317): a bulkhead, not a pool. Every `attavo test`
+# call that runs takes a slot under <common git dir>/attavo/test-slots/ (a
+# file per call, removed when the call ends) and runs with
+# max(1, cores // calls holding a slot) workers, so several items building
+# at once share the machine instead of each asking for all of it (the
+# specimen: load averages of 33 to 75 with `-n auto` per call). A holder
+# that died without removing its file is reaped by its pid. The runner
+# reads the number from ATTAVO_TEST_WORKERS. ---
+
+SLOTS_DIR = "attavo/test-slots"
+
+
+def host_cores() -> int:
+    """ATTAVO_TEST_CORES when set (a test's, or an operator holding some
+    cores back), else what the machine has."""
+    declared = os.environ.get("ATTAVO_TEST_CORES", "")
+    return int(declared) if declared.isdigit() and int(declared) > 0 else (os.cpu_count() or 1)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def slots_dir(root: Path) -> Path:
+    common = Path(git(root, "rev-parse", "--git-common-dir").strip())
+    return (common if common.is_absolute() else root / common) / SLOTS_DIR
+
+
+def workers_for(cores: int, running: int) -> int:
+    return max(1, cores // max(1, running))
+
+
+@contextmanager
+def test_slot(root: Path) -> Iterator[tuple[int, int, int]]:
+    """(workers, running, cores) for this call, holding its slot until the
+    block ends. running counts this call and every live holder; a slot
+    whose pid is dead is removed first."""
+    directory = slots_dir(root)
+    directory.mkdir(parents=True, exist_ok=True)
+    mine = directory / f"{os.getpid()}-{uuid.uuid4().hex[:8]}.slot"
+    mine.write_text(f"{os.getpid()}\n")
+    try:
+        running = 0
+        for slot in sorted(directory.glob("*.slot")):
+            try:
+                holder = int(slot.read_text().split()[0])
+            except (OSError, ValueError, IndexError):
+                holder = 0
+            if slot == mine or (holder and _alive(holder)):
+                running += 1
+            else:
+                slot.unlink(missing_ok=True)
+        cores = host_cores()
+        yield workers_for(cores, running), running, cores
+    finally:
+        mine.unlink(missing_ok=True)
+
+
+# --- the answer at the bound (#317): what passed, what failed, what did not
+# run, and the command that narrows. The runner writes one line per test to
+# the file named by ATTAVO_TEST_PROGRESS as the test ends (attavo/
+# pytest_progress.py, loaded for a tenant that declares [tests].progress =
+# "pytest"), so a run that is ended still leaves its results behind. ---
+
+PROGRESS_PLUGIN = "attavo.pytest_progress"
+PROGRESS_FILES_SHOWN = 12
+PROGRESS_FAILED_SHOWN = 10
+
+
+def read_progress(path: Path) -> tuple[list[str], dict[str, str]]:
+    """(collected ids in the order first seen, id -> outcome) from a
+    progress file: `C <id>` a collected test, `R <outcome> <id>` a result."""
+    collected: dict[str, None] = {}
+    results: dict[str, str] = {}
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return [], {}
+    for line in lines:
+        kind, _, rest = line.partition(" ")
+        if kind == "C" and rest:
+            collected[rest] = None
+        elif kind == "R":
+            outcome, _, test_id = rest.partition(" ")
+            if test_id:
+                results[test_id] = outcome
+    return list(collected), results
+
+
+def bound_report(item_id: str, bound: int | None, collected: list[str], results: dict[str, str],
+                 narrow: str) -> str:
+    """The text printed when a run reaches its bound."""
+    passed = sum(1 for o in results.values() if o in ("passed", "skipped", "xfailed", "xpassed"))
+    failed = sorted(i for i, o in results.items() if o == "failed")
+    not_run = [i for i in collected if i not in results]
+    files = Counter(i.split("::")[0] for i in not_run)
+    lines = [f"attavo test {item_id}: stopped at {bound} s with {len(not_run)} of {len(collected)} "
+             f"tests not run ({passed} passed, {len(failed)} failed); the run and everything it "
+             "started were ended."]
+    if failed:
+        more = f" (+{len(failed) - PROGRESS_FAILED_SHOWN} more)" if len(failed) > PROGRESS_FAILED_SHOWN else ""
+        lines.append("failed: " + ", ".join(failed[:PROGRESS_FAILED_SHOWN]) + more)
+    if files:
+        shown = sorted(files.items())[:PROGRESS_FILES_SHOWN]
+        more_files = (f" (+{len(files) - PROGRESS_FILES_SHOWN} more files)"
+                      if len(files) > PROGRESS_FILES_SHOWN else "")
+        lines.append("not run: " + ", ".join(f"{f} ({n})" for f, n in shown) + more_files)
+    lines.append(f"narrow it: {narrow} <path>   (one or a few files finish well inside {bound} s)")
+    return "\n".join(lines)
+
+
+def unreadable_bound_report(item_id: str, bound: int | None, narrow: str) -> str:
+    return (f"attavo test {item_id}: the run did not finish within {bound} s; it and everything it "
+            f"started were ended; what ran is not known to the tool (the tenant declares no "
+            f"[tests].progress).\nnarrow it: {narrow} <path>")
+
+
+# --- the gate on how tests were run (#317): a build's own events name every
+# Bash call the executor made. A call that ran a test runner other than
+# through `attavo test` returns the build, by name. The command text is read
+# at command position (after VAR=x, env, timeout N, nice ... and inside
+# `sh -c '...'`), so `pip install pytest` and `grep pytest` are not runs.
+# It reads what the events carry: not the inside of a script, and not past
+# the events' own cap on a command's length. ---
+
+TEST_BYPASS_STEER = "run tests only with attavo test"
+
+_SEPARATORS = re.compile(r"\s*(?:&&|\|\||;|\||\n)\s*")
+_WRAPPERS = {"timeout", "env", "time", "nice", "nohup", "command", "exec", "sudo", "xargs"}
+_SHELL_C = re.compile(r"\b(?:ba|z)?sh\s+-c\s+(['\"])(.*)\1")
+
+
+def _command_segments(command: str) -> Iterator[str]:
+    for segment in _SEPARATORS.split(command):
+        yield segment
+        inner = _SHELL_C.search(segment)
+        if inner:
+            yield from _command_segments(inner.group(2))
+
+
+def _command_words(segment: str) -> list[str]:
+    try:
+        words = shlex.split(segment)
+    except ValueError:
+        words = segment.split()
+    i = 0
+    while i < len(words):
+        word = words[i]
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", word):
+            i += 1
+        elif word.split("/")[-1] in _WRAPPERS or (
+                i and words[i - 1].split("/")[-1] in _WRAPPERS
+                and (word.startswith("-") or re.fullmatch(r"[\d.]+[smhd]?", word))):
+            i += 1
+        else:
+            break
+    return words[i:]
+
+
+def runs_a_test_runner(segment: str) -> bool:
+    words = _command_words(segment)
+    if not words:
+        return False
+    base = words[0].split("/")[-1]
+    if base in ("pytest", "py.test"):
+        return True
+    if re.fullmatch(r"python[\d.]*", base) and words[1:3] and words[1] == "-m" \
+            and words[2] in ("pytest", "unittest"):
+        return True
+    if base in ("npm", "go", "cargo") and words[1:2] == ["test"]:
+        return True
+    return base == "npx" and words[1:2] == ["vitest"]
+
+
+def runner_calls_outside_the_tool(events: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    """[(time, command)] for every Bash call in events that ran a test
+    runner, except a call whose result was a permission denial (it did not
+    run). A call through `attavo test` is not a runner call: the runner it
+    starts is the tool's own."""
+    found: list[tuple[str, str]] = []
+    for i, event in enumerate(events):
+        text = str(event.get("text", ""))
+        if event.get("kind") != "tool_call" or not text.startswith("Bash "):
+            continue
+        command = text[len("Bash "):]
+        result = events[i + 1] if i + 1 < len(events) and events[i + 1].get("kind") == "tool_result" else {}
+        reply = str(result.get("text", ""))
+        if reply.startswith("Permission to use Bash") and "denied" in reply:
+            continue
+        if any(runs_a_test_runner(s) for s in _command_segments(command)):
+            found.append((str(event.get("at", "")), command[:100]))
+    return found
+
+
+def read_events(path: Path) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return events
+    for line in lines:
+        try:
+            parsed = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            events.append(parsed)
+    return events
 
 
 def without_records(paths: list[str], records_rel: str) -> list[str]:
@@ -159,6 +387,9 @@ def cmd_test(argv: list[str]) -> int:
                   file=sys.stderr)
             return 2
         identifiers = [line for line in select_run.stdout.splitlines() if line.strip()]
+        if select_run.stderr.strip():
+            # the selector's own reasons (why a path selected the whole suite)
+            sys.stderr.write(select_run.stderr)
         if not identifiers:
             print(f"attavo test {item_id}: no test is selected for the {len(changed)} "
                   "path(s) changed since the default branch")
@@ -187,17 +418,43 @@ def cmd_test(argv: list[str]) -> int:
         return 0
 
     bound = tests_cfg.get("call_timeout_s")
-    print(f"attavo test {item_id}: {len(identifiers)} selected", flush=True)
-    started = time.monotonic()
-    code, out, err, timed_out = run_bounded(tests_cfg["run"], root,
-                                            "".join(i + "\n" for i in identifiers), bound)
-    elapsed = int(time.monotonic() - started)
-    sys.stdout.write(out)
-    sys.stderr.write(err)
-    if timed_out:
-        print(f"attavo test {item_id}: the run did not finish within {bound} s; "
-              "it and everything it started were ended")
-    _event(f"attavo test {item_id}: mode {mode}, {len(identifiers)} selected, exit {code}, {elapsed} s")
+    progress_file: Path | None = None
+    run_env = dict(os.environ)
+    if tests_cfg.get("progress") == "pytest":
+        progress_file = cache_file.parent / f"test-progress-{os.getpid()}.txt"
+        progress_file.parent.mkdir(parents=True, exist_ok=True)
+        progress_file.write_text("")
+        run_env["ATTAVO_TEST_PROGRESS"] = str(progress_file)
+        run_env["PYTEST_ADDOPTS"] = (run_env.get("PYTEST_ADDOPTS", "") + f" -p {PROGRESS_PLUGIN}").strip()
+        run_env["PYTHONPATH"] = os.pathsep.join(
+            [str(PRODUCT_ROOT)] + ([run_env["PYTHONPATH"]] if run_env.get("PYTHONPATH") else []))
+    narrow = f"python3 {Path(sys.argv[0]).resolve()} test {item_id}"
+    try:
+        with test_slot(root) as (workers, running, cores):
+            run_env["ATTAVO_TEST_WORKERS"] = str(workers)
+            print(f"attavo test {item_id}: {len(identifiers)} selected; {workers} worker(s) of "
+                  f"{cores} cores, {running} call(s) running", flush=True)
+            started = time.monotonic()
+            code, out, err, timed_out = run_bounded(tests_cfg["run"], root,
+                                                    "".join(i + "\n" for i in identifiers), bound,
+                                                    env=run_env)
+            elapsed = int(time.monotonic() - started)
+        if timed_out:
+            collected, results = read_progress(progress_file) if progress_file else ([], {})
+            if collected:
+                sys.stdout.write(bound_report(item_id, bound, collected, results, narrow) + "\n")
+            else:
+                sys.stdout.write(out)
+                print(unreadable_bound_report(item_id, bound, narrow))
+            sys.stderr.write(err)
+        else:
+            sys.stdout.write(out)
+            sys.stderr.write(err)
+    finally:
+        if progress_file:
+            progress_file.unlink(missing_ok=True)
+    _event(f"attavo test {item_id}: mode {mode}, {len(identifiers)} selected, "
+           f"exit {code}, {elapsed} s, {workers} workers")
     if code == 0:
         from attavo.common import now_iso
         cache[key] = {"at": now_iso()}
