@@ -34,6 +34,7 @@ Usage: <changed paths> | select-tests
 from __future__ import annotations
 
 import ast
+import functools
 import sys
 from pathlib import Path
 
@@ -125,6 +126,7 @@ def is_prose_or_record(path: str) -> bool:
     return path.endswith(".md") or path == "LICENSE" or path.startswith(SILENT_PREFIXES)
 
 
+@functools.lru_cache(maxsize=None)
 def import_graph() -> dict[str, set[str]]:
     """file -> the repository files it imports, from the source alone (ast;
     nothing is imported). Nodes: attavo/*.py, tests/*.py, scripts/*.py,
