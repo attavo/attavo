@@ -47,8 +47,14 @@ def write(path: Path, obj: dict[str, Any]) -> None:
     path.write_text(json.dumps(obj))
 
 
-def make_item(tmp_path: Path, invocations: list[tuple[str, int, float | None, float | None, str]]
-              ) -> tuple[Path, str]:
+def tokens_of(stage: str, n: int) -> dict[str, int]:
+    """A record's tokens, distinct per attempt so a sum cannot pass by luck."""
+    base = {"build": 1000, "verify": 500, "counsel": 200}[stage]
+    return {"input": base * n, "output": base * n // 100}
+
+
+def make_item(tmp_path: Path, invocations: list[tuple[str, int, float | None, float | None, str]],
+              tokenless: frozenset[str] = frozenset()) -> tuple[Path, str]:
     """A tenant with one item merged on main's first-parent line: spec and
     approval records, then every invocation in `invocations`, the chain
     coherent on the latest of each stage. Returns (root, merge sha)."""
@@ -73,6 +79,8 @@ def make_item(tmp_path: Path, invocations: list[tuple[str, int, float | None, fl
                                 "approval_sha": "a1", "cost_usd": cost}
         if wall is not None:
             body["wall_clock_s"] = wall
+        if f"{stage}-{n:02d}" not in tokenless:
+            body["tokens"] = tokens_of(stage, n)
         if stage == "verify":
             last_build = max(i[1] for i in invocations if i[0] == "build")
             body["build_sha"] = f"build{last_build}"
@@ -110,8 +118,6 @@ def test_attest_sums_every_invocation_per_stage_and_per_item(tmp_path: Path) -> 
     assert time["counsel"] == {"attempts": 1, "invocation_s": 7.5, "partial": False}
     assert time["invocation_s"] == 398.25
     assert time["partial"] is False and time["not_read"] == []
-    # the final attempt stays where it was, and is not the sum
-    assert statement["wall_clock_by_stage_s"] == {"build": 50.25, "verify": 30.0}
     # lead runs from approval-01's `at` to the merge's committer time
     merged_at = int(git(root, "show", "-s", "--format=%ct", "HEAD").strip())
     assert time["lead_s"] == merged_at - 1767225600
@@ -279,3 +285,94 @@ def test_doctor_rejects_large_integer_that_rounds_to_summed_float(tmp_path: Path
     failed = proof_six(root)
     assert failed["holds"] is False, failed
     assert "item 1" in failed["reason"] and "time.build" in failed["reason"], failed
+
+
+RETIRED = ("cost_by_stage_usd", "wall_clock_by_stage_s", "tokens_by_stage")
+
+
+def test_statement_carries_only_the_summed_accounting(tmp_path: Path) -> None:
+    """#309, specimen #289: the screen read the three final-attempt fields
+    and showed $1.13 and ~14 minutes against a true $2.93 and ~26.5 minutes.
+    Two build attempts and one verify: the statement carries none of the
+    three fields, and time, cost and tokens are the sums over all three
+    records."""
+    root, _ = make_item(tmp_path, [("build", 1, 752.0, 1.8, "alpha"),
+                                   ("build", 2, 777.0, 1.13, "alpha"),
+                                   ("verify", 1, 58.0, None, "alpha")])
+    statement = attest(root)
+    jsonschema.validate(statement, SCHEMA)
+    for field in RETIRED:
+        assert field not in statement, field
+    assert statement["time"]["invocation_s"] == 1587.0
+    assert statement["cost"]["usd"] == 2.93
+    assert statement["tokens"]["build"] == {"input": 3000, "output": 30, "partial": False}
+    assert statement["tokens"]["verify"] == {"input": 500, "output": 5, "partial": False}
+    assert statement["tokens"]["counsel"] == {"input": 0, "output": 0, "partial": False}
+    assert statement["tokens"]["input"] == 3500 and statement["tokens"]["output"] == 35
+    assert statement["tokens"]["partial"] is False and statement["tokens"]["not_read"] == []
+
+
+def test_schema_is_v4_and_names_no_retired_field() -> None:
+    """#309: the predicate type moves to v4 with the three fields gone."""
+    assert SCHEMA["$id"] == "https://attavo.dev/attestation/v4"
+    for field in RETIRED:
+        assert field not in SCHEMA["properties"] and field not in SCHEMA["required"]
+    assert "tokens" in SCHEMA["required"]
+
+
+def test_a_record_without_tokens_makes_tokens_partial_and_is_named(tmp_path: Path) -> None:
+    """#309, as #289's verify-01 had no cost: a record with no tokens is
+    named in not_read and its sums are partial, never counted as zero."""
+    root, _ = make_item(tmp_path, INVOCATIONS, tokenless=frozenset({"build-02"}))
+    tokens = attest(root)["tokens"]
+    assert tokens["not_read"] == ["build-02"]
+    assert tokens["partial"] is True and tokens["build"]["partial"] is True
+    assert tokens["verify"]["partial"] is False
+    assert tokens["build"]["input"] == 1000 + 3000
+    assert tokens["input"] == 4000 + 500 + 1000 + 200
+
+
+def test_doctor_proof_six_checks_tokens_of_a_v4_statement(tmp_path: Path) -> None:
+    """#309: proof six re-derives tokens with the function attest summed
+    them with; a v4 statement holds, one whose tokens differ fails."""
+    root, merge = make_item(tmp_path, INVOCATIONS)
+    statement = attest(root)
+    seal(root, merge, statement)
+    held = proof_six(root)
+    assert held["holds"] is True and held["sealed"] == ["1"], held
+
+    for path, value in ((("input",), 1), (("build", "output"), 1), (("partial",), True),
+                        (("not_read",), ["build-01"])):
+        forged: dict[str, Any] = json.loads(json.dumps(statement))
+        node = forged["tokens"]
+        for key in path[:-1]:
+            node = node[key]
+        node[path[-1]] = value
+        seal(root, merge, forged)
+        failed = proof_six(root)
+        assert failed["holds"] is False, (path, failed)
+        assert "item 1" in failed["reason"] and "tokens" in failed["reason"], failed
+
+    missing: dict[str, Any] = json.loads(json.dumps(statement))
+    del missing["tokens"]
+    seal(root, merge, missing)
+    assert proof_six(root)["holds"] is False
+
+
+def test_doctor_still_holds_a_v3_statement_sealed_before_tokens(tmp_path: Path) -> None:
+    """#309: a statement sealed on a merged item is v3 -- it carries the
+    three final-attempt fields and no `tokens` -- and is judged by v3's
+    rules; nothing sealed is rewritten."""
+    root, merge = make_item(tmp_path, INVOCATIONS)
+    statement = attest(root)
+    statement.pop("tokens", None)
+    statement["tokens_by_stage"] = {"build": {"input": 3000, "output": 30}, "verify": None}
+    statement["cost_by_stage_usd"] = {"build": 0.125, "verify": None}
+    statement["wall_clock_by_stage_s"] = {"build": 50.25, "verify": 30.0}
+    seal(root, merge, statement)
+    held = proof_six(root)
+    assert held["holds"] is True and held["sealed"] == ["1"], held
+
+    statement["time"]["invocation_s"] = 20.0
+    seal(root, merge, statement)
+    assert proof_six(root)["holds"] is False, "v3's time and cost are still checked"

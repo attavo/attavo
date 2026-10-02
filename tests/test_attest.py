@@ -90,7 +90,7 @@ def test_attest_prints_a_valid_statement_on_a_coherent_chain_and_writes_nothing(
     jsonschema.validate(statement, STATEMENT_SCHEMA)
     assert statement["item"] == "1"
     assert statement["sha"] == statement["merge_sha"]
-    assert statement["cost_by_stage_usd"].keys() == {"build", "verify"}
+    assert statement["tokens"].keys() >= {"build", "verify", "counsel", "input", "output"}
 
     assert records_snapshot(root) == before
     assert git(root, "status", "--porcelain") == ""

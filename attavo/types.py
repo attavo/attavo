@@ -215,6 +215,26 @@ class ItemCost(TypedDict):
     not_read: list[str]
 
 
+class StageTokens(TypedDict):
+    """One stage's tokens summed over every attempt (the statement's `tokens` block)."""
+    input: int
+    output: int
+    partial: bool
+
+
+class ItemTokens(TypedDict):
+    """Every record's tokens summed, per stage and for the item. A record
+    that carries no tokens is named in not_read and makes every sum it
+    belongs to partial -- absent is never zero."""
+    build: StageTokens
+    verify: StageTokens
+    counsel: StageTokens
+    input: int
+    output: int
+    partial: bool
+    not_read: list[str]
+
+
 class AttestRecord(TypedDict):
     """The statement `attavo attest` prints (schema/attestation.schema.json)."""
     sha: str
@@ -231,11 +251,9 @@ class AttestRecord(TypedDict):
     at: str
     interventions: list[dict[str, str]]
     acts: list[dict[str, str]]
-    tokens_by_stage: dict[str, dict[str, Any] | None]
-    cost_by_stage_usd: dict[str, float | None]
-    wall_clock_by_stage_s: dict[str, float | None]
     time: ItemTime
     cost: ItemCost
+    tokens: ItemTokens
     product_version: str
     product_pin: str | None
 

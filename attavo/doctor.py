@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from attavo import clock
-from attavo.attest import check_attest_chain, item_time_and_cost
+from attavo.attest import check_attest_chain, item_accounting
 from attavo.build import build_is_empty, driver_identity
 from attavo.common import (
     MANIFEST,
@@ -856,10 +856,23 @@ def _carried(predicate: dict[str, Any], key: str) -> str:
     return repr(predicate[key]) if key in predicate else "absent"
 
 
+V3_ONLY_FIELDS = ("cost_by_stage_usd", "wall_clock_by_stage_s", "tokens_by_stage")
+
+
+def _is_v3(statement: dict[str, Any], predicate: dict[str, Any]) -> bool:
+    """A statement sealed under .../attestation/v3 (issue #309): named so by
+    its envelope's predicateType, else known by the final-attempt fields v4
+    retired. Judged by v3's rules -- time and cost, no tokens block."""
+    declared = statement.get("predicateType")
+    if isinstance(declared, str) and declared.endswith("/attestation/v3"):
+        return True
+    return any(key in predicate for key in V3_ONLY_FIELDS)
+
+
 def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_sha: str,
                           statement: dict[str, Any]) -> str | None:
-    """A sealed statement that carries `time` and `cost` says what its
-    records sum to, field by field -- the same function attest summed them
+    """A sealed statement that carries `time` and `cost` (and, from v4,
+    `tokens`) says what its records sum to, field by field -- the same function attest summed them
     with, over the same records (none is written after a merge), sealed at
     the same commit (the statement is computed at the merge, so lead_s and
     waiting_s are recomputed from its committer time, not excepted). Exact:
@@ -880,9 +893,16 @@ def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_s
         sealed_at: int | None = int(git(root, "show", "-s", "--format=%ct", merge_sha).strip())
     except (RuntimeError, ValueError):
         sealed_at = None
-    summed_time, summed_cost = item_time_and_cost(item_records_dir, sealed_at)
+    summed_time, summed_cost, summed_tokens = item_accounting(item_records_dir, sealed_at)
     differing = (_differences("time", stated_time, dict(summed_time))
                  + _differences("cost", stated_cost, dict(summed_cost)))
+    if not _is_v3(statement, predicate):
+        stated_tokens = predicate.get("tokens")
+        if isinstance(stated_tokens, dict):
+            differing += _differences("tokens", stated_tokens, dict(summed_tokens))
+        else:
+            differing.append(f"tokens is {_carried(predicate, 'tokens')}, not a block "
+                             f"its records sum to {dict(summed_tokens)!r}")
     if differing:
         return f"{where}: the statement's " + "; ".join(differing)
     return None

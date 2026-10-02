@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/attestation/v3",
-  "title": "The attestation statement `attavo attest` prints on a coherent chain",
+  "$id": "https://attavo.dev/attestation/v4",
+  "title": "The attestation statement `attavo attest` prints on a coherent chain (v4: `time`, `cost` and `tokens` are the only accounting, summed over every attempt; v3 statements sealed earlier also carry cost_by_stage_usd, wall_clock_by_stage_s and tokens_by_stage, the final attempt of each stage)",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "sha", "merge_sha", "item", "spec", "spec_sha", "approval", "approval_sha",
     "build", "build_sha", "verify", "verify_sha", "at", "interventions", "acts",
-    "tokens_by_stage", "cost_by_stage_usd", "wall_clock_by_stage_s", "time", "cost",
+    "time", "cost", "tokens",
     "product_version", "product_pin"
   ],
   "properties": {
@@ -51,37 +51,9 @@
         }
       }
     },
-    "tokens_by_stage": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["build", "verify"],
-      "properties": {
-        "build": {"type": ["object", "null"]},
-        "verify": {"type": ["object", "null"]}
-      }
-    },
-    "cost_by_stage_usd": {
-      "type": "object",
-      "description": "The final attempt's cost per stage, as its record carries it; the item's sums are in `cost`.",
-      "additionalProperties": false,
-      "required": ["build", "verify"],
-      "properties": {
-        "build": {"type": ["number", "null"]},
-        "verify": {"type": ["number", "null"]}
-      }
-    },
-    "wall_clock_by_stage_s": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["build", "verify"],
-      "properties": {
-        "build": {"type": ["number", "null"]},
-        "verify": {"type": ["number", "null"]}
-      }
-    },
     "time": {
       "type": "object",
-      "description": "Every invocation of the item, summed by attest from its stage records' wall_clock_s: per stage and for the item, every attempt and not the final one alone (wall_clock_by_stage_s is the final attempt). lead_s runs from the first approval record's `at` to the committer time of the commit the statement is computed at; waiting_s is lead_s minus invocation_s. A record with no wall_clock_s is named in not_read and its sums are partial, never smaller in silence.",
+      "description": "Every invocation of the item, summed by attest from its stage records' wall_clock_s: per stage and for the item, every attempt and not the final one alone. lead_s runs from the first approval record's `at` to the committer time of the commit the statement is computed at; waiting_s is lead_s minus invocation_s. A record with no wall_clock_s is named in not_read and its sums are partial, never smaller in silence.",
       "additionalProperties": false,
       "required": ["build", "verify", "counsel", "invocation_s", "lead_s", "waiting_s", "partial", "not_read"],
       "properties": {
@@ -108,10 +80,35 @@
         "not_read": {"type": "array", "items": {"type": "string", "minLength": 1}}
       }
     },
+    "tokens": {
+      "type": "object",
+      "description": "Every record's tokens summed by attest: per stage and for the item, input and output over every attempt and not the final one alone. With `time` and `cost`, the statement's only accounting. A record with no tokens is named in not_read and makes the sums it belongs to partial: absent is never zero.",
+      "additionalProperties": false,
+      "required": ["build", "verify", "counsel", "input", "output", "partial", "not_read"],
+      "properties": {
+        "build": {"$ref": "#/$defs/stage_tokens"},
+        "verify": {"$ref": "#/$defs/stage_tokens"},
+        "counsel": {"$ref": "#/$defs/stage_tokens"},
+        "input": {"type": "integer", "minimum": 0},
+        "output": {"type": "integer", "minimum": 0},
+        "partial": {"type": "boolean"},
+        "not_read": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
     "product_version": {"type": "string", "minLength": 1},
     "product_pin": {"type": ["string", "null"]}
   },
   "$defs": {
+    "stage_tokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "output", "partial"],
+      "properties": {
+        "input": {"type": "integer", "minimum": 0},
+        "output": {"type": "integer", "minimum": 0},
+        "partial": {"type": "boolean"}
+      }
+    },
     "stage_time": {
       "type": "object",
       "additionalProperties": false,

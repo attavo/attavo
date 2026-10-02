@@ -344,6 +344,9 @@ statement -- validating against schema/attestation.schema.json -- to
 stdout as JSON and exits 0: the item, its four records and their shas,
 and the commit the statement was computed at (sha and merge_sha are the
 same commit here; on the merge group that commit is the one that lands).
+`time`, `cost` and `tokens` are the statement's only accounting, each
+summed over every build, verify and counsel attempt; a record that
+carries no figure is named in not_read, never counted as zero.
 The four stage records already under paths.records are the evidence for
 that statement; a forge-specific template signs the printed JSON,
 unmodified, as the predicate, against the commit that lands, on the merge
