@@ -22,6 +22,7 @@
     attavo plan get [--version V] | put FILE --base V --by LOGIN | log
     attavo plan rank <EPIC|#N> (--before <EPIC|#M> | --last) --by LOGIN
     attavo plan move #N --epic EPIC --by LOGIN
+    attavo plan claims #N (<PATH>... | --clear) --by LOGIN
     attavo frontier [--json]
     attavo stops [N] [--json]
     attavo test [N] [--all | <test>...] [--fresh]
@@ -170,20 +171,24 @@ between issues, and policy. The store is <git common dir>/attavo/store/
 staged, one file per version. get prints the plan and its version; put
 writes the next version from a file and refuses a stale --base by naming
 the latest version and its author; log lists versions; rank and move
-change one position or one membership and write the next version. A
-re-rank is a new version, not a commit: priority is working material the
-attestation does not bind to.
+change one position or one membership and write the next version; claims
+sets (or --clear removes) the repository paths an issue will change before
+it has a spec, with who set them and when, and refuses an issue the plan
+does not place. A re-rank is a new version, not a commit: priority is
+working material the attestation does not bind to.
 
 frontier [--json] builds the waves from three reads and writes nothing:
 the plan's latest version in the store (the order: epic rank, then issue
 rank; an open issue the plan does not place is Backlog, last), the
-tenant's issues through [forge].issues_command (state, class, Claims),
-and work in flight from git (wave 0). Wave 1 takes each open issue in
-order whose predecessors are closed or placed, whose Claims overlap
+tenant's issues through [forge].issues_command (state, class), the
+plan's claims for an issue with no spec, and work in flight from git
+(wave 0, whose branch claims govern once an item's branch exists). Wave 1 takes each open issue in
+order whose predecessors are closed or placed, whose claims overlap
 nothing held in flight or already in the wave, and nothing an open issue
 ranked above it claims (strict opportunism); each later wave does the
-same as if the earlier ones had merged. An issue with no Claims is not
-placed. Every issue says why it waits. Epic progress is closed over
+same as if the earlier ones had merged. An issue with no claims in the
+plan is not placed. Each placed issue says where its claims came from (claims_from:
+store or branch). Every issue says why it waits. Epic progress is closed over
 total. No plan, or no issues command, is "not read", exit 2.
 
 test [N] runs the tests [tests].select names for every path the item has

@@ -2,9 +2,10 @@
 
 The plan is one document in the store (attavo/store.py), named "plan":
 the epics in rank order, each with its issues in rank order; the edges
-between issues ("depends", and "ruled" with who ruled it and when); and
-the policy lines. It holds no issue text, state or claims -- the forge
-and git hold those -- and it is never committed: priority is working
+between issues ("depends", and "ruled" with who ruled it and when); the
+draft claims of issues that have no spec yet (who set them and when); and
+the policy lines. It holds no issue text or state -- the forge holds
+those -- and it is never committed: priority is working
 material the attestation does not bind to (the storage ruling), so a
 re-rank is a new version of this document, not a commit, a pull request
 or a merge. Git takes over when an issue becomes a spec.
@@ -17,13 +18,17 @@ is an epic like any other and must exist, so an issue always has a home.
     attavo plan log
     attavo plan rank <EPIC|#N> (--before <EPIC|#M> | --last) --by LOGIN
     attavo plan move #N --epic EPIC --by LOGIN
+    attavo plan claims #N (<PATH>... | --clear) --by LOGIN
 
 get prints the body as JSON on stdout and its version, author and time on
 stderr, so `get > f`, an edit, and `put f --base V` round-trip. put writes
 the next version or refuses: a stale base (naming the latest version and
 its author), a body that fails the plan's shape, or a writer that landed
 first. rank and move read the latest version, change one position or one
-membership, and write the next. Nothing here writes to git.
+membership, and write the next. claims sets, or with --clear removes, the
+paths an issue will change before it has a spec; once its branch exists
+the branch's own claims govern (attavo/claims.py) and these are not read.
+Nothing here writes to git.
 """
 from __future__ import annotations
 
@@ -35,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from attavo import store
-from attavo.common import MANIFEST, read_manifest
+from attavo.common import MANIFEST, now_iso, read_manifest
 
 DOC = "plan"
 SCHEMA = "plan/1"
@@ -44,11 +49,19 @@ EPIC_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 EDGE_TYPES = ("depends", "ruled")
 EPIC_KEYS = {"id", "title", "outcome", "proof", "issues"}
 EDGE_KEYS = {"type", "from", "to", "by", "at", "why", "evidence", "applies"}
-TOP_KEYS = {"schema", "epics", "edges", "policy"}
+TOP_KEYS = {"schema", "epics", "edges", "policy", "claims"}
+CLAIM_KEYS = {"paths", "by", "at"}
 
 
 def _is_issue(x: Any) -> bool:
     return isinstance(x, int) and not isinstance(x, bool) and x > 0
+
+
+def path_error(p: Any) -> str | None:
+    """Why p is not a repository-relative claim (a path or a glob), None when it is."""
+    if not isinstance(p, str) or not p.strip() or p.startswith("/") or "\\" in p or ".." in p.split("/"):
+        return f"{p!r} is not a repository-relative path"
+    return None
 
 
 def shape_errors(body: Any) -> list[str]:
@@ -116,6 +129,25 @@ def shape_errors(body: Any) -> list[str]:
     policy = body.get("policy", {})
     if not isinstance(policy, dict):
         errs.append("policy is not an object")
+    claims = body.get("claims", {})
+    if not isinstance(claims, dict):
+        return errs + ["claims is not an object"]
+    for key, c in claims.items():
+        if not (key.isdigit() and int(key) > 0):
+            errs.append(f"claims key {key!r} is not an issue number")
+        if not isinstance(c, dict):
+            errs.append(f"claims {key} is not an object")
+            continue
+        errs += [f"claims {key}: unknown key {k!r}" for k in sorted(set(c) - CLAIM_KEYS)]
+        if not (isinstance(c.get("by"), str) and isinstance(c.get("at"), str)):
+            errs.append(f"claims {key}: names who set them and when (by and at)")
+        paths = c.get("paths")
+        if not isinstance(paths, list):
+            errs.append(f"claims {key}: paths is not a list")
+        elif not paths:
+            errs.append(f"claims {key} has no paths; clear them instead")
+        else:
+            errs += [f"claims {key}: {e}" for e in filter(None, map(path_error, paths))]
     return errs
 
 
@@ -183,6 +215,36 @@ def move(body: dict[str, Any], what: str, epic: str) -> dict[str, Any]:
     return new
 
 
+def set_claims(body: dict[str, Any], what: str, paths: list[str], by: str) -> dict[str, Any]:
+    """A copy of body with issue what's draft claims set to paths, who set
+    them and when. Raises StoreRefusal."""
+    n = _issue_arg(what)
+    if n is None:
+        raise store.StoreRefusal(f"{what} is not an issue number")
+    if _epic_of(body, n) is None:
+        raise store.StoreRefusal(f"#{n} is not in the plan; place it with `attavo plan move #{n} --epic E`")
+    bad = [e for e in map(path_error, paths) if e]
+    if not paths or bad:
+        raise store.StoreRefusal(bad[0] if bad else "claims names at least one path")
+    new: dict[str, Any] = copy.deepcopy(body)
+    new.setdefault("claims", {})[str(n)] = {"paths": list(paths), "by": by, "at": now_iso()}
+    return new
+
+
+def clear_claims(body: dict[str, Any], what: str) -> dict[str, Any]:
+    """A copy of body without issue what's draft claims. Raises StoreRefusal."""
+    n = _issue_arg(what)
+    if n is None:
+        raise store.StoreRefusal(f"{what} is not an issue number")
+    if _epic_of(body, n) is None:
+        raise store.StoreRefusal(f"#{n} is not in the plan; place it with `attavo plan move #{n} --epic E`")
+    if str(n) not in body.get("claims", {}):
+        raise store.StoreRefusal(f"#{n} has no claims to clear")
+    new: dict[str, Any] = copy.deepcopy(body)
+    del new["claims"][str(n)]
+    return new
+
+
 def _opt(args: list[str], flag: str) -> str | None:
     if flag in args:
         i = args.index(flag)
@@ -212,9 +274,10 @@ def cmd_plan(argv: list[str]) -> int:
     if read_manifest(root) is None:
         print(f"attavo plan: no {MANIFEST} at {root}", file=sys.stderr)
         return 2
-    if not argv or argv[0] not in ("get", "put", "log", "rank", "move"):
+    if not argv or argv[0] not in ("get", "put", "log", "rank", "move", "claims"):
         print("usage: attavo plan get [--version V] | put FILE --base V --by LOGIN | log | "
-              "rank <EPIC|#N> (--before <EPIC|#M> | --last) --by LOGIN | move #N --epic EPIC --by LOGIN",
+              "rank <EPIC|#N> (--before <EPIC|#M> | --last) --by LOGIN | move #N --epic EPIC --by LOGIN | "
+              "claims #N (<PATH>... | --clear) --by LOGIN",
               file=sys.stderr)
         return 2
     verb, args = argv[0], argv[1:]
@@ -252,6 +315,17 @@ def cmd_plan(argv: list[str]) -> int:
             if not args or args[0].startswith("--") or (before is None and "--last" not in args):
                 return _refuse("rank <EPIC|#N> (--before <EPIC|#M> | --last) --by LOGIN")
             return _write(root, rank(current["body"], args[0], before), current["version"], by)
+        if verb == "claims":
+            words = [w for i, w in enumerate(args) if w != "--by" and not (i and args[i - 1] == "--by")]
+            clear = "--clear" in words
+            paths = [w for w in words[1:] if w != "--clear"]
+            if not words or words[0].startswith("--") or clear == bool(paths):
+                return _refuse("plan claims '#N' <path>... --by LOGIN, or plan claims '#N' --clear --by LOGIN")
+            if not by:
+                return _refuse("a write names its author (--by LOGIN)")
+            new = (clear_claims(current["body"], words[0]) if clear
+                   else set_claims(current["body"], words[0], paths, by))
+            return _write(root, new, current["version"], by)
         epic = _opt(args, "--epic")
         if not args or args[0].startswith("--") or epic is None:
             return _refuse("move #N --epic EPIC --by LOGIN")
