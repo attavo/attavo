@@ -9,7 +9,7 @@ from typing import Any, cast
 from attavo.common import MANIFEST, git, now_iso, product_version, read_manifest
 from attavo.records import latest_attempt_path, latest_record, parse_attempts
 from attavo.types import (ApprovalRecord, AttestRecord, BuildRecord, ItemCost, ItemTime,
-                          SpecRecord, StageTime, VerifyRecord)
+                          ItemTokens, SpecRecord, StageTime, StageTokens, VerifyRecord)
 
 # --- attest: the signed envelope over one item's whole traversal ---
 
@@ -41,6 +41,46 @@ INVOCATION_STAGES = ("build", "verify", "counsel")
 
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def item_tokens(records_dir: Path) -> ItemTokens:
+    """The item's tokens, summed from the records attest already reads
+    (issue #309): every build, verify, and counsel attempt's input and
+    output, per stage and for the item, never the final attempt alone. A
+    record whose tokens are not two numbers is named in not_read and makes
+    each sum it belongs to partial -- absent is never zero."""
+    stages: dict[str, StageTokens] = {}
+    not_read: list[str] = []
+    for stage in INVOCATION_STAGES:
+        total_in = total_out = 0
+        partial = False
+        for n, rec in sorted(parse_attempts(records_dir, stage).items()):
+            tok = rec.get("tokens")
+            tok = tok if isinstance(tok, dict) else {}
+            read_in, read_out = tok.get("input"), tok.get("output")
+            if isinstance(read_in, (int, float)) and isinstance(read_out, (int, float)) \
+                    and not isinstance(read_in, bool) and not isinstance(read_out, bool):
+                total_in += int(read_in)
+                total_out += int(read_out)
+            else:
+                partial = True
+                not_read.append(f"{stage}-{n:02d}")
+        stages[stage] = {"input": total_in, "output": total_out, "partial": partial}
+    return {
+        "build": stages["build"], "verify": stages["verify"], "counsel": stages["counsel"],
+        "input": sum(st["input"] for st in stages.values()),
+        "output": sum(st["output"] for st in stages.values()),
+        "partial": bool(not_read),
+        "not_read": not_read,
+    }
+
+
+def item_accounting(records_dir: Path, sealed_at_epoch: int | None
+                    ) -> tuple[ItemTime, ItemCost, ItemTokens]:
+    """The item's `time`, `cost` and `tokens`: the statement's whole
+    accounting, from one call doctor's sixth proof repeats."""
+    item_time, item_cost = item_time_and_cost(records_dir, sealed_at_epoch)
+    return item_time, item_cost, item_tokens(records_dir)
 
 
 def item_time_and_cost(records_dir: Path, sealed_at_epoch: int | None) -> tuple[ItemTime, ItemCost]:
@@ -257,7 +297,7 @@ def cmd_attest(argv: list[str]) -> int:
         sealed_at: int | None = int(git(root, "show", "-s", "--format=%ct", "HEAD").strip())
     except (RuntimeError, ValueError):
         sealed_at = None
-    item_time, item_cost = item_time_and_cost(records_dir, sealed_at)
+    item_time, item_cost, item_tokens_ = item_accounting(records_dir, sealed_at)
 
     statement: AttestRecord = {
         "sha": head_sha,
@@ -277,14 +317,12 @@ def cmd_attest(argv: list[str]) -> int:
         # than omitted, since the schema names them.
         "interventions": [],
         "acts": [],
-        "tokens_by_stage": {"build": latest_build.get("tokens"), "verify": latest_verify.get("tokens")},
-        # The final attempt per stage; every attempt, summed, is in `time`
-        # and `cost` (the sum across executors was ruled 2026-09-19).
-        "cost_by_stage_usd": {"build": latest_build.get("cost_usd"), "verify": latest_verify.get("cost_usd")},
-        "wall_clock_by_stage_s": {"build": latest_build.get("wall_clock_s"),
-                                  "verify": latest_verify.get("wall_clock_s")},
+        # The only accounting: every attempt, summed (the sum across
+        # executors was ruled 2026-09-19). v3's final-attempt fields are
+        # retired (issue #309).
         "time": item_time,
         "cost": item_cost,
+        "tokens": item_tokens_,
         "product_version": product_version(),
         "product_pin": (m.get("attavo") or {}).get("version"),
     }
