@@ -47,13 +47,7 @@ def command_printing(tmp_path: Path, payload: Any, code: int = 0, err: str = "")
     return f"{sys.executable} {script}"
 
 
-def test_claims_are_read_from_the_bodys_claims_section_and_nowhere_else() -> None:
-    assert issues.parse_claims(BODY) == ["attavo/store.py", "attavo/plan.py", "tests/test_plan.py"]
-    assert issues.parse_claims("no section here\n- attavo/x.py\n") is None
-    assert issues.parse_claims("## Claims\n\n## Acceptance\n- a\n") == []
-
-
-def test_the_command_is_read_into_issues_with_their_claims_in_number_order(tmp_path: Path) -> None:
+def test_the_command_is_read_into_issues_in_number_order(tmp_path: Path) -> None:
     payload = [
         {"number": 264, "title": "the Plan store", "state": "closed", "closed_at": "2026-09-29T20:00:00Z",
          "labels": ["class:core"], "body": BODY},
@@ -63,8 +57,8 @@ def test_the_command_is_read_into_issues_with_their_claims_in_number_order(tmp_p
     got, why = issues.read_issues(tmp_path, m)
     assert why is None and got is not None
     assert [i["number"] for i in got] == [231, 264]
-    assert got[0]["claims"] is None and got[0]["state"] == "open"
-    assert got[1]["claims"] == ["attavo/store.py", "attavo/plan.py", "tests/test_plan.py"]
+    assert got[0]["state"] == "open" and all("claims" not in i for i in got), \
+        "the body's Claims section is not read: claims live in the plan store (#313)"
     assert got[1]["labels"] == ["class:core"] and got[1]["closed_at"] == "2026-09-29T20:00:00Z"
 
 
@@ -124,7 +118,6 @@ def test_this_repositorys_command_translates_the_forges_words_into_the_shape(tmp
     assert why is None and got is not None
     assert [(i["number"], i["state"], i["labels"]) for i in got] == [(263, "open", []),
                                                                      (264, "closed", ["class:core"])]
-    assert got[1]["claims"] == ["attavo/store.py", "attavo/plan.py", "tests/test_plan.py"]
     (fake / "gh").write_text("#!/bin/sh\necho 'gh: offline' >&2\nexit 1\n")
     failed = subprocess.run([sys.executable, str(ROOT / ".attavo" / "bin" / "forge-issues")],
                             capture_output=True, text=True, env=env, check=False)

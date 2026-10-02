@@ -4,8 +4,12 @@ Three reads, nothing written. The plan's latest version in the store
 (attavo/plan.py) gives the order: epic rank, then issue rank within the
 epic; an open issue the plan does not place is Backlog, last, by number.
 The tenant's issues through [forge].issues_command (attavo/issues.py)
-give each issue's state, class and, before it has a spec, its Claims.
-Work in flight from git (attavo/claims.py) gives wave 0.
+give each issue's state and class. The plan's claims map gives an issue's
+draft claims before it has a spec (attavo plan claims); work in flight
+from git (attavo/claims.py) gives wave 0, and once an item's branch exists
+its own claims govern, so a spec's Claims replace the draft without
+anything being copied. Each placed issue says which source it used,
+claims_from: "store" or "branch".
 
 Wave 0 is the work holding claims now: every branch not on the default
 branch, with the paths it declares and changes. Wave 1 walks the order
@@ -17,8 +21,8 @@ that is not yet placed, ready or not: a lower-ranked issue never takes a
 path a higher-ranked one wants -- unless that issue waits on it, directly
 or through others, since a predecessor never yields to its own dependents. Wave k+1 walks what is left as if the
 waves before it had merged. Overlap is attavo.claims.overlap, the
-product's only rule. An issue with no Claims is not placed: nothing shows
-it disjoint from anything. Every placed issue carries a why line for each
+product's only rule. An issue with no claims in the plan is not placed:
+nothing shows it disjoint from anything. Every placed issue carries a why line for each
 reason it waited; wave 1's say nothing. The output has no dates: waves
 are an order, not a forecast.
 
@@ -135,9 +139,12 @@ def compute(body: dict[str, Any], issues: list[Issue], flights: list[dict[str, A
         wave0.append({"issue": n, "branch": f["branch"], "title": title(n) if n else f["branch"],
                       "epic": epic_of.get(n) if n else None,
                       "class": by_number[n]["item_class"] if n in by_number else None,
-                      "claims": claims, "spec_state": states.get(f["branch"], "lane" if n is None else "spec pushed"),
+                      "claims": claims, "claims_from": "branch",
+                      "spec_state": states.get(f["branch"], "lane" if n is None else "spec pushed"),
                       "why": []})
         held.append((f["branch"], claims))
+
+    drafts: dict[int, list[str]] = {int(k): list(c["paths"]) for k, c in body.get("claims", {}).items()}
 
     def is_open(n: int) -> bool:
         return n in by_number and by_number[n]["state"] == "open"
@@ -153,9 +160,9 @@ def compute(body: dict[str, Any], issues: list[Issue], flights: list[dict[str, A
             why[n].append(line)
 
     for n in list(remaining):
-        if by_number[n]["claims"] is None:
+        if n not in drafts:
             not_placed.append({"issue": n, "title": title(n), "epic": epic_of[n],
-                               "why": ["no claims: the issue has no Claims section and no spec"]})
+                               "why": [f"no claims: set them with attavo plan claims '#{n}' <paths>"]})
             remaining.remove(n)
 
     waves: list[list[dict[str, Any]]] = [wave0]
@@ -165,7 +172,7 @@ def compute(body: dict[str, Any], issues: list[Issue], flights: list[dict[str, A
         this_wave: list[tuple[int, list[str]]] = []
         progressed = False
         for idx, n in enumerate(remaining):
-            mine = by_number[n]["claims"] or []
+            mine = drafts[n]
             blocked = False
             for p, kind in preds.get(n, []):
                 if p in by_number and by_number[p]["state"] == "closed":
@@ -192,7 +199,7 @@ def compute(body: dict[str, Any], issues: list[Issue], flights: list[dict[str, A
                     # m waits on n: n never yields to its own dependents,
                     # or a rank that disagrees with an edge deadlocks both.
                     continue
-                hit = _overlaps(mine, by_number[m]["claims"] or [])
+                hit = _overlaps(mine, drafts[m])
                 if hit:
                     note(n, f"yields {', '.join(hit)} to #{m}, ranked above")
                     blocked = True
@@ -212,7 +219,7 @@ def compute(body: dict[str, Any], issues: list[Issue], flights: list[dict[str, A
             break
         waves.append([{"issue": n, "title": title(n), "epic": epic_of[n],
                        "class": by_number[n]["item_class"], "claims": claims,
-                       "spec_state": "no spec", "why": why.get(n, []) if k > 1 else []}
+                       "claims_from": "store", "spec_state": "no spec", "why": why.get(n, []) if k > 1 else []}
                       for n, claims in this_wave])
         remaining = [n for n in remaining if n not in placed_wave]
 

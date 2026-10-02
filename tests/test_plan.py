@@ -148,3 +148,120 @@ def test_the_command_refuses_a_bad_body_a_missing_author_and_an_empty_store(tmp_
     r = run_attavo(root, "plan", "put", str(good), "--base", "0")
     assert r.returncode == 2 and "--by" in r.stderr
     assert store.latest(root, "plan") == 0
+
+
+CLAIMED: dict[str, Any] = {
+    **PLAN,
+    "claims": {"262": {"paths": ["attavo/frontier.py", "docs/**"], "by": "dbean10", "at": "2026-10-01T09:00:00Z"}},
+}
+
+
+def claims_in(root: Path) -> dict[str, Any]:
+    env = store.get(root, "plan")
+    assert env is not None
+    claims: dict[str, Any] = env["body"].get("claims", {})
+    return claims
+
+
+def tenant_with_plan(tmp_path: Path) -> Path:
+    root = make_tenant(tmp_path, "valid")
+    store.put(root, "plan", PLAN, 0, "alice")
+    return root
+
+
+@pytest.mark.parametrize("entry,needle", [
+    ({"paths": [], "by": "a", "at": "t"}, "no paths"),
+    ({"paths": "a.py", "by": "a", "at": "t"}, "paths is not a list"),
+    ({"paths": ["a.py"], "at": "t"}, "by and at"),
+    ({"paths": ["a.py"], "by": "a"}, "by and at"),
+    ({"paths": ["a.py"], "by": "a", "at": "t", "why": "x"}, "claims 262: unknown key"),
+    ({"paths": ["/etc/passwd"], "by": "a", "at": "t"}, "repository-relative"),
+    ({"paths": [""], "by": "a", "at": "t"}, "repository-relative"),
+])
+def test_the_check_and_the_schema_refuse_the_same_malformed_claims_entry(entry: dict[str, Any], needle: str) -> None:
+    """Ruled 2026-10-01 (#313): claims for an issue with no spec are
+    tool-kept structured data in the plan, so the plan's shape refuses a
+    malformed entry, in the schema and in the check alike."""
+    body = {**PLAN, "claims": {"262": entry}}
+    assert any(needle in e for e in plan.shape_errors(body)), plan.shape_errors(body)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(body, SCHEMA)
+
+
+def test_the_schema_and_the_check_accept_the_claims_map_and_the_check_refuses_what_a_schema_cannot_say() -> None:
+    """Ruled 2026-10-01 (#313): the plan's optional `claims` map."""
+    assert plan.shape_errors(CLAIMED) == []
+    jsonschema.validate(CLAIMED, SCHEMA)
+    jsonschema.validate(PLAN, SCHEMA)
+    for body, needle in [({**PLAN, "claims": {"x": CLAIMED["claims"]["262"]}}, "not an issue number"),
+                         ({**PLAN, "claims": []}, "claims is not an object"),
+                         ({**PLAN, "claims": {"262": {**CLAIMED["claims"]["262"], "paths": ["a/../b.py"]}}},
+                          "repository-relative")]:
+        assert any(needle in e for e in plan.shape_errors(body)), (needle, plan.shape_errors(body))
+
+
+def test_plan_claims_writes_the_draft_claims_beside_the_order_and_clear_removes_them(tmp_path: Path) -> None:
+    """Ruled 2026-10-01 (#313): `attavo plan claims '#N' <path>... --by`
+    writes {paths, by, at} through the store's base-checked write."""
+    root = tenant_with_plan(tmp_path)
+    r = run_attavo(root, "plan", "claims", "#262", "attavo/frontier.py", "docs/**", "--by", "bob")
+    assert r.returncode == 0 and "plan version 2 written by bob" in r.stdout, r.stdout + r.stderr
+    entry = claims_in(root)["262"]
+    assert entry["paths"] == ["attavo/frontier.py", "docs/**"] and entry["by"] == "bob"
+    assert entry["at"] == store.get(root, "plan")["at"]  # type: ignore[index]
+    again = run_attavo(root, "plan", "claims", "#262", "attavo/other.py", "--by", "carol")
+    assert again.returncode == 0, again.stderr
+    assert claims_in(root)["262"]["paths"] == ["attavo/other.py"] and claims_in(root)["262"]["by"] == "carol"
+    got = run_attavo(root, "plan", "get")
+    assert json.loads(got.stdout)["claims"]["262"]["paths"] == ["attavo/other.py"], "plan get shows the claims"
+    cleared = run_attavo(root, "plan", "claims", "#262", "--clear", "--by", "bob")
+    assert cleared.returncode == 0 and "262" not in claims_in(root), cleared.stderr
+    assert [line.split("\t")[0] for line in run_attavo(root, "plan", "log").stdout.splitlines()] == ["1", "2", "3", "4"]
+    assert plan.shape_errors(store.get(root, "plan")["body"]) == []  # type: ignore[index]
+    assert git(root, "status", "--porcelain") == ""
+
+
+def test_plan_claims_refuses_an_unplaced_issue_by_name_and_changes_nothing(tmp_path: Path) -> None:
+    """Ruled 2026-10-01 (#313): refuses an issue the plan does not place,
+    by name, the way rank does."""
+    root = tenant_with_plan(tmp_path)
+    r = run_attavo(root, "plan", "claims", "#999", "a.py", "--by", "bob")
+    assert r.returncode == 2 and "#999 is not in the plan" in r.stderr, r.stderr
+    assert store.latest(root, "plan") == 1
+    r = run_attavo(root, "plan", "claims", "#999", "--clear", "--by", "bob")
+    assert r.returncode == 2 and "#999 is not in the plan" in r.stderr
+    r = run_attavo(root, "plan", "claims", "#262", "--clear", "--by", "bob")
+    assert r.returncode == 2 and "#262 has no claims to clear" in r.stderr
+    assert store.latest(root, "plan") == 1
+
+
+def test_plan_claims_requires_by_and_paths_that_are_repository_relative(tmp_path: Path) -> None:
+    """Ruled 2026-10-01 (#313): a write names its author; paths are
+    repository-relative."""
+    root = tenant_with_plan(tmp_path)
+    r = run_attavo(root, "plan", "claims", "#262", "a.py")
+    assert r.returncode == 2 and "--by" in r.stderr
+    for argv, needle in [(["#262"], "plan claims '#N' <path>..."),
+                         (["#262", "a.py", "--clear"], "plan claims '#N' <path>..."),
+                         (["#262", "/abs/a.py"], "repository-relative"),
+                         (["#262", "../out.py"], "repository-relative"),
+                         (["#262", ""], "repository-relative")]:
+        r = run_attavo(root, "plan", "claims", *argv, "--by", "bob")
+        assert r.returncode == 2 and needle in r.stderr, (argv, r.stderr)
+    assert store.latest(root, "plan") == 1
+
+
+def test_plan_claims_refuses_a_stale_base_naming_the_writer_that_landed_first(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Ruled 2026-10-01 (#313): a claims write names its base, like every
+    store write. The read is made stale by a version landing after it."""
+    root = tenant_with_plan(tmp_path)
+    read = store.get(root, "plan")
+    store.put(root, "plan", plan.move(PLAN, "#262", "backlog"), 1, "bob")
+    real, reads = store.get, iter([read])
+    monkeypatch.setattr(store, "get", lambda *a, **k: next(reads, None) or real(*a, **k))
+    monkeypatch.chdir(root)
+    assert plan.cmd_plan(["claims", "#262", "a.py", "--by", "carol"]) == 2
+    err = capsys.readouterr().err
+    assert "moved" in err and "version 2" in err and "bob" in err
+    assert "claims" not in store.get(root, "plan")["body"]  # type: ignore[index]
