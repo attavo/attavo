@@ -147,6 +147,9 @@ it as build-NN.log. Every record whose status is not pass carries stop:
 adapter's report-line class, a halt's question, the refusal's kind, the
 gate's results), never from the transcript: a refusal for a commit the
 executor did not author is class foreign-commit, provenance tenant; a
+build whose events show a Bash call that ran a test runner other than
+through `attavo test` is returned as class test-bypass, provenance
+executor, naming the call, and its retry is steered to the tool (#317); a
 build whose own gate is red is class gate, provenance executor; a stop
 with no structure to class it is unclassed, and only then does the log's
 last line serve as its detail. A pass record carries stop: null. See the
@@ -205,8 +208,16 @@ exclusion as the other two. Naming tests and --all together is refused
 (exit 2). It prints how many were selected (or that none was, and runs
 nothing), exits as the run does, and, when [tests].call_timeout_s is
 declared and the run outlasts it, ends the run and everything it started
-and exits 124. It exits 2 when it cannot name the changes or the selector
-fails. A run that exits 0 is cached against a fingerprint of the tree
+and exits 124, printing, in place of the runner's partial output, what
+passed, what failed and what did not run, and the command that narrows it
+(for a tenant that declares [tests].progress; otherwise that the run was
+ended and the narrowing command). Each call that runs takes a slot under
+<common git dir>/attavo/test-slots/ and exports ATTAVO_TEST_WORKERS to
+[tests].run: max(1, cores // calls holding a slot), so items building at
+once share the machine; it prints the workers it took, and a slot whose
+holder died is reaped by its pid. Paths the selector cannot place select the
+whole suite and the selector's reason is printed. It exits 2 when it cannot
+name the changes or the selector fails. A run that exits 0 is cached against a fingerprint of the tree
 (HEAD, the diff against it, and every untracked unignored file's name and
 content hash, together with the mode and the identifiers); asked again on
 an unchanged tree it says so -- unchanged since the earlier run, not

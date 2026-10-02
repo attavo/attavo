@@ -262,7 +262,8 @@ def test_situation_7_the_one_test_command_in_the_invocation(adapter_name: str, t
         "ATTAVO_TEST_COMMAND": command, "ATTAVO_TEST_TIMEOUT_S": "240",
         "ATTAVO_CHECKS_COMMAND": checks})
     assert command in given["instruction"]
-    assert "240 s" in given["instruction"]
+    # one sentence: the bound is the tool's to answer at, not the instruction's to name (#317)
+    assert "240 s" not in given["instruction"]
     assert checks not in given["instruction"]
 
     without = dry_run(adapter_name, tmp_path)
