@@ -11,33 +11,36 @@ on stdout, one per line, for this repository's own test suite:
     when it no longer exists -- a deletion cannot select itself, and the
     fail-safe rule below applies to it rather than exempting it (issue
     #212's review);
-  - a path in MODULE_TESTS (a module of attavo/, and the few files that
-    are one thing's own) selects the tests written for it, and a prefix in
-    PREFIX_TESTS (adapters/, schema/, templates/) the tests written for
-    that directory;
-  - a path this selector does not know -- a module nobody mapped,
-    bin/attavo, scripts/, tests/helpers.py and the fixtures every test
-    stands on, the fixture adapter every build test invokes -- selects the
-    whole suite ("tests", the one path pytest needs to run everything),
-    and one such path is enough to make that the whole answer.
-
-A module that most of the others import (common, records, spec, ...) is
-left out of MODULE_TESTS on purpose: no table of tests-per-module can know
-what it breaks, so it is the whole suite. The forge runs the whole suite
-once, as the required `test` check, in any case.
+  - a module of attavo/ selects the tests written for it (MODULE_TESTS)
+    together with every test file that imports it, directly or through
+    other modules of attavo/ (a static import graph built from the source
+    with ast; nothing is imported or run), so a module most of the others
+    import (common, records, spec, ...) selects the test files that reach
+    it by import and not the whole suite (#317). A test that only runs
+    bin/attavo in a subprocess does not import anything and is not reached
+    by the graph: CI's full suite is the law, and it catches that miss
+    before merge;
+  - a prefix in PREFIX_TESTS (adapters/, schema/, templates/,
+    .github/workflows/, adapters/fixture/) and a few single files
+    (bin/attavo, action.yml, ...) select the tests that name them;
+  - a path this selector cannot place -- a module no table and no import
+    reaches, scripts/, a fixture every test stands on -- selects the whole
+    suite ("tests", the one path pytest needs to run everything), one such
+    path is enough to make that the whole answer, and the reason is
+    printed on stderr, one line per such path.
 
 Usage: <changed paths> | select-tests
 """
 from __future__ import annotations
 
+import ast
+import functools
 import sys
 from pathlib import Path
 
 WHOLE_SUITE = "tests"
 
 SILENT_PREFIXES = ("attest/specs/", "attest/records/")
-
-WHOLE_SUITE_PREFIXES = ("adapters/fixture/",)
 
 MODULE_TESTS: dict[str, tuple[str, ...]] = {
     "attavo/attest.py": ("tests/test_attest.py", "tests/test_attest_time.py"),
@@ -60,6 +63,9 @@ MODULE_TESTS: dict[str, tuple[str, ...]] = {
     "attavo/report.py": ("tests/test_report.py",),
     "attavo/store.py": ("tests/test_store.py", "tests/test_plan.py"),
     "attavo/testtool.py": ("tests/test_testtool.py",),
+    "attavo/pytest_progress.py": ("tests/test_testtool.py",),
+    "scripts/ci_inherit.py": ("tests/test_ci_inherit.py",),
+    "scripts/check_record_schema_version.py": ("tests/test_record_schemas.py",),
     "attavo/types.py": ("tests/test_types_mirror_schemas.py",),
     "attavo/verify.py": ("tests/test_verify.py", "tests/test_verify_polls.py",
                          "tests/test_verify_codex_proof.py"),
@@ -72,17 +78,32 @@ MODULE_TESTS: dict[str, tuple[str, ...]] = {
     ".attavo/bin/select-tests": ("tests/test_self_tenancy.py", "tests/test_testtool.py"),
 }
 
-# The modules most of the others import: no table of tests-per-module can
-# know what a change to one of these breaks, so each selects the whole
-# suite, and each is named here so that a new module under attavo/ must be
-# placed -- in MODULE_TESTS or in this tuple -- before the suite accepts it
-# (tests/test_testtool.py).
-SHARED_MODULES: tuple[str, ...] = (
-    "attavo/__init__.py", "attavo/approval.py", "attavo/common.py", "attavo/events.py",
-    "attavo/records.py", "attavo/spec.py", "attavo/stops.py",
-)
+# A module with no row above is placed by the import graph alone (below):
+# the test files that import it, directly or through other modules.
+# tests/test_testtool.py names every module that must be placed by one or
+# the other.
 
 PREFIX_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # #317: the files that name these paths, not the whole suite. A test that
+    # only drives the product through them in a subprocess is CI's to catch.
+    (".github/workflows/", ("tests/test_approve_template.py", "tests/test_ci_inherit.py",
+                            "tests/test_coherence_template.py", "tests/test_merge_attribution.py",
+                            "tests/test_record_only.py", "tests/test_record_schemas.py",
+                            "tests/test_self_tenancy.py", "tests/test_spec_gate_template.py",
+                            "tests/test_template_app_identity.py",
+                            "tests/test_templates_carry_no_repository_urls.py",
+                            "tests/test_typecheck_pin.py")),
+    ("bin/attavo", ("tests/test_adapters.py", "tests/test_adapters_codex.py", "tests/test_cli_help.py",
+                    "tests/test_counsel.py", "tests/test_decoupling.py",
+                    "tests/test_executor_conformance.py", "tests/test_file_stops.py",
+                    "tests/test_record_schemas.py", "tests/test_self_tenancy.py",
+                    "tests/test_spec_gate_template.py", "tests/test_testtool.py",
+                    "tests/test_typecheck_pin.py")),
+    ("adapters/fixture/", ("tests/test_approve.py", "tests/test_attest.py", "tests/test_build.py",
+                           "tests/test_counsel.py", "tests/test_counsel_ask.py", "tests/test_drive.py",
+                           "tests/test_executor_conformance.py", "tests/test_pass.py",
+                           "tests/test_retry.py", "tests/test_spec_gate.py", "tests/test_testtool.py",
+                           "tests/test_verify.py")),
     ("adapters/claude-code/", ("tests/test_adapters.py", "tests/test_adapter_claude_code.py",
                                "tests/test_executor_conformance.py")),
     ("adapters/codex/", ("tests/test_adapter_codex.py", "tests/test_adapters_codex.py",
@@ -105,40 +126,120 @@ def is_prose_or_record(path: str) -> bool:
     return path.endswith(".md") or path == "LICENSE" or path.startswith(SILENT_PREFIXES)
 
 
+@functools.lru_cache(maxsize=None)
+def import_graph() -> dict[str, set[str]]:
+    """file -> the repository files it imports, from the source alone (ast;
+    nothing is imported). Nodes: attavo/*.py, tests/*.py, scripts/*.py,
+    adapters/*.py, bin/attavo and adapters/*/run. A dotted name
+    (attavo.common) resolves to its module; a bare name (helpers,
+    test_drive, executor_env -- the directories a test or an adapter puts on
+    its own path) to the file of that name."""
+    root = repository_root()
+    files = sorted(
+        {p.relative_to(root).as_posix()
+         for pattern in ("attavo/*.py", "tests/*.py", "scripts/*.py", "adapters/*.py", "adapters/*/run")
+         for p in root.glob(pattern)} | {"bin/attavo"})
+    names: dict[str, str] = {"attavo": "attavo/__init__.py"}
+    for f in files:
+        stem = Path(f).stem
+        if f.startswith("attavo/"):
+            names["attavo." + stem] = f
+        elif f.endswith(".py"):
+            names.setdefault(stem, f)
+    graph: dict[str, set[str]] = {f: set() for f in files}
+    for f in files:
+        try:
+            tree = ast.parse((root / f).read_text())
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                graph[f].update(names[a.name] for a in node.names if a.name in names)
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                if node.module in names:
+                    graph[f].add(names[node.module])
+                graph[f].update(names[f"{node.module}.{a.name}"] for a in node.names
+                                if f"{node.module}.{a.name}" in names)
+    return graph
+
+
+def importing_tests(module: str) -> tuple[str, ...]:
+    """Every test file that imports module, directly or through other
+    files that import it."""
+    graph = import_graph()
+    importers: dict[str, set[str]] = {}
+    for f, targets in graph.items():
+        for target in targets:
+            importers.setdefault(target, set()).add(f)
+    seen, queue = {module}, [module]
+    while queue:
+        for f in importers.get(queue.pop(), ()):
+            if f not in seen:
+                seen.add(f)
+                queue.append(f)
+    return tuple(sorted(f for f in seen if f.startswith("tests/test_")))
+
+
 def select_one(path: str) -> tuple[str, ...] | None:
     """The tests for one changed path, () for none, None for a path this
-    selector does not know."""
+    selector cannot place (the reason is the caller's to print: see why)."""
     if is_prose_or_record(path):
         return ()
-    if path.startswith(WHOLE_SUITE_PREFIXES):
-        return None
     if path.startswith("tests/test_") and path.endswith(".py") and "/" not in path[len("tests/"):]:
         # A deleted test file cannot select itself, and the gate must not
         # pass a deletion unexamined (issue #212's review): fail safe to
         # the whole suite rather than the () a present file's own removal
         # would otherwise fall through to.
         return (path,) if (repository_root() / path).is_file() else None
-    if path in MODULE_TESTS:
-        return MODULE_TESTS[path]
+    if path.endswith("conftest.py"):
+        return None     # pytest loads it for every test beneath it, whatever imports it
+    if path in MODULE_TESTS or (path.endswith(".py") and path in import_graph()):
+        found = dict.fromkeys(MODULE_TESTS.get(path, ()))
+        found.update(dict.fromkeys(importing_tests(path)))
+        if found:
+            return tuple(found)
     for prefix, tests in PREFIX_TESTS:
         if path.startswith(prefix):
             return tests
     return None
 
 
-def select(paths: list[str]) -> list[str]:
+def why(path: str) -> str:
+    """One line: why this path selects the whole suite."""
+    root = repository_root()
+    if path.endswith("conftest.py"):
+        return f"{path}: pytest loads it for every test beneath it, whatever imports it"
+    if path.startswith("tests/test_") and not (root / path).is_file():
+        return f"{path}: a deleted test file cannot select itself"
+    if path.endswith(".py") and path in import_graph():
+        return (f"{path}: no table row, and no test file imports it, directly or through another "
+                "module (the import graph cannot place it)")
+    return f"{path}: no row maps it and it is not a Python file the import graph knows"
+
+
+def select(paths: list[str], reasons: list[str] | None = None) -> list[str]:
     tests: dict[str, None] = {}
+    whole = False
     for path in paths:
         found = select_one(path)
         if found is None:
-            return [WHOLE_SUITE]
-        tests.update(dict.fromkeys(found))
-    return list(tests)
+            whole = True
+            if reasons is not None:
+                reasons.append(why(path))
+            else:
+                break
+        else:
+            tests.update(dict.fromkeys(found))
+    return [WHOLE_SUITE] if whole else list(tests)
 
 
 def main() -> int:
     changed = [line.strip() for line in sys.stdin.read().splitlines() if line.strip()]
-    for t in select(changed):
+    reasons: list[str] = []
+    selected = select(changed, reasons)
+    for reason in reasons:
+        print(f"select-tests: whole suite -- {reason}", file=sys.stderr)
+    for t in selected:
         print(t)
     return 0
 

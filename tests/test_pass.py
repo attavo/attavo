@@ -66,8 +66,14 @@ def pushed(bare: Path, subject: str) -> bool:
     return subject in log
 
 
+# A polling deadline bounds a condition that never comes true; it asserts no
+# speed. Whatever a caller names, a loaded machine (the suite at -n auto, with
+# other work beside it) is given at least this long before "never" is the answer.
+DEADLINE_FLOOR_S = 180
+
+
 def wait_for(pred: Any, seconds: float = 20) -> None:
-    deadline = time.monotonic() + seconds
+    deadline = time.monotonic() + max(seconds, DEADLINE_FLOOR_S)
     while time.monotonic() < deadline:
         if pred():
             return
@@ -78,7 +84,7 @@ def wait_for(pred: Any, seconds: float = 20) -> None:
 def passes_until(root: Path, pred: Any, seconds: float = 40, env: dict[str, str] | None = None) -> None:
     """Passes, spaced, until pred holds: how an operator's loop, the
     screen's poll, or a scheduler line would drive the item."""
-    deadline = time.monotonic() + seconds
+    deadline = time.monotonic() + max(seconds, DEADLINE_FLOOR_S)
     full = dict(FAST)
     full.update(env or {})
     while time.monotonic() < deadline:

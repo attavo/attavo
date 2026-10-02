@@ -21,12 +21,14 @@ from attavo.types import CounselRecord, Stop
 STOP_CLASSES = ("non-question", "outlived-invocation", "no-cause", "forge-unconcluded",
                "ceiling", "claims-boundary", "repeated-act", "unclassed", "question",
                "environment", "gate", "died", "hung", "transient", "returned", "empty",
-               "foreign-commit")
+               "foreign-commit", "test-bypass")
 
-# R3: the four families a pass retries with no person involved -- every
+# R3: the families a pass retries with no person involved (four, and from
+# #317 a fifth, test-bypass, retried with the steer "run tests only with
+# attavo test") -- every
 # other class is counsel's to read first, and a person's when counsel says
 # so (or when counsel is not configured at all).
-RETRYABLE_CLASSES = ("died", "hung", "transient", "returned")
+RETRYABLE_CLASSES = ("died", "hung", "transient", "returned", "test-bypass")
 
 
 def signature_of(text: str | None) -> str | None:
@@ -91,7 +93,9 @@ def derive_stop(status: str, *, report_class: str | None = None,
       - refused, by refusal_kind: claims -> claims-boundary/spec; protected
         (paths.records or paths.specs, or HEAD moved off the stage's start
         commit, #289) -> claims-boundary/executor;
-        foreign-commit -> foreign-commit/tenant; detail the refusal
+        foreign-commit -> foreign-commit/tenant; test-bypass ->
+        test-bypass/executor (a Bash call ran a test runner other than
+        through `attavo test`, #317); detail the refusal
       - failed with a red gate element: gate/executor, detail naming the
         first red one
       - anything else: unclassed/product, detail the log's last line
@@ -115,6 +119,8 @@ def derive_stop(status: str, *, report_class: str | None = None,
             return {"class": "claims-boundary", "provenance": "executor", "detail": refusal}
         if refusal_kind == "foreign-commit":
             return {"class": "foreign-commit", "provenance": "tenant", "detail": refusal}
+        if refusal_kind == "test-bypass":
+            return {"class": "test-bypass", "provenance": "executor", "detail": refusal}
     if status == "failed":
         red = _first_red(gate)
         if red:

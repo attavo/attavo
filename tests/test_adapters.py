@@ -256,13 +256,13 @@ def test_claude_code_names_the_tenants_checks(tmp_path: Path) -> None:
     with_tool = dry_run(tmp_path, extra_env={
         "ATTAVO_TEST_COMMAND": "python3 /product/bin/attavo test 7"})
     instruction = with_tool[with_tool.index("-p") + 1]
-    assert "are run for you" in instruction
+    assert "the gates run for you" in instruction
     assert "before you commit" not in instruction
-    assert "Do not run the test runner directly, the whole test suite" in instruction
+    assert "run tests only with `python3 /product/bin/attavo test 7 [path]`" in instruction
 
     without_tool = dry_run(tmp_path)
     instruction_without = without_tool[without_tool.index("-p") + 1]
-    assert "are run for you" not in instruction_without
+    assert "the gates run for you" not in instruction_without
 
 
 def test_claude_code_adapter_derives_model_from_usage_breakdown(tmp_path: Path) -> None:

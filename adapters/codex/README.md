@@ -50,10 +50,10 @@ live that this path does honor the schema.
 ## The tenant's tests
 
 Like the claude-code adapter (`../claude-code/README.md`), the build
-instruction gives the executor `ATTAVO_TEST_COMMAND` when it is set, with
-its bound when `ATTAVO_TEST_TIMEOUT_S` is, and tells it not to run the whole
-test suite or any whole-tree check: the gates are run after every commit.
-It never names the tenant's checks command.
+instruction gives the executor `ATTAVO_TEST_COMMAND` when it is set, in one
+sentence: run tests only with it. It never names the tenant's checks command.
+Whether the executor kept to it is read by the product from the build's events
+(class `test-bypass`, #317), not enforced here.
 
 ## Events (issue #138)
 

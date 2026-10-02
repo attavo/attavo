@@ -107,8 +107,11 @@ def run_select_tests(stdin_text: str) -> list[str]:
     return [line for line in run.stdout.splitlines() if line]
 
 
-def test_select_tests_maps_bin_attavo_to_the_whole_suite() -> None:
-    assert run_select_tests("bin/attavo\n") == ["tests"]
+def test_select_tests_maps_bin_attavo_to_the_tests_that_name_it() -> None:
+    """#317: not the whole suite -- CI's full run catches what a path-named
+    selection misses, before merge."""
+    selected = run_select_tests("bin/attavo\n")
+    assert "tests/test_cli_help.py" in selected and "tests" not in selected, selected
 
 
 def test_select_tests_maps_an_adapter_path_to_the_adapter_tests() -> None:
