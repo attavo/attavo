@@ -3,10 +3,12 @@
 The issue is the unit of work (ruled 2026-09-29): the plan in the store
 (attavo/plan.py) orders issues, and the forge holds what the plan does
 not -- each issue's title, whether it is open, when it closed, its
-labels, and, before it has a spec, the paths it claims in a "## Claims"
-section of its body. The product names no vendor: the tenant's command
+labels and its declared class. The paths an issue claims before it has a
+spec are not here: they are tool-kept metadata, in the plan (attavo plan
+claims), and the body's prose is never read for them (ruled 2026-09-30
+and 2026-10-01). The product names no vendor: the tenant's command
 prints the issues as JSON, one object per issue, and this module reads
-it. The claims are parsed here, not by the tenant's command, so every
+it. The class is parsed here, not by the tenant's command, so every
 tenant's issues are read by one rule.
 
 A read that cannot be made is "not read" with its reason, never an empty
@@ -35,28 +37,7 @@ class Issue(TypedDict):
     state: str
     closed_at: str | None
     labels: list[str]
-    claims: list[str] | None
     item_class: str | None
-
-
-def parse_claims(body: str) -> list[str] | None:
-    """The paths under a "## Claims" heading, up to the next "## "
-    heading: one "- path" line each. None when the body has no Claims
-    section, which is not the same as a section that lists nothing."""
-    lines = body.splitlines()
-    starts = [i for i, line in enumerate(lines) if line.rstrip() == "## Claims"]
-    if not starts:
-        return None
-    claims = []
-    for line in lines[starts[0] + 1:]:
-        if line.startswith("## "):
-            break
-        s = line.strip()
-        if s.startswith("- "):
-            path = s[2:].strip().strip("`")
-            if path:
-                claims.append(path)
-    return claims
 
 
 def parse_class(body: str, labels: list[str]) -> str | None:
@@ -117,7 +98,6 @@ def read_issues(root: Path, m: dict[str, Any]) -> tuple[list[Issue] | None, str 
         return None, f"not read: [forge].issues_command: {bad}"
     issues: list[Issue] = [{"number": x["number"], "title": x["title"], "state": x["state"],
                             "closed_at": x.get("closed_at"), "labels": list(x.get("labels", [])),
-                            "claims": parse_claims(x.get("body", "") or ""),
                             "item_class": parse_class(x.get("body", "") or "", list(x.get("labels", [])))}
                            for x in raw]
     return sorted(issues, key=lambda i: i["number"]), None
