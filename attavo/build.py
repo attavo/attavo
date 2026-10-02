@@ -585,7 +585,7 @@ def cmd_build(argv: list[str]) -> int:
             # #317: the tool is the one way tests are run in a build. A Bash
             # call in this stage's events that ran a test runner any other
             # way returns the build, by name; the retry is steered to the tool.
-            bypass = runner_calls_outside_the_tool(read_events(events_path))
+            bypass = runner_calls_outside_the_tool(read_events(events_path), tests_cfg.get("run", ""))
             if bypass:
                 at, command = bypass[0]
                 status_out = "refused"

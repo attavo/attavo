@@ -441,10 +441,10 @@ def test_a_call_the_permission_layer_denied_did_not_run() -> None:
     assert runner_calls_outside_the_tool(events) == []
 
 
-def gated_tenant(tmp_path: Path, calls: list[str]) -> tuple[Path, dict[str, str]]:
+def gated_tenant(tmp_path: Path, calls: list[str], tests: str = "") -> tuple[Path, dict[str, str]]:
     """A tenant whose build adapter appends the given Bash calls to the
     stage's events as an executor's stream would, then commits."""
-    root = tenant(tmp_path, checks='[checks]\ncommand = "true"')
+    root = tenant(tmp_path, checks='[checks]\ncommand = "true"', tests=tests)
     feed = tmp_path / "executor-events.jsonl"
     feed.write_text("".join(json.dumps(e) + "\n" for c in calls for e in tool_call(c)))
     (root / "attavo" / "adapters" / "fixture").mkdir(parents=True)
@@ -469,6 +469,32 @@ def test_a_build_that_ran_a_runner_outside_the_tool_is_returned_by_name(tmp_path
     assert rec["stop"]["class"] == "test-bypass" and rec["stop"]["provenance"] == "executor"
     assert command in rec["stop"]["detail"] and "attavo test" in rec["stop"]["detail"], rec["stop"]
     jsonschema.validate(rec, json.loads((ROOT / "schema" / "records" / "build.schema.json").read_text()))
+
+
+ODD_RUN = "xargs -r -n 4 ./bin/oddtest --fast"
+ODD_RUNNER = '[tests]\nselect = "cat"\nrun = "xargs -r -n 4 ./bin/oddtest --fast"'
+
+
+def test_the_runner_the_tenants_run_line_names_is_a_runner_the_gate_recognizes() -> None:
+    from attavo.testtool import tenant_runner
+    assert tenant_runner("xargs -r python3 -m pytest -q -n 4") == ["python3", "-m", "pytest"]
+    assert tenant_runner("FOO=1 xargs -r -n 4 ./bin/oddtest --fast") == ["./bin/oddtest"]
+    assert runner_calls_outside_the_tool(tool_call("true && sh -c 'ls'"), "true") == []
+    assert runner_calls_outside_the_tool(tool_call("bash x.sh"), "bash -c 'x'") == []
+    assert tenant_runner("") == [] and tenant_runner("xargs -r") == []
+
+
+@pytest.mark.parametrize("command", ["./bin/oddtest tests/a", "cd x && ./bin/oddtest", "env X=1 bin/oddtest"])
+def test_a_runner_not_on_the_built_in_list_is_named_by_the_tenants_own_run_line(
+        tmp_path: Path, command: str) -> None:
+    root, env = gated_tenant(tmp_path, [f"{THE_TOOL} tests/test_a.py", command], tests=ODD_RUNNER)
+    assert runner_calls_outside_the_tool(tool_call(command)) == []  # the built-ins alone miss it
+    assert runner_calls_outside_the_tool(tool_call(command), ODD_RUN) != []
+    run = run_attavo(root, "build", "1", env=env)
+    assert run.returncode == 1, run.stdout + run.stderr
+    rec = build_record(root)
+    assert rec["status"] == "refused" and rec["refusal_kind"] == "test-bypass", rec
+    assert command in rec["stop"]["detail"], rec["stop"]
 
 
 def test_a_build_that_used_only_the_tool_is_not_returned(tmp_path: Path) -> None:

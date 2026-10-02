@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/build/11",
+  "$id": "https://attavo.dev/schema/records/build/12",
   "title": "attavo build record (build-NN.json)",
   "type": "object",
   "additionalProperties": false,

@@ -238,10 +238,54 @@ def _command_words(segment: str) -> list[str]:
     return words[i:]
 
 
-def runs_a_test_runner(segment: str) -> bool:
+_XARGS_TAKES_A_VALUE = {"-n", "-P", "-I", "-L", "-s", "-d", "-E", "-a"}
+
+
+def tenant_runner(run: str) -> list[str]:
+    """The runner a tenant's [tests].run names: its command after any
+    environment assignments and xargs with its flags, plus the subcommand
+    words and a `-m module` that follow it, up to the first flag --
+    "python3 -m pytest" from `xargs -r python3 -m pytest -q`. [] when
+    the line names none."""
+    try:
+        words = shlex.split(run)
+    except ValueError:
+        words = run.split()
+    i = 0
+    while i < len(words) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[i]):
+        i += 1
+    if words[i:i + 1] == ["xargs"]:
+        i += 1
+        while i < len(words) and words[i].startswith("-"):
+            i += 2 if words[i] in _XARGS_TAKES_A_VALUE else 1
+    runner = words[i:i + 1]
+    i += 1
+    if words[i:i + 1] == ["-m"] and words[i + 1:i + 2]:
+        return runner + words[i:i + 2]
+    while runner and i < len(words) and not words[i].startswith("-"):
+        runner.append(words[i])
+        i += 1
+    return runner
+
+
+# A run line that starts with a shell or a no-op names no runner: matching
+# it would refuse every `sh` or `true` the executor calls.
+_NOT_A_RUNNER = {"true", ":", "sh", "bash", "zsh", "env", "cat", "echo", "exit"}
+
+
+def _same_runner(words: list[str], runner: list[str]) -> bool:
+    if not runner or runner[0] in _NOT_A_RUNNER or words[1:len(runner)] != runner[1:] or len(words) < len(runner):
+        return False
+    a, b = words[0].removeprefix("./"), runner[0].removeprefix("./")
+    return a == b or a.split("/")[-1] == b.split("/")[-1]
+
+
+def runs_a_test_runner(segment: str, runner: list[str] | None = None) -> bool:
     words = _command_words(segment)
     if not words:
         return False
+    if runner and _same_runner(words, runner):
+        return True
     base = words[0].split("/")[-1]
     if base in ("pytest", "py.test"):
         return True
@@ -253,11 +297,14 @@ def runs_a_test_runner(segment: str) -> bool:
     return base == "npx" and words[1:2] == ["vitest"]
 
 
-def runner_calls_outside_the_tool(events: list[dict[str, Any]]) -> list[tuple[str, str]]:
+def runner_calls_outside_the_tool(events: list[dict[str, Any]],
+                                  run: str = "") -> list[tuple[str, str]]:
     """[(time, command)] for every Bash call in events that ran a test
     runner, except a call whose result was a permission denial (it did not
     run). A call through `attavo test` is not a runner call: the runner it
-    starts is the tool's own."""
+    starts is the tool's own. run is the tenant's [tests].run: the runner
+    it names counts as a runner beside the built-in ones."""
+    runner = tenant_runner(run)
     found: list[tuple[str, str]] = []
     for i, event in enumerate(events):
         text = str(event.get("text", ""))
@@ -268,7 +315,7 @@ def runner_calls_outside_the_tool(events: list[dict[str, Any]]) -> list[tuple[st
         reply = str(result.get("text", ""))
         if reply.startswith("Permission to use Bash") and "denied" in reply:
             continue
-        if any(runs_a_test_runner(s) for s in _command_segments(command)):
+        if any(runs_a_test_runner(s, runner) for s in _command_segments(command)):
             found.append((str(event.get("at", "")), command[:100]))
     return found
 
