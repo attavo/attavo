@@ -58,7 +58,7 @@ jobs:
       - name: pytest
         if: steps.inherit.outputs.inherit != 'true'
         run: >
-          python3 -m pytest tests -q --durations=5 -n auto -m 'not own_records'
+          python3 -m pytest tests -q --durations=5 -m 'not own_records' -n auto
       - name: pytest end
         if: steps.inherit.outputs.inherit != 'true'
         run: echo "PYTEST_END=$(date +%s)" >> "$GITHUB_ENV"
