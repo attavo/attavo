@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any, cast
 
@@ -63,12 +64,58 @@ FAST_POLL_ENV = {"ATTAVO_DRIVE_POLL_BOUND_S": "0.9", "ATTAVO_DRIVE_POLL_INTERVAL
                  "ATTAVO_HEARTBEAT_S": "0.2"}
 
 
+def held_clock(root: Path, at: float | None = None) -> Path:
+    """The clock file every product process a test starts against `root`
+    reads (#330, clock.py): created on first use at the machine's now and
+    then held, so a heartbeat's age is a fact the test decides
+    (advance_clock), never the scheduler's latency. `at` sets it."""
+    path = root.parent / f"{root.name}.attavo-clock"
+    if at is not None or not path.exists():
+        path.write_text(str(time.time() if at is None else at))
+    return path
+
+
+def advance_clock(root: Path, seconds: float) -> None:
+    path = held_clock(root)
+    path.write_text(str(float(path.read_text()) + seconds))
+
+
+def decide_dead_workers(root: Path, beats_of: Path | None = None) -> None:
+    """Liveness is a fact the test decides: a heartbeat whose holder's pid
+    is gone (the adapter killed it) is let go stale by putting the clock
+    just past three beats of its last touch -- never by waiting for the
+    scheduler to get there. A beat whose holder lives is left alone."""
+    from attavo.doctor import heartbeat_pid
+    from attavo.events import stage_events_dir
+    clock_file = held_clock(root)
+    for beat in stage_events_dir(beats_of or root).glob("*.heartbeat"):
+        pid = heartbeat_pid(beat)
+        if pid is None:
+            continue
+        try:
+            os.kill(pid, 0)
+            continue
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            continue
+        stale_at = beat.stat().st_mtime + 0.7
+        if float(clock_file.read_text()) < stale_at:
+            clock_file.write_text(str(stale_at))
+
+
+def utc_stamp(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None,
                timeout: float | None = None) -> subprocess.CompletedProcess[str]:
     """`timeout` is a hang guard, not an assertion on speed: a run that
     needs it has not finished at all (subprocess.TimeoutExpired)."""
     full_env = dict(os.environ)
     full_env.update(FAST_POLL_ENV)
+    full_env["ATTAVO_CLOCK_FILE"] = str(held_clock(root))
+    decide_dead_workers(root)
     if env:
         full_env.update(env)
     return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
@@ -593,6 +640,7 @@ def test_drive_line_buffers_stdout_so_a_pipe_reader_sees_the_start_line_before_t
 
     full_env = dict(os.environ)
     full_env.update(FAST_POLL_ENV)
+    full_env["ATTAVO_CLOCK_FILE"] = str(held_clock(root))
     proc = subprocess.Popen(
         [sys.executable, str(ATTAVO), "drive", "1", "--until-ready"],
         cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -1382,3 +1430,31 @@ def test_by_without_again_refuses(tmp_path: Path) -> None:
     run = run_attavo(root, "drive", "1", "--by", "alice")
     assert run.returncode == 2 and "--by is only for --again" in run.stderr, run.stderr
     assert not (records_dir(root) / "build-01.started").exists()
+
+
+def test_a_beat_seconds_late_reads_running_on_a_held_clock_and_died_once_the_clock_passes_three_beats(
+        tmp_path: Path, monkeypatch: Any) -> None:
+    """#330: liveness is a fact the test decides. The clock is held; the
+    worker's real beat is seconds old on the machine's own clock, and the
+    pass still reads it as running. Advancing the clock past three beats
+    with no beat makes it died."""
+    from attavo import drive
+    from attavo.doctor import heartbeat_path
+
+    root = make_tenant(tmp_path, "build_valid")
+    add_drive_stall_bound(root)
+    monkeypatch.setenv("ATTAVO_HEARTBEAT_S", "0.2")
+    beat = heartbeat_path(root, "build", 1)
+    beat.parent.mkdir(parents=True, exist_ok=True)
+    beat.write_text("")
+    beat_at = time.time() - 5
+    os.utime(beat, (beat_at, beat_at))
+    marker = write_dead_marker(root, "build", 1)
+    info = {"at": utc_stamp(beat_at), "host": socket.gethostname(), "events": str(beat.parent)}
+
+    monkeypatch.setenv("ATTAVO_CLOCK_FILE", str(held_clock(root, beat_at + 0.1)))
+    assert drive.read_invocation(root, 60, marker, info).cls == "running"
+    advance_clock(root, 0.5)
+    assert drive.read_invocation(root, 60, marker, info).cls == "running"
+    advance_clock(root, 0.2)
+    assert drive.read_invocation(root, 60, marker, info).cls == "died"
