@@ -21,6 +21,7 @@ from attavo.common import (
     read_manifest,
 )
 from attavo.records import latest_record, write_record
+from attavo import Command
 
 # --- the spec contract ---
 
@@ -371,3 +372,33 @@ def cmd_spec_gate(argv: list[str]) -> int:
 
 
 CRITERION_TIMEOUT = 120
+
+
+COMMANDS = (
+    Command(
+        name='spec-gate',
+        run=cmd_spec_gate,
+        usage=('attavo spec-gate [N]',),
+        rank=20,
+        help=(
+            (50, """\
+spec-gate, approve, and approval-status are gates and writers. They run
+from the tenant root (the current working directory); N, the work item id,
+is read from the ATTAVO_ITEM environment variable when set, else from the
+branch (attavo/N-*). The doctor's first proof sets ATTAVO_ITEM for a
+rejection fixture's own item, so a gate's own command needs no argument
+even while the enclosing repository sits on a real item's attavo/N-*
+branch. Every run of spec-gate or approve writes the next numbered attempt
+file under paths.records/N/ and never overwrites one already written. A
+fix item's spec may name the root cause its change closes as one
+"Root-cause: <slug>" line in the problem; spec-gate refuses a slug the
+tenant's root-causes.md (beside paths.specs) does not list, or any slug
+when that file is absent, before any criterion runs -- a spec with no
+root-cause line is untouched. spec-gate also refuses, before any
+criterion runs, "stub touches a path the claims do not name: <path>" for
+the first path under stub/ (or in stub/.removed) that no claim matches.
+See the spec contract in the project's Phase 1 issue for the full rules
+each one enforces."""),
+        ),
+    ),
+)

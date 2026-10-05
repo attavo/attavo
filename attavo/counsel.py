@@ -24,6 +24,7 @@ from attavo.records import latest_attempt_path, latest_record, parse_attempts, w
 from attavo.types import SpecRecord, StageRecord
 from attavo.verify import diff_since_approval, read_forge_checks
 from attavo.workcopy import item_events_file
+from attavo import Command
 
 # --- counsel: a stop is read inside the product first, before a person
 # (issue #100). It never acts: it proposes a ruling, a patch, or names the
@@ -607,3 +608,83 @@ def _record_turn_in_store(root: Path, item_id: str, question: str, by: str,
         return 0
     print(f"attavo counsel: refused: {refusal}")
     return 1
+
+
+COMMANDS = (
+    Command(
+        name='counsel',
+        run=cmd_counsel,
+        usage=('attavo counsel [N]', 'attavo counsel [N] --ask "<question>" --by LOGIN', 'attavo counsel [N] --turns --json', 'attavo counsel [N] --record-turn K --by LOGIN'),
+        rank=90,
+        help=(
+            (130, """\
+counsel reads the item's latest non-pass build or verify record -- or,
+when neither exists, its latest refused spec-gate record, the earliest
+point a question can be answered inside the product, before any
+approval or executor spend (issue #133) -- and asks the tenant's
+[executor].counsel adapter (defaulting to [executor].verify) a
+read-only question about it: the record, the spec (problem, claims,
+criteria, stub, including stub/.removed), paths.rulings, the item's
+diff since approval, the tenant manifest, and this product's own root
+(bin/attavo, adapters/, schema/, templates/) by path, under the same
+sandbox verify runs under (issue #100, extended by the rulings of
+2026-09-25). Counsel's own prior readings of the item come first, as
+ATTAVO_COUNSEL_PRIOR -- oldest first, each naming the record it read,
+its class, verdict, ruling text, citations and the question it
+answered -- so a question about a stop already read is answered as a
+follow-up to that reading, not re-derived; the record written carries
+answers, the stem of the newest prior counsel record that read the
+same stage record, or null for a first reading (--ask also hands the
+conversation's earlier turns, as turn-NN entries after the records). The stage's
+last events stand in for its log (ATTAVO_COUNSEL_EVENTS, its
+events.jsonl's last 200 lines); the stop path hands the log too,
+and a --ask only hands it when the question names the word "log". The
+tenant's corpus, [counsel].reads -- repository-relative paths to the
+method rules, briefs and rulings counsel reads before it answers -- is
+handed as ATTAVO_COUNSEL_READS, one absolute path per line; a manifest
+naming a path that does not exist is refused (exit 1, no record). The
+adapter answers with class (the stop enumeration, or unclassed),
+verdict (answer: a ruling text with citations; patch: a product
+defect's file, symbol, rejection test, and diff; person: a one-line
+question no rule covers), citations (instruction, mechanism, guard,
+each a path and symbol or a ruling id), and proposal (the ruling text,
+the patch, or the question). The stop path (no --ask) writes the next counsel-NN.json under
+paths.records/N/, with the adapter's transcript beside it as
+counsel-NN.log, and commits nothing -- the caller commits, as with
+every stage. It refuses (exit 1, nothing written) when the item
+carries no non-pass build, verify, or spec-gate record to counsel. See
+issue #100's lane for the full rules it enforces, issue #133's for the
+spec-gate fallback, and the rulings of 2026-09-25 for the follow-up,
+the events tail and the corpus.
+
+counsel --ask "<question>" --by LOGIN is read-only (issue #312): it
+writes no record and no log, changes nothing under paths.records, and
+makes no commit. It runs the adapter in a detached temporary worktree
+of the HEAD commit of the checkout it was called in, removed on exit,
+so the executor's working copy is never touched, and it answers in every
+state -- no stage record, a stage running, stopped, ready -- refusing
+only an item with no spec. The turn goes to the store document
+conversation-<N>, {"item", "turns"}, each turn {n, at, by, question,
+record (the stem of the stage record the question read, or null), sha
+(the snapshot commit), answer, sha256 (of the turn without this field)},
+written under --by against the version it read and retried once on a
+lost race. On success stdout is exactly one JSON object, {"turn",
+"sha256", "answer"}; a refusal is a non-zero exit and one line. A
+question steers nothing. The events tail is read where the product keeps
+the item's events -- its working copy, else its archive, else the
+tenant's own checkout -- whichever checkout --ask was called from.
+counsel --turns --json prints the document's turns with recorded_as, the
+counsel record whose turn field cites it, or null; it writes nothing.
+--json is valid only with --turns (exit 2 otherwise).
+counsel --record-turn K --by LOGIN is the operator's act that turns
+turn K into counsel-NN.json (its class, verdict, citations, proposal
+and question, and turn: {n, sha256, by}), against the turn's own record
+-- never the latest stage record -- and refuses a turn asked with no
+stage record, prints "(counsel-NN.json)"
+as the stop path does, and refuses a turn whose sha256 does not match
+its content. It is the only way a question becomes a record, and so
+the only way one steers the next attempt."""),
+        ),
+        transport=True,
+    ),
+)

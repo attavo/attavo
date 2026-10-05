@@ -9,6 +9,7 @@ from typing import Any, cast
 from attavo.common import MANIFEST, read_manifest
 from attavo.records import parse_attempts, stage_schema
 from attavo.types import CounselRecord, Stop
+from attavo import Command
 
 # --- stop: every non-pass build or verify record's class and cause (issue
 # #89) -- derived here, at write time, from the record's own structured
@@ -401,3 +402,28 @@ def counsel_record_for(item_records_dir: Path, stage: str, n: int) -> CounselRec
     attempts = parse_attempts(item_records_dir, "counsel")
     matches = [rec for _, rec in sorted(attempts.items()) if rec.get("record") == target]
     return matches[-1] if matches else None
+
+
+COMMANDS = (
+    Command(
+        name='stops',
+        run=cmd_stops,
+        usage=('attavo stops [N] [--json]',),
+        rank=180,
+        help=(
+            (260, """\
+stops reads, never writes. For item N (or every item under
+paths.records when N is omitted), one row per non-pass build or verify
+record: the record, its stop's class, provenance, and detail, and the
+answerer -- "counsel:<verdict>" when a counsel record read this exact
+stop, else "person" for a question, else "guard" for a class a guard
+alone raised (GUARDED_STOP_CLASSES), else "none". A record too old to
+carry stop at all prints the doctor's own phrase for it, "before stop
+was recorded", and is counted there rather than by class. Totals per
+class (read from the build record schema's own enum, never retyped) and
+per answerer, plus the before-stop count, follow the rows. --json prints
+the rows and the totals as one object. See issue #129's lane for the
+full rules it enforces."""),
+        ),
+    ),
+)

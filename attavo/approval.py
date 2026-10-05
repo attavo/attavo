@@ -14,6 +14,7 @@ from attavo.common import (
     read_manifest,
 )
 from attavo.records import latest_record, write_record
+from attavo import Command
 
 # --- approval, bound to a commit ---
 
@@ -115,3 +116,19 @@ def cmd_approval_status(argv: list[str]) -> int:
 
     print(status)
     return 0 if status == "valid" else 1
+
+
+COMMANDS = (
+    Command(
+        name='approve',
+        run=cmd_approve,
+        usage=('attavo approve [N] --by LOGIN',),
+        rank=30,
+    ),
+    Command(
+        name='approval-status',
+        run=cmd_approval_status,
+        usage=('attavo approval-status [N]',),
+        rank=40,
+    ),
+)

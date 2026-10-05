@@ -10,6 +10,7 @@ from attavo.common import MANIFEST, git, now_iso, product_version, read_manifest
 from attavo.records import latest_attempt_path, latest_record, parse_attempts
 from attavo.types import (ApprovalRecord, AttestRecord, BuildRecord, ItemCost, ItemTime,
                           ItemTokens, SpecRecord, StageTime, StageTokens, VerifyRecord)
+from attavo import Command
 
 # --- attest: the signed envelope over one item's whole traversal ---
 
@@ -328,3 +329,49 @@ def cmd_attest(argv: list[str]) -> int:
     }
     print(json.dumps(statement, indent=2))
     return 0
+
+
+COMMANDS = (
+    Command(
+        name='attest',
+        run=cmd_attest,
+        usage=('attavo attest [--partial] [N]',),
+        rank=110,
+        help=(
+            (160, """\
+attest refuses (exit 1) unless the latest spec, approval, build, and
+verify records for an item all exist and chain: the build's approval_sha
+names the latest approval, and the verify's build_sha names that build --
+a re-approval after a build must force a re-run of what changed. With no
+N given it derives the item from the record paths HEAD's merge commit
+touched under paths.records/<N>/, not from a branch name, which a squash
+merge discards and which names a forge's convention the product does not
+know; more than one item derived is a refusal naming what it found. Zero
+is not a defect -- not every merge is an item merge -- exit 0, nothing
+printed but a line saying so.
+
+attest never writes. On a coherent chain it prints the attestation
+statement -- validating against schema/attestation.schema.json -- to
+stdout as JSON and exits 0: the item, its four records and their shas,
+and the commit the statement was computed at (sha and merge_sha are the
+same commit here; on the merge group that commit is the one that lands).
+`time`, `cost` and `tokens` are the statement's only accounting, each
+summed over every build, verify and counsel attempt; a record that
+carries no figure is named in not_read, never counted as zero.
+The four stage records already under paths.records are the evidence for
+that statement; a forge-specific template signs the printed JSON,
+unmodified, as the predicate, against the commit that lands, on the merge
+group -- and the signed bundle in the forge's attestation store is the
+seal over it. attest itself never signs anything and never talks to a
+signing service. --partial (issue #67) is for a pull request, where the
+record a complete chain would need is the output of a later stage that is
+itself waiting on this check: a missing later record is "not yet" (exit
+0, naming the item and the stages present and absent, no statement
+printed) rather than a refusal, while the two chain assertions -- build's
+approval_sha names the latest approval, verify's build_sha names the
+latest build -- still run over whatever records exist. merge_group and a
+push to main still demand the whole chain. See issue #69's lane for the
+full rules it enforces."""),
+        ),
+    ),
+)
