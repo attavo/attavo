@@ -413,15 +413,19 @@ def test_a_worker_whose_commit_is_refused_beats_until_it_returns_and_then_stops(
     approve_item(root)
     monkeypatch.chdir(root)
     monkeypatch.setenv("ATTAVO_HEARTBEAT_S", "0.1")
-    seen: dict[str, float] = {}
+    seen: dict[str, bool] = {}
 
     def stage(argv: list[str]) -> int:
         (records_dir(root) / "build-01.json").write_text("{}")
         return 0
 
     def refuse(*_: Any) -> None:
-        time.sleep(0.5)
-        seen["age"] = time.time() - heartbeat_path(root, "build", 1).stat().st_mtime
+        beat = heartbeat_path(root, "build", 1)
+        first = beat.stat().st_mtime
+        deadline = time.monotonic() + 30  # a hang guard; the wait is on the next beat
+        while beat.stat().st_mtime == first and time.monotonic() < deadline:
+            time.sleep(0.01)
+        seen["beat_again"] = beat.stat().st_mtime != first
         raise RuntimeError("refused")
 
     monkeypatch.setattr(drive, "cmd_build", stage)
@@ -429,7 +433,7 @@ def test_a_worker_whose_commit_is_refused_beats_until_it_returns_and_then_stops(
     monkeypatch.setattr(drive, "commit_record", refuse)
     before = threading.active_count()
     assert drive._stage_body("1", "build", 1) == 1
-    assert seen["age"] < 0.3, f"the heartbeat had stopped {seen['age']:.2f}s before the refused commit"
+    assert seen["beat_again"], "the heartbeat had stopped before the refused commit"
     assert threading.active_count() == before, "the heartbeat thread outlived the worker's body"
 
 

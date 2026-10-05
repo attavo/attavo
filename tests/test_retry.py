@@ -126,8 +126,10 @@ def test_a_transient_stop_retries_plainly_after_the_wait(tmp_path: Path) -> None
     assert not (records_dir(root) / "build-02.started").exists()
 
     # past the wait: the clock says so, and the pass starts the next attempt at once
+    # the retry's worker beats on the real clock, so a beat is live for three
+    # beats of the controlled one: beats 2500 s apart (a bound of 7500 s) keep it running at 7200
     passes_until(root, lambda: len(record_files(root, "build")) == 2, seconds=40,
-                 env=clock_ahead(tmp_path, 7200))
+                 env={**clock_ahead(tmp_path, 7200), "ATTAVO_HEARTBEAT_S": "2500"})
     rec = latest_record(root, "build")
     assert rec["status"] == "pass" and rec["retry_of"] == "build-01", rec
     assert counsel_records(root) == []

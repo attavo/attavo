@@ -13,6 +13,7 @@ from pathlib import Path
 
 from helpers import git, make_tenant
 from test_drive import (
+    decide_dead_workers,
     GREEN_FORGE,
     ITEM_BRANCH,
     add_bare_remote,
@@ -241,14 +242,13 @@ def test_merged_is_judged_on_origins_default_branch_not_a_stale_local_main(tmp_p
 
 
 def test_a_staged_record_origin_already_carries_is_reported_as_a_refused_fast_forward(tmp_path: Path) -> None:
-    import time
     root, bare = tenant_on_main(tmp_path)
     assert drive(root, "1")[0] == 0
     copy = copy_of(tmp_path)
     settle(copy, bare)
     marker_commit = git(copy, "log", "--format=%H", "--grep", "invocation 01 started").strip()
     git(copy, "reset", "-q", "--soft", marker_commit)
-    time.sleep(1.5)
+    decide_dead_workers(root, copy)
     rc, out = drive(root, "1")
     assert rc == 1, out
     assert "build-01.json" in out and "fast-forward was refused" in out, out
