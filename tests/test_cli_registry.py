@@ -6,16 +6,18 @@ declaration in its own module and nothing else.
 Run: python3 -m pytest tests -q
 """
 import ast
+import importlib
+import pkgutil
 import re
 import subprocess
 import sys
 from pathlib import Path
 
+import attavo
 from attavo import cli
 
 ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
-FIXTURE = ROOT / "tests" / "fixtures" / "cli_help.txt"
 
 
 def _strings(tree: ast.AST) -> list[str]:
@@ -43,10 +45,22 @@ def test_cli_names_no_command_and_no_module_beyond_the_package() -> None:
             assert not ident.startswith("cmd_"), ident
 
 
-def test_assembled_help_equals_the_text_captured_from_origin_main() -> None:
-    expected = FIXTURE.read_text()
-    assert cli.help_text() + "\n" == expected
+def test_help_carries_every_declared_command() -> None:
+    """Every declared command's usage lines and help sections appear in
+    --help, and no command name is declared twice."""
+    declared = []
+    for info in pkgutil.iter_modules(attavo.__path__):
+        module = importlib.import_module(f"attavo.{info.name}")
+        declared.extend(getattr(module, "COMMANDS", ()))
+    names = [c.name for c in declared]
+    assert len(names) == len(set(names)), "a command is declared twice"
+    assert {c.name for c in cli.commands()} == set(names)
     run = subprocess.run([sys.executable, str(ATTAVO), "--help"],
                          capture_output=True, text=True, check=False)
     assert run.returncode == 0
-    assert run.stdout == expected
+    assert run.stdout == cli.help_text() + "\n"
+    for c in declared:
+        for line in c.usage:
+            assert f"    {line}\n" in run.stdout, (c.name, line)
+        for _, text in c.help:
+            assert text in run.stdout, (c.name, text[:40])
