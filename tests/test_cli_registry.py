@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 import attavo
-from attavo import cli
+from attavo import Command, cli
 
 ROOT = Path(__file__).resolve().parent.parent
 ATTAVO = ROOT / "bin" / "attavo"
@@ -48,7 +48,7 @@ def test_cli_names_no_command_and_no_module_beyond_the_package() -> None:
 def test_help_carries_every_declared_command() -> None:
     """Every declared command's usage lines and help sections appear in
     --help, and no command name is declared twice."""
-    declared = []
+    declared: list[Command] = []
     for info in pkgutil.iter_modules(attavo.__path__):
         module = importlib.import_module(f"attavo.{info.name}")
         declared.extend(getattr(module, "COMMANDS", ()))
