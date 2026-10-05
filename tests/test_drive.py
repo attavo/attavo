@@ -767,10 +767,10 @@ def test_drive_until_ready_waits_out_the_bound_on_a_forge_still_running(tmp_path
     assert "did not conclude" not in run.stdout
 
     # --until-ready repeats the pass, then gives up naming the check
-    run2 = run_attavo(root, "drive", "1", "--until-ready")
+    run2 = run_attavo(root, "drive", "1", "--until-ready", env={"ATTAVO_DRIVE_POLL_BOUND_S": "600"})
     assert run2.returncode == 1, run2.stdout + run2.stderr
     assert "in_progress" in run2.stdout and "did not conclude" in run2.stdout
-    assert run2.stdout.count("Waiting on the checks") >= 2, run2.stdout
+    assert run2.stdout.count("Waiting on the checks") >= 6, run2.stdout  # six reads of a hundred seconds
 
     assert record_files(root, "verify") == []
 
