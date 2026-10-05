@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from helpers import commit_all, git, make_tenant
+from helpers import commit_all, git, make_tenant, wait_for
 from test_drive import (
     GREEN_FORGE,
     add_bare_remote,
@@ -30,24 +30,15 @@ from test_drive import (
     record_files,
     records_dir,
     remote_head,
+    FAST_POLL_ENV,
+    release,
     run_attavo,
+    slow_build_adapter as slow_adapter,
     write_dead_marker,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
-FAST = {"ATTAVO_HEARTBEAT_S": "0.2", "ATTAVO_DRIVE_POLL_INTERVAL_S": "0.5"}
-
-
-def slow_adapter(root: Path, seconds: float) -> None:
-    """A tenant-side build adapter: the product's own fixture adapter,
-    after `seconds` of sleep on the build stage."""
-    d = root / "attavo" / "adapters" / "fixture"
-    d.mkdir(parents=True, exist_ok=True)
-    run = d / "run"
-    run.write_text(f'#!/bin/sh\nif [ "${{ATTAVO_STAGE:-build}}" = build ]; then sleep {seconds}; fi\n'
-                   f'exec sh {ROOT / "adapters" / "fixture" / "run"}\n')
-    run.chmod(0o755)
-    commit_all(root, "a slow tenant-side adapter")
+FAST = dict(FAST_POLL_ENV)
 
 
 def git_dir(root: Path) -> Path:
@@ -66,33 +57,17 @@ def pushed(bare: Path, subject: str) -> bool:
     return subject in log
 
 
-# A polling deadline bounds a condition that never comes true; it asserts no
-# speed. Whatever a caller names, a loaded machine (the suite at -n auto, with
-# other work beside it) is given at least this long before "never" is the answer.
-DEADLINE_FLOOR_S = 180
-
-
-def wait_for(pred: Any, seconds: float = 20) -> None:
-    deadline = time.monotonic() + max(seconds, DEADLINE_FLOOR_S)
-    while time.monotonic() < deadline:
-        if pred():
-            return
-        time.sleep(0.2)
-    raise AssertionError("condition not met in time")
-
-
-def passes_until(root: Path, pred: Any, seconds: float = 40, env: dict[str, str] | None = None) -> None:
+def passes_until(root: Path, pred: Any, env: dict[str, str] | None = None) -> None:
     """Passes, spaced, until pred holds: how an operator's loop, the
     screen's poll, or a scheduler line would drive the item."""
-    deadline = time.monotonic() + max(seconds, DEADLINE_FLOOR_S)
     full = dict(FAST)
     full.update(env or {})
-    while time.monotonic() < deadline:
+
+    def a_pass_then_the_fact() -> bool:
         run_attavo(root, "drive", "1", env=full)
-        if pred():
-            return
-        time.sleep(0.5)
-    raise AssertionError("condition not met in time")
+        return bool(pred())
+
+    wait_for(a_pass_then_the_fact, "a pass to bring about the condition", looks=360, pause_s=0.5)
 
 
 def clock_ahead(tmp_path: Path, seconds: float) -> dict[str, str]:
@@ -104,42 +79,44 @@ def clock_ahead(tmp_path: Path, seconds: float) -> dict[str, str]:
     return {"ATTAVO_CLOCK_FILE": str(path)}
 
 
-def built_tenant(tmp_path: Path, seconds: float = 3) -> tuple[Path, Path]:
+def built_tenant(tmp_path: Path, held: bool = False) -> tuple[Path, Path]:
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     add_drive_stall_bound(root)
-    slow_adapter(root, seconds)
+    if held:
+        slow_adapter(root)
     bare = add_bare_remote(root, tmp_path)
     approve_item(root)
     return root, bare
 
 
 def test_a_pass_returns_while_the_worker_runs_and_the_worker_outlives_it(tmp_path: Path) -> None:
-    root, bare = built_tenant(tmp_path, seconds=3)
-    started = time.monotonic()
+    root, bare = built_tenant(tmp_path, held=True)
     run = run_attavo(root, "drive", "1", env=FAST)
-    elapsed = time.monotonic() - started
     assert run.returncode == 0, run.stdout + run.stderr
-    assert elapsed < 2.5, f"the pass took {elapsed:.1f}s: it waited for the stage"
+    import re
+    worker = int(re.search(r"worker pid (\d+)", run.stdout).group(1))  # type: ignore[union-attr]
+    os.kill(worker, 0)  # the pass returned and the stage is still held: it did not wait for it
     assert "Build started" in run.stdout, run.stdout
     assert (records_dir(root) / "build-01.started").exists()
     assert remote_head(bare) == head_of(root), "the marker was not pushed before the pass returned"
     assert record_files(root, "build") == [], "the record existed before the worker could have written it"
+    release(root)
     wait_for(lambda: record_files(root, "build") != [])
     wait_for(lambda: remote_head(bare) == head_of(root))
     assert latest_record(root, "build")["status"] == "pass"
 
 
 def test_the_worker_touches_its_heartbeat_and_the_report_reads_running_by_it(tmp_path: Path) -> None:
-    root, _ = built_tenant(tmp_path, seconds=3)
+    root, _ = built_tenant(tmp_path, held=True)
     assert run_attavo(root, "drive", "1", env=FAST).returncode == 0
     beat = git_dir(root) / "attavo" / "build-01.heartbeat"
-    wait_for(beat.exists, 5)
+    wait_for(beat.exists)
     first = beat.stat().st_mtime
-    time.sleep(0.6)
-    assert beat.stat().st_mtime > first, "the heartbeat did not move"
+    wait_for(lambda: beat.stat().st_mtime > first, "the heartbeat to move")
     r = report(root)
     assert (r["state"], r["kind"]) == ("running", "waits"), r
+    release(root)
     wait_for(lambda: record_files(root, "build") != [])
 
 
@@ -168,7 +145,7 @@ def test_a_stale_heartbeat_reads_died_though_the_pid_lives_and_a_fresh_one_reads
 
 
 def test_two_passes_at_once_start_one_worker_and_the_loser_says_so(tmp_path: Path) -> None:
-    root, bare = built_tenant(tmp_path, seconds=3)
+    root, bare = built_tenant(tmp_path, held=True)
     publish_approval(root)
     clone = tmp_path / "second"
     git(root.parent, "clone", "-q", "-b", git(root, "rev-parse", "--abbrev-ref", "HEAD").strip(), str(bare), str(clone))
@@ -191,6 +168,7 @@ def test_two_passes_at_once_start_one_worker_and_the_loser_says_so(tmp_path: Pat
     assert "reset" not in git(loser, "reflog", "show", "HEAD"), git(loser, "reflog", "show", "HEAD")
     log = subprocess.run(["git", "-C", str(bare), "log", "--format=%s", "attavo/1-x"], capture_output=True, text=True).stdout
     assert log.count("build invocation 01 started") == 1, log
+    release(root)
     wait_for(lambda: "build record for item 1" in subprocess.run(
         ["git", "-C", str(bare), "log", "--format=%s", "attavo/1-x"], capture_output=True, text=True).stdout)
 
@@ -203,7 +181,7 @@ def test_a_second_checkout_on_this_host_reads_the_first_ones_worker_as_running(t
     it is running, and the second pass starts nothing. On main the second
     pass looked in its own git dir, found no heartbeat from its own host,
     read died, and started or recovered a second invocation."""
-    root, bare = built_tenant(tmp_path, seconds=4)
+    root, bare = built_tenant(tmp_path, held=True)
     publish_approval(root)
     clone = tmp_path / "second"
     git(root.parent, "clone", "-q", "-b", git(root, "rev-parse", "--abbrev-ref", "HEAD").strip(), str(bare), str(clone))
@@ -212,7 +190,7 @@ def test_a_second_checkout_on_this_host_reads_the_first_ones_worker_as_running(t
     git(clone, "remote", "set-head", "origin", "-a")
     first = run_attavo(root, "drive", "1", env=FAST)
     assert first.returncode == 0 and "Build started" in first.stdout, first.stdout + first.stderr
-    wait_for((git_dir(root) / "attavo" / "build-01.heartbeat").exists, 5)
+    wait_for((git_dir(root) / "attavo" / "build-01.heartbeat").exists)
     second = run_attavo(clone, "drive", "1", env=FAST)
     assert second.returncode == 0, second.stdout + second.stderr
     assert "Build started" not in second.stdout, second.stdout
@@ -221,6 +199,7 @@ def test_a_second_checkout_on_this_host_reads_the_first_ones_worker_as_running(t
                          capture_output=True, text=True).stdout
     assert log.count("build invocation 01 started") == 1 and "build invocation 02" not in log, log
     assert (report(clone)["state"]) == "running"
+    release(root)
     wait_for(lambda: "build record for item 1" in subprocess.run(
         ["git", "-C", str(bare), "log", "--format=%s", "attavo/1-x"], capture_output=True, text=True).stdout)
 
@@ -266,7 +245,7 @@ def test_the_holders_heartbeat_is_read_where_its_marker_says(tmp_path: Path) -> 
 
 
 def test_the_marker_a_pass_writes_names_its_checkouts_heartbeat_directory(tmp_path: Path) -> None:
-    root, _ = built_tenant(tmp_path, seconds=2)
+    root, _ = built_tenant(tmp_path)
     assert run_attavo(root, "drive", "1", env=FAST).returncode == 0
     info = json.loads((records_dir(root) / "build-01.started").read_text())
     assert info["events"] == str(git_dir(root) / "attavo"), info
@@ -296,7 +275,6 @@ def test_the_review_takes_the_checks_the_pass_read_and_never_polls(tmp_path: Pat
     forge.chmod(0o755)
     add_forge(root, f"sh {forge}")
     add_drive_stall_bound(root)
-    slow_adapter(root, 0)
     bare = add_bare_remote(root, tmp_path)
     approve_item(root)
     assert run_attavo(root, "drive", "1", env=FAST).returncode == 0
@@ -315,7 +293,7 @@ def test_the_review_takes_the_checks_the_pass_read_and_never_polls(tmp_path: Pat
 
 
 def test_until_ready_is_a_loop_of_passes_that_returns_at_ready(tmp_path: Path) -> None:
-    root, _ = built_tenant(tmp_path, seconds=0)
+    root, _ = built_tenant(tmp_path)
     run = run_attavo(root, "drive", "1", "--until-ready", env=FAST)
     assert run.returncode == 0, run.stdout + run.stderr
     assert "Build started" in run.stdout and "Review started" in run.stdout, run.stdout
@@ -383,11 +361,12 @@ def test_the_report_reads_running_for_the_whole_of_counsel_and_stopped_after_the
     wait_for(lambda: record_files(root, "build") != [])
     worker = int(beat.read_text())
     # The stage command has returned; the worker is in counsel. Let the
-    # heartbeat's own interval pass three times over: a beat that stopped
-    # with the command reads stale by now.
-    time.sleep(1.0)
+    # heartbeat beat three times more: a beat that stopped with the command
+    # never moves again.
+    for _ in range(3):
+        last = beat.stat().st_mtime
+        wait_for(lambda: beat.stat().st_mtime != last, "a heartbeat while the worker is in counsel")
     os.kill(worker, 0)
-    assert time.time() - beat.stat().st_mtime < 0.6, "the heartbeat is stale while the worker is alive"
     r = report(root)
     assert (r["state"], r["kind"]) == ("running", "waits"), r
     run = run_attavo(root, "drive", "1", env=FAST)
@@ -412,7 +391,7 @@ def test_a_worker_whose_commit_is_refused_beats_until_it_returns_and_then_stops(
     add_drive_stall_bound(root)
     approve_item(root)
     monkeypatch.chdir(root)
-    monkeypatch.setenv("ATTAVO_HEARTBEAT_S", "0.1")
+    monkeypatch.setenv("ATTAVO_HEARTBEAT_S", "1")
     seen: dict[str, bool] = {}
 
     def stage(argv: list[str]) -> int:
@@ -422,10 +401,11 @@ def test_a_worker_whose_commit_is_refused_beats_until_it_returns_and_then_stops(
     def refuse(*_: Any) -> None:
         beat = heartbeat_path(root, "build", 1)
         first = beat.stat().st_mtime
-        deadline = time.monotonic() + 30  # a hang guard; the wait is on the next beat
-        while beat.stat().st_mtime == first and time.monotonic() < deadline:
-            time.sleep(0.01)
-        seen["beat_again"] = beat.stat().st_mtime != first
+        try:
+            wait_for(lambda: beat.stat().st_mtime != first, "the next beat")
+            seen["beat_again"] = True
+        except AssertionError:
+            seen["beat_again"] = False
         raise RuntimeError("refused")
 
     monkeypatch.setattr(drive, "cmd_build", stage)
@@ -442,11 +422,11 @@ def test_after_the_stage_record_is_pushed_the_checkout_is_clean_and_at_origin(tm
     the checkout only fast-forwards to it: no untracked or modified file,
     HEAD at origin's branch, the record commit the driver's with one
     parent."""
-    root, bare = built_tenant(tmp_path, seconds=1)
+    root, bare = built_tenant(tmp_path)
     publish_approval(root)
     assert run_attavo(root, "drive", "1", env=FAST).returncode == 0
     wait_for(lambda: pushed(bare, "build record for item 1 (build-01)"))
-    wait_for(lambda: remote_head(bare) == head_of(root), 5)
+    wait_for(lambda: remote_head(bare) == head_of(root))
     assert git(root, "status", "--porcelain") == "", git(root, "status", "--porcelain")
     subject, author, parents = git(root, "log", "-1", "--format=%s%x1f%an <%ae>%x1f%P", "HEAD").strip().split("\x1f")
     assert "build record for item 1" in subject, subject
@@ -470,7 +450,6 @@ def test_a_pass_every_half_second_beside_a_worker_committing_its_records_hits_no
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     add_drive_stall_bound(root)
-    slow_adapter(root, 0)
     manifest = root / "attavo.toml"
     manifest.write_text(manifest.read_text().replace(
         '[executor]\nbuild = "fixture"', '[executor]\nbuild = "fixture"\ncounsel = "fixture"'))
@@ -502,17 +481,19 @@ def test_a_pass_every_half_second_beside_a_worker_committing_its_records_hits_no
         except (OSError, ValueError):
             return False
 
-    deadline = time.monotonic() + 60
     started = False
-    while time.monotonic() < deadline:
+
+    def a_pass_then_whether_the_worker_returned() -> bool:
+        nonlocal started
         run = run_attavo(root, "drive", "1", env=env)
         outputs.append(f"rc={run.returncode}\n{run.stdout}{run.stderr}")
         started = started or beat.exists()
-        if started and not worker_alive():
-            break
-        time.sleep(0.5)
-    else:
-        raise AssertionError("the worker never returned:\n" + "\n".join(outputs))
+        return started and not worker_alive()
+
+    try:
+        wait_for(a_pass_then_whether_the_worker_returned, "the worker to return", looks=360, pause_s=0.5)
+    except AssertionError as gave_up:
+        raise AssertionError(f"{gave_up}\n" + "\n".join(outputs)) from None
     assert pushed(bare, "build record for item 1 (build-01)"), "\n".join(outputs)
     outputs.append(f"rc=0\n{run_attavo(root, 'drive', '1', env=env).stdout}")
     bad = [o for o in outputs if not o.startswith("rc=0") or "fatal" in o or "stopped: could not" in o or "error" in o.lower()]

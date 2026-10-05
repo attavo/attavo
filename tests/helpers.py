@@ -6,11 +6,41 @@ own repository, so every test gets a clean, independent commit history.
 """
 from __future__ import annotations
 
+import inspect
 import shutil
 import subprocess
+import threading
 from pathlib import Path
+from typing import Any, Callable
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+# A pause between two looks at a fact: an Event nobody sets, so the wait is
+# a pace and never a judgment. No test reads the wall clock to decide it has
+# waited long enough (#332).
+_PACE = threading.Event()
+
+# A bound on a fact that never comes true counts looks, not seconds, so a
+# loaded machine (the suite at -n auto, with other work beside it) is given
+# as many looks as an idle one: 900 looks 0.2 s apart is at least 180 s.
+LOOKS = 900
+
+
+def wait_for(fact: Callable[[], Any], what: str | None = None, looks: int = LOOKS,
+             pause_s: float = 0.2) -> None:
+    """Look at `fact` until it holds, pausing between looks. Gives up after
+    `looks` looks, naming what it was waiting for (by default the fact's own
+    source), so a hang is a sentence, not a ten-minute silence."""
+    for _ in range(looks):
+        if fact():
+            return
+        _PACE.wait(pause_s)
+    if what is None:
+        try:
+            what = inspect.getsource(fact).strip()
+        except (OSError, TypeError):
+            what = repr(fact)
+    raise AssertionError(f"gave up after {looks} looks waiting for: {what}")
 
 
 def git(root: Path, *args: str) -> str:

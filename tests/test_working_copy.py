@@ -21,12 +21,15 @@ from test_drive import (
     add_forge,
     approve_item,
     head_of,
+    pid_alive,
     publish_approval,
     record_files,
     remote_head,
     run_attavo,
 )
-from test_pass import FAST, git_dir, slow_adapter, wait_for
+from attavo.doctor import heartbeat_pid
+from helpers import wait_for
+from test_pass import FAST, git_dir
 
 
 def tenant_on_main(tmp_path: Path) -> tuple[Path, Path]:
@@ -35,7 +38,6 @@ def tenant_on_main(tmp_path: Path) -> tuple[Path, Path]:
     root = make_tenant(tmp_path, "build_valid", name="tenant")
     add_forge(root, GREEN_FORGE)
     add_drive_stall_bound(root)
-    slow_adapter(root, 0)
     bare = add_bare_remote(root, tmp_path)
     approve_item(root)
     publish_approval(root)
@@ -54,9 +56,16 @@ def drive(root: Path, *args: str) -> tuple[int, str]:
 
 
 def settle(copy: Path, bare: Path, stage: str = "build") -> None:
-    """The worker's record is committed, pushed, and the copy at origin."""
+    """The worker's record is committed, pushed, the copy at origin, and the
+    worker gone: one still beating writes into the copy a test may remove."""
     wait_for(lambda: record_files(copy, stage) != [])
     wait_for(lambda: remote_head(bare) == head_of(copy))
+
+    def worker_gone() -> bool:
+        pids = [heartbeat_pid(b) for b in (git_dir(copy) / "attavo").glob("*.heartbeat")]
+        return not any(pid is not None and pid_alive(pid) for pid in pids)
+
+    wait_for(worker_gone, "the worker to end")
 
 
 def listed(root: Path) -> list[str]:
@@ -216,7 +225,6 @@ def test_with_no_origin_at_all_a_pass_from_main_refuses_by_name_and_writes_nothi
     root = make_tenant(tmp_path, "build_valid", name="tenant")
     add_forge(root, GREEN_FORGE)
     add_drive_stall_bound(root)
-    slow_adapter(root, 0)
     approve_item(root)
     publish = git(root, "status", "--porcelain")
     head = head_of(root)

@@ -23,6 +23,7 @@ from test_drive import (
     GREEN_FORGE,
     RED_FORGE,
     UNCONCLUDED_FORGE,
+    held_clock,
     add_bare_remote,
     add_drive_stall_bound,
     add_forge,
@@ -86,9 +87,9 @@ def test_report_never_waits_on_a_check_that_is_still_running(tmp_path: Path) -> 
     add_bare_remote(root, tmp_path)
     approve_item(root)
     assert drive(root, "1").returncode == 0
-    started = time.monotonic()
-    out = report(root, env={"ATTAVO_DRIVE_POLL_BOUND_S": "30", "ATTAVO_DRIVE_POLL_INTERVAL_S": "5"})
-    assert time.monotonic() - started < 4, "the report polled"
+    before = int(float(held_clock(root).read_text()))
+    out = report(root)
+    assert (int(float(held_clock(root).read_text())) - before) // 100 == 1, "the report read the forge more than once: it polled"
     assert (out["state"], out["kind"]) == ("waiting-on-checks", "waits"), out
     assert "ci in_progress" in out["says"], out
 

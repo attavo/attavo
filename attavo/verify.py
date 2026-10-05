@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
+from attavo import clock
 from attavo.build import (
     adapter_reports,
     build_is_empty,
@@ -459,7 +460,9 @@ def cmd_verify(argv: list[str]) -> int:
 # exactly the transport act this lane retires. ATTAVO_DRIVE_POLL_BOUND_S
 # and ATTAVO_DRIVE_POLL_INTERVAL_S, read at call time rather than once at
 # import, are for a test's own clock, not a tenant's -- there is no
-# manifest key for either.
+# manifest key for either. The bound is judged on the one clock
+# (attavo/clock.py), so a test crosses it by setting that clock, not by
+# waiting; the interval only paces the reads.
 DRIVE_FORGE_POLL_BOUND_DEFAULT_S = 600.0
 
 DRIVE_FORGE_POLL_INTERVAL_DEFAULT_S = 20.0
@@ -499,9 +502,9 @@ def poll_forge_checks(root: Path, checks_command: str, sha: str) -> tuple[dict[s
     survive past when it was set."""
     bound = drive_forge_poll_bound_s()
     interval = drive_forge_poll_interval_s()
-    deadline = time.monotonic() + bound
+    deadline = clock.now() + bound
     forge_checks, ok = read_forge_checks(root, checks_command, sha)
-    while not ok and forge_checks_unconcluded(forge_checks) and time.monotonic() < deadline:
+    while not ok and forge_checks_unconcluded(forge_checks) and clock.now() < deadline:
         time.sleep(interval)
         forge_checks, ok = read_forge_checks(root, checks_command, sha)
     return forge_checks, ok

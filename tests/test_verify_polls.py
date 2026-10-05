@@ -24,19 +24,21 @@ ATTAVO = ROOT / "bin" / "attavo"
 
 # The real defaults (ATTAVO_DRIVE_POLL_BOUND_S=600, _INTERVAL_S=20) are a
 # real forge's clock, not a test's; poll_forge_checks re-reads both at
-# call time from these environment variables (issue #84), so every case
-# that drives it sets them to fractions of a second through
-# monkeypatch.setenv and no case waits out a real bound (issue #181).
-# The bound gives room for several reads at this interval before it expires.
-POLL_BOUND_S = "0.5"
+# call time from these environment variables (issue #84). The bound is
+# judged on the one clock (#332): every case holds it in a file, and a read
+# of the forge advances it by READ_S, so the bound is crossed after a counted
+# number of reads and no case waits out a real bound (issue #181). The
+# interval paces the looks and judges nothing.
+POLL_BOUND_S = "120"
 POLL_INTERVAL_S = "0.05"
+READ_S = 50
 
 
-def set_poll_clock(monkeypatch: pytest.MonkeyPatch, bound_s: str = POLL_BOUND_S) -> None:
-    """bound_s: a test whose forge concludes after a number of reads gives the poll a long
-    bound -- it ends on the conclusion, not on the clock, so a slow machine fitting fewer
-    reads into half a second cannot fail it. Only a test of the bound itself uses the short one."""
-    monkeypatch.setenv("ATTAVO_DRIVE_POLL_BOUND_S", bound_s)
+def set_poll_clock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    clock_file = tmp_path / "attavo-clock"
+    clock_file.write_text("1800000000")
+    monkeypatch.setenv("ATTAVO_CLOCK_FILE", str(clock_file))
+    monkeypatch.setenv("ATTAVO_DRIVE_POLL_BOUND_S", POLL_BOUND_S)
     monkeypatch.setenv("ATTAVO_DRIVE_POLL_INTERVAL_S", POLL_INTERVAL_S)
 
 
@@ -80,6 +82,7 @@ def make_sequenced_forge(tmp_path: Path, name: str, sequence: list[str]) -> str:
 n=$(($(cat {counter}) + 1))
 [ "$n" -gt {len(sequence)} ] && n={len(sequence)}
 echo "$n" > {counter}
+echo $(( $(cut -d. -f1 $ATTAVO_CLOCK_FILE) + {READ_S} )) > $ATTAVO_CLOCK_FILE
 case "$n" in
 {cases}
 esac
@@ -92,7 +95,7 @@ def test_verify_calls_the_adapter_once_the_forge_concludes_green(tmp_path: Path,
     """Acceptance row 1a. A checks_command that answers unconcluded twice
     and green on the third read: verify polls rather than returning on
     the first read, calls the adapter, and writes a pass-shaped record."""
-    set_poll_clock(monkeypatch, "120")
+    set_poll_clock(monkeypatch, tmp_path)
     root = make_tenant(tmp_path, "build_valid")
     forge = make_sequenced_forge(tmp_path, "twice_then_green",
                                  ["ci in_progress", "ci in_progress", "ci success"])
@@ -114,7 +117,7 @@ def test_verify_returns_with_the_conclusions_once_the_forge_concludes_red(tmp_pa
     and red (a concluded, failing conclusion) on the third read: verify
     still polls up to that read, then returns with those conclusions on
     the record -- no adapter call."""
-    set_poll_clock(monkeypatch, "120")
+    set_poll_clock(monkeypatch, tmp_path)
     root = make_tenant(tmp_path, "build_valid")
     forge = make_sequenced_forge(tmp_path, "twice_then_red",
                                  ["ci in_progress", "ci in_progress", "ci failure"])
@@ -135,7 +138,7 @@ def test_verify_returns_forge_unconcluded_at_the_bound_when_the_forge_never_conc
     """Acceptance row 1c. A checks_command that never concludes: verify
     polls until the bound, then returns "returned"/forge-unconcluded as
     it does today on a single unconcluded read -- no adapter call."""
-    set_poll_clock(monkeypatch)
+    set_poll_clock(monkeypatch, tmp_path)
     root = make_tenant(tmp_path, "build_valid")
     forge = make_sequenced_forge(tmp_path, "never_concludes", ["ci in_progress"])
     add_forge(root, forge)

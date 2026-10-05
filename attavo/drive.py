@@ -953,8 +953,8 @@ def _until_ready(root: Path, m: dict[str, Any], item_id: str, again: str | None)
 
         if state == "waiting-on-checks":
             if waiting_since is None:
-                waiting_since = time.monotonic()
-            elif time.monotonic() - waiting_since >= bound:
+                waiting_since = clock.now()
+            elif clock.now() - waiting_since >= bound:
                 print(f"attavo drive: stopped: the checks did not conclude within {bound:.0f}s")
                 return 1
         else:

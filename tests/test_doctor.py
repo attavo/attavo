@@ -1038,8 +1038,7 @@ def test_a_recovery_record_the_pass_writes_carries_null_for_the_new_keys(tmp_pat
     add_drive_stall_bound(root)
     approve_item(root)
     write_dead_marker(root, "build", 1)
-    run = run_attavo(root, "drive", "1", env={"ATTAVO_HEARTBEAT_S": "0.2",
-                                              "ATTAVO_DRIVE_POLL_INTERVAL_S": "0.5"})
+    run = run_attavo(root, "drive", "1")
     assert run.returncode == 0, run.stdout + run.stderr
 
     rec = latest_record(root, "build")
