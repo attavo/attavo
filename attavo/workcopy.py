@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from attavo.build import driver_identity
-from attavo.common import git
+from attavo.common import git, git_env
 from attavo.events import stage_events_dir
 
 # --- the item's working copy (the reconciler's R5, ruling F): the product,
@@ -38,7 +38,7 @@ def copy_path(root: Path, item_id: str) -> Path:
 
 def current_branch(root: Path) -> str:
     out = subprocess.run(["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"],
-                         capture_output=True, text=True, check=False)
+                         capture_output=True, text=True, check=False, env=git_env())
     return out.stdout.strip()
 
 
@@ -55,7 +55,7 @@ def fetch_origin_items(root: Path) -> dict[str, list[str]]:
     if not has_origin(root):
         raise RuntimeError("this checkout has no origin")
     default = subprocess.run(["git", "-C", str(root), "symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
-                             capture_output=True, text=True, check=False).stdout.strip()
+                             capture_output=True, text=True, check=False, env=git_env()).stdout.strip()
     specs = [f"+refs/heads/attavo/*:{ORIGIN_ITEM_REFS}*"]
     if default.startswith("refs/remotes/origin/"):
         specs.append(f"+refs/heads/{default.removeprefix('refs/remotes/origin/')}:{default}")
@@ -74,12 +74,12 @@ def default_ref(root: Path, fetch: bool = True) -> str:
     """origin's default branch as a remote-tracking ref, freshly fetched
     when origin answers."""
     out = subprocess.run(["git", "-C", str(root), "symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
-                         capture_output=True, text=True, check=False)
+                         capture_output=True, text=True, check=False, env=git_env())
     ref = out.stdout.strip() or "refs/remotes/origin/main"
     name = ref.removeprefix("refs/remotes/origin/")
     if fetch:
         subprocess.run(["git", "-C", str(root), "fetch", "-q", "origin", f"+refs/heads/{name}:{ref}"],
-                       capture_output=True, text=True, check=False)
+                       capture_output=True, text=True, check=False, env=git_env())
     return ref
 
 
@@ -118,7 +118,7 @@ def _conform(root: Path, branch: str, tip: str) -> str | None:
     push) as a fast-forward, or fast-forward to origin's tip. A commit
     origin lacks by anyone else is a refusal naming sha and author."""
     exists = subprocess.run(["git", "-C", str(root), "rev-parse", "-q", "--verify",
-                             f"refs/heads/{branch}"], capture_output=True, text=True, check=False)
+                             f"refs/heads/{branch}"], capture_output=True, text=True, check=False, env=git_env())
     if exists.returncode != 0:
         return None
     ours = git(root, "log", "--format=%h\t%an\t%ae", f"{tip}..refs/heads/{branch}").splitlines()
@@ -130,13 +130,13 @@ def _conform(root: Path, branch: str, tip: str) -> str | None:
         return (f"{branch} carries commit(s) origin's {branch} lacks that neither the executor nor "
                 f"the driver authored: {named}. Push them, or move them, and run the pass again")
     behind = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", tip,
-                             f"refs/heads/{branch}"], capture_output=True, text=True, check=False)
+                             f"refs/heads/{branch}"], capture_output=True, text=True, check=False, env=git_env())
     if behind.returncode != 0:
         return (f"{branch} and origin's {branch} have diverged; the pass neither merges nor rebases. "
                 f"Local commits: {'; '.join(ours)}")
     run = subprocess.run(["git", "-C", str(root), "push", "-q", "origin",
                           f"refs/heads/{branch}:refs/heads/{branch}"],
-                         capture_output=True, text=True, check=False)
+                         capture_output=True, text=True, check=False, env=git_env())
     if run.returncode != 0:
         return f"could not push {branch}'s unpushed commits to origin: {run.stderr.strip()}"
     return None
@@ -144,7 +144,7 @@ def _conform(root: Path, branch: str, tip: str) -> str | None:
 
 def has_origin(root: Path) -> bool:
     return subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"],
-                          capture_output=True, text=True, check=False).returncode == 0
+                          capture_output=True, text=True, check=False, env=git_env()).returncode == 0
 
 
 def ensure(root: Path, item_id: str, records_rel: str) -> Ensured:
@@ -198,7 +198,7 @@ def ensure(root: Path, item_id: str, records_rel: str) -> Ensured:
         return Ensured(None, refusal)
     if not present:
         have = subprocess.run(["git", "-C", str(root), "rev-parse", "-q", "--verify",
-                               f"refs/heads/{branch}"], capture_output=True, text=True, check=False)
+                               f"refs/heads/{branch}"], capture_output=True, text=True, check=False, env=git_env())
         try:
             if have.returncode == 0:
                 git(root, "worktree", "add", "-q", str(copy), branch)
@@ -244,7 +244,7 @@ def read_only_copy(root: Path, item_id: str) -> Iterator[tuple[Path | None, str 
         yield tree, None
     finally:
         removed = subprocess.run(["git", "-C", str(root), "worktree", "remove", str(tree)],
-                                 capture_output=True, text=True, check=False)
+                                 capture_output=True, text=True, check=False, env=git_env())
         if removed.returncode != 0:
             print(f"attavo drive: note: could not remove {tree}: {removed.stderr.strip()}",
                   file=sys.stderr)
@@ -276,7 +276,7 @@ def remove_when_merged(copy: Path, item_id: str, records_rel: str) -> str | None
         return f"merged, and {copy.name} stays: an invocation marker has no record"
     default = default_ref(tenant)
     contained = subprocess.run(["git", "-C", str(copy), "merge-base", "--is-ancestor", "HEAD", default],
-                               capture_output=True, text=True, check=False)
+                               capture_output=True, text=True, check=False, env=git_env())
     if contained.returncode != 0:
         return f"merged, and {copy.name} stays: its HEAD is not in origin's default branch"
     events = Path(git(copy, "rev-parse", "--absolute-git-dir").strip()) / "attavo"
@@ -292,7 +292,7 @@ def remove_when_merged(copy: Path, item_id: str, records_rel: str) -> str | None
             moved = archive.with_name(f"{item_id}.{n}")
         shutil.move(str(events), str(moved))
     removed = subprocess.run(["git", "-C", str(tenant), "worktree", "remove", str(copy)],
-                             capture_output=True, text=True, check=False)
+                             capture_output=True, text=True, check=False, env=git_env())
     if removed.returncode != 0:
         if moved is not None:
             shutil.move(str(moved), str(events))

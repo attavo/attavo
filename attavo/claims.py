@@ -29,7 +29,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from attavo.common import MANIFEST, read_manifest
+from attavo.common import MANIFEST, read_manifest, git_env
 from attavo.spec import parse_spec
 from attavo import Command
 
@@ -38,7 +38,7 @@ ITEM_BRANCH = re.compile(r"^attavo/(\d+)-")
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=False)
+    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=False, env=git_env())
 
 
 def _literal_prefix(claim: str) -> str:
