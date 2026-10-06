@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, cast
 from attavo import clock
 from attavo.approval import approval_status
 from attavo.build import cmd_build, driver_identity
-from attavo.common import MANIFEST, PRODUCT_ROOT, derive_item_id, git, read_manifest
+from attavo.common import MANIFEST, PRODUCT_ROOT, derive_item_id, git, read_manifest, git_env
 from attavo.counsel import cmd_counsel
 from attavo.doctor import (
     _parse_json_line,
@@ -92,7 +92,7 @@ def _retry_base(root: Path, branch: str) -> str:
     git(root, "fetch", "-q", "origin", branch)
     tip = git(root, "rev-parse", "FETCH_HEAD").strip()
     contained = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", "HEAD", tip],
-                               capture_output=True, text=True, check=False)
+                               capture_output=True, text=True, check=False, env=git_env())
     if contained.returncode != 0:
         ours = git(root, "log", "--format=%h %an <%ae>", f"{tip}..HEAD").splitlines()
         raise TransportRefused(
@@ -154,22 +154,18 @@ def commit_record(tree: Path, record_paths: list[Path], message: str) -> str:
 
 def sync_checkout(root: Path, target: str) -> None:
     """Fast-forward the item's checkout to `target`, the one thing the
-    driver does to it. A pass in the same directory may hold the index
-    for a moment, so a lock is retried; a checkout already at or beyond
-    target is done."""
-    err = ""
-    for _ in range(20):
-        run = subprocess.run(["git", "-C", str(root), "merge", "--ff-only", "-q", target],
-                             capture_output=True, text=True, check=False)
-        if run.returncode == 0:
-            return
-        err = run.stderr.strip()
-        contained = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", target, "HEAD"],
-                                   capture_output=True, text=True, check=False)
-        if contained.returncode == 0:
-            return
-        time.sleep(0.1)
-    raise TransportRefused(f"the checkout could not fast-forward to {target[:12]}: {err}")
+    driver does to it. A pass's reads in the same directory take no index
+    lock (git_env), so there is nothing to wait out; a checkout already at
+    or beyond target is done."""
+    run = subprocess.run(["git", "-C", str(root), "merge", "--ff-only", "-q", target],
+                         capture_output=True, text=True, check=False, env=git_env())
+    if run.returncode == 0:
+        return
+    contained = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", target, "HEAD"],
+                               capture_output=True, text=True, check=False, env=git_env())
+    if contained.returncode == 0:
+        return
+    raise TransportRefused(f"the checkout could not fast-forward to {target[:12]}: {run.stderr.strip()}")
 
 
 def _stage_copies(root: Path, paths: list[str]) -> None:
@@ -204,7 +200,9 @@ def transport_records(root: Path, branch: str, message: str,
 
     lease=True is the marker's push (ruling A): one try, and a race lost
     is ("lost-race", stderr) with the worktree discarded and the checkout
-    untouched. Otherwise ("pushed", None), or ("refused", reason)."""
+    untouched. Otherwise ("pushed", None), ("unsynced", reason) when the
+    push succeeded and the checkout could not take the commit, or
+    ("refused", reason)."""
     err = ""
     base = git(root, "rev-parse", "HEAD").strip()
     for attempt in range(1 if lease else RECORD_PUSH_TRIES):
@@ -223,7 +221,7 @@ def transport_records(root: Path, branch: str, message: str,
                 return "refused", f"could not commit: {exc}"
             if has_origin(root):
                 run = subprocess.run(["git", "-C", str(tree), "push", "origin", f"HEAD:{branch}"],
-                                     capture_output=True, text=True, check=False)
+                                     capture_output=True, text=True, check=False, env=git_env())
                 if run.returncode != 0:
                     err = run.stderr.strip()
                     if lease:
@@ -234,9 +232,19 @@ def transport_records(root: Path, branch: str, message: str,
                 _stage_copies(root, _record_paths(tree, paths))
                 sync_checkout(root, sha)
             except (RuntimeError, TransportRefused) as exc:
+                if has_origin(root):
+                    return "unsynced", f"pushed; the checkout could not take it: {exc}"
                 return "refused", str(exc)
             return "pushed", None
     return "refused", f"push rejected {RECORD_PUSH_TRIES} times: {err}"
+
+
+def _not_transported(what: str, outcome: str, err: str | None) -> str:
+    """What a transport that did not end "pushed" says: a push that
+    succeeded is never reported as one that did not (#343)."""
+    if outcome == "unsynced":
+        return f"{what} was {err}"
+    return f"could not push {what}: {err}"
 
 
 _RACE_MARKERS = ("non-fast-forward", "fetch first", "stale info", "cannot lock ref",
@@ -445,7 +453,7 @@ def uncommitted_record(root: Path, records_dir: Path, stage: str) -> Path | None
         return None
     status = subprocess.run(
         ["git", "-C", str(root), "status", "--porcelain", "--", str(path.relative_to(root))],
-        capture_output=True, text=True, check=False)
+        capture_output=True, text=True, check=False, env=git_env())
     return path if status.stdout.strip() else None
 
 
@@ -596,7 +604,7 @@ def _run_and_transport(item_id: str, stage: str, root: Path, m: dict[str, Any],
 
     outcome, err = transport_records(root, branch, message, copy_in)
     if outcome != "pushed":
-        print(f"attavo drive: stopped: could not push the {stage} record: {err}")
+        print(f"attavo drive: stopped: {_not_transported(f'the {stage} record', outcome, err)}")
         return 1
     if not has_origin(root):
         print(f"attavo drive: note: no origin remote; {after.name} is committed, not pushed")
@@ -670,7 +678,7 @@ def _start_stage(root: Path, m: dict[str, Any], item_id: str, stage: str,
         print(f"attavo drive: another pass holds this attempt ({marker.name}); nothing started")
         return 0
     if outcome != "pushed":
-        print(f"attavo drive: stopped: could not push the {stage} invocation marker: {err}")
+        print(f"attavo drive: stopped: {_not_transported(f'the {stage} invocation marker', outcome, err)}")
         return 1
 
     env = dict(os.environ)
@@ -772,7 +780,7 @@ def _recover_one(root: Path, m: dict[str, Any], item_id: str, records_dir: Path)
         print(f"attavo drive: stopped: could not write the {cls} record for {marker.stem}: {exc}")
         return 1
     if outcome != "pushed":
-        print(f"attavo drive: stopped: could not push the {cls} record: {err}")
+        print(f"attavo drive: stopped: {_not_transported(f'the {cls} record', outcome, err)}")
         return 1
     if not has_origin(root):
         print(f"attavo drive: note: no origin remote; {stage}-{nn:02d}.json is committed, not pushed")

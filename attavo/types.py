@@ -12,7 +12,7 @@ own `additionalProperties` allows for the adapter-owned ones.
 """
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 # The stage names a record file's <stage>-NN.json prefix can carry, one per
 # schema under schema/records/.
@@ -39,6 +39,8 @@ class Stop(_StopRequired, _StopOptional):
 
 class _SpecOptional(TypedDict, total=False):
     # Written from spec/3 on (ruled 2026-09-27); records before it carry neither.
+    # Each entry of `criteria` carries `kind` ("behavioural" | "structural")
+    # from spec/4 on; an older entry carries none and was structural.
     # "class" is a Python keyword, hence the functional form below.
     research: str
 
@@ -152,6 +154,16 @@ class VerifyRecord(_VerifyRequired, _VerifyOptional):
     absent on a record written before this release."""
 
 
+class CounselCitation(TypedDict):
+    """One counsel citation (#328): `resolution` is absent for a repository
+    file at the record's sha."""
+    kind: str
+    path: str | None
+    symbol: str | None
+    ruling_id: str | None
+    resolution: NotRequired[Literal["input", "not_in_repository", "not_found_at_sha"]]
+
+
 CounselRecord = TypedDict("CounselRecord", {
     "record_version": int,
     "item": str,
@@ -171,7 +183,7 @@ CounselRecord = TypedDict("CounselRecord", {
     "status": str,
     "class": str | None,
     "verdict": str | None,
-    "citations": list[dict[str, Any]],
+    "citations": list[CounselCitation],
     "proposal": dict[str, Any],
     "forge": dict[str, Any],
     "question": str | None,
@@ -203,14 +215,30 @@ class ItemTime(TypedDict):
     not_read: list[str]
 
 
+class CostRate(TypedDict):
+    """A tenant's published price for one model ([cost.rates."<model>"])."""
+    input_usd_per_mtok: float
+    output_usd_per_mtok: float
+    as_of: str
+    source: str
+
+
 class ItemCost(TypedDict):
-    """Every record's cost_usd summed: the item's total across stages and
-    executors, with a subtotal per stage and per adapter. A record with no
-    cost_usd is named in not_read and makes every sum it belongs to
-    partial -- absent is never zero."""
+    """Every record's cost summed: the item's total across stages and
+    executors, with a subtotal per stage and per adapter. A reported
+    cost_usd is taken as it stands; a null one whose model has a tenant
+    rate is priced as tokens times that rate (issue #307), and the basis
+    says which. A record neither reported nor priceable is named in
+    not_read and makes every sum it belongs to partial -- absent is never
+    zero."""
     usd: float
+    reported_usd: float
+    estimated_usd: float
     by_stage_usd: dict[str, float]
+    basis_by_stage: dict[str, str]
     by_adapter_usd: dict[str, float]
+    rates: dict[str, CostRate]
+    estimate_note: str
     partial: bool
     not_read: list[str]
 

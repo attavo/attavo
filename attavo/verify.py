@@ -18,7 +18,7 @@ from attavo.build import (
     resolve_adapter,
     split_adapter_stdout,
 )
-from attavo.common import MANIFEST, derive_item_id, git, now_iso, read_manifest
+from attavo.common import MANIFEST, derive_item_id, git, now_iso, read_manifest, git_env
 from attavo.testtool import run_bounded
 from attavo.events import stage_events_dir
 from attavo.records import (
@@ -89,7 +89,7 @@ def diff_since_approval(root: Path, approval_sha: str | None) -> tuple[str, str 
         return "", None
     symref = subprocess.run(
         ["git", "-C", str(root), "symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
-        capture_output=True, text=True, check=False)
+        capture_output=True, text=True, check=False, env=git_env())
     if symref.returncode != 0:
         return "", "refs/remotes/origin/HEAD is not set; run `git remote set-head origin -a`"
     diff_base = git(root, "merge-base", symref.stdout.strip(), "HEAD").strip()

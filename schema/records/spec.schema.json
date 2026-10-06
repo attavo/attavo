@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/spec/3",
+  "$id": "https://attavo.dev/schema/records/spec/4",
   "title": "attavo spec-gate record (spec-NN.json)",
   "type": "object",
   "additionalProperties": false,
@@ -21,6 +21,7 @@
         "required": ["name", "on_tree", "on_stub"],
         "properties": {
           "name": {"type": "string", "minLength": 1},
+          "kind": {"type": "string", "enum": ["behavioural", "structural"], "description": "The criterion's declared kind (spec/4 on; ruled on #299): structural fails on the tree and passes on the stub, behavioural fails on both. Absent on a record written before spec/4, where every criterion was structural."},
           "on_tree": {"type": "integer"},
           "on_stub": {"type": ["integer", "null"]}
         }

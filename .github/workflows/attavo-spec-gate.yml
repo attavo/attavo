@@ -108,7 +108,7 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
-      - uses: attavo/attavo@v0.33.0
+      - uses: attavo/attavo@v0.34.0
 
       - name: Skip when the head commit only touches records
         id: touch

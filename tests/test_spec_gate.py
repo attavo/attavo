@@ -8,11 +8,13 @@ Run: python3 -m pytest tests -q
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from helpers import commit_all, git, make_tenant
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -87,7 +89,7 @@ def test_spec_gate_passes_and_writes_record(tmp_path: Path) -> None:
     rec = json.loads(first.read_text())
     assert rec["status"] == "pass"
     assert rec["spec_sha"]
-    assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 1, "on_stub": 0}]
+    assert rec["criteria"] == [{"name": "checks_marker.sh", "kind": "structural", "on_tree": 1, "on_stub": 0}]
     assert rec["refusal"] is None
 
     run2 = run_attavo(root, "spec-gate", "1")
@@ -189,7 +191,7 @@ def test_spec_gate_built_after_build(tmp_path: Path) -> None:
 
     rec = latest_record(root, "1", "spec")
     assert rec["status"] == "built"
-    assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 0, "on_stub": 0}]
+    assert rec["criteria"] == [{"name": "checks_marker.sh", "kind": "structural", "on_tree": 0, "on_stub": 0}]
     assert rec["refusal"] is None
 
 
@@ -219,7 +221,7 @@ def test_spec_gate_built_refuses_a_failing_criterion(tmp_path: Path) -> None:
     rec = latest_record(root, "1", "spec")
     assert rec["status"] == "refused"
     assert rec["refusal"] == "criterion fails against the tree plus stub: checks_marker.sh"
-    assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 1, "on_stub": 1}]
+    assert rec["criteria"] == [{"name": "checks_marker.sh", "kind": "structural", "on_tree": 1, "on_stub": 1}]
 
 
 def test_spec_gate_removed_deletes_the_path_from_the_stub(tmp_path: Path) -> None:
@@ -236,7 +238,7 @@ def test_spec_gate_removed_deletes_the_path_from_the_stub(tmp_path: Path) -> Non
 
     rec = latest_record(root, "1", "spec")
     assert rec["status"] == "pass"
-    assert rec["criteria"] == [{"name": "absent.sh", "on_tree": 1, "on_stub": 0}]
+    assert rec["criteria"] == [{"name": "absent.sh", "kind": "structural", "on_tree": 1, "on_stub": 0}]
     assert rec["refusal"] is None
 
 
@@ -296,7 +298,7 @@ def test_spec_gate_phase1_rule_unchanged_without_build(tmp_path: Path) -> None:
     assert run.returncode == 0
     rec = latest_record(root, "1", "spec")
     assert rec["status"] == "pass"
-    assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 1, "on_stub": 0}]
+    assert rec["criteria"] == [{"name": "checks_marker.sh", "kind": "structural", "on_tree": 1, "on_stub": 0}]
 
 
 def add_scripted_criterion(root: Path, satisfies_stub: bool) -> None:
@@ -340,8 +342,8 @@ def test_built_accepts_a_criterion_added_after_the_build(tmp_path: Path) -> None
     assert rec["status"] == "built"
     assert rec["refusal"] is None
     by_name = {c["name"]: c for c in rec["criteria"]}
-    assert by_name["checks_marker.sh"] == {"name": "checks_marker.sh", "on_tree": 0, "on_stub": 0}
-    assert by_name["extra.sh"] == {"name": "extra.sh", "on_tree": 1, "on_stub": 0}
+    assert by_name["checks_marker.sh"] == {"name": "checks_marker.sh", "kind": "structural", "on_tree": 0, "on_stub": 0}
+    assert by_name["extra.sh"] == {"name": "extra.sh", "kind": "structural", "on_tree": 1, "on_stub": 0}
 
 
 def test_built_refuses_a_criterion_failing_on_both(tmp_path: Path) -> None:
@@ -362,7 +364,7 @@ def test_built_refuses_a_criterion_failing_on_both(tmp_path: Path) -> None:
     assert rec["status"] == "refused"
     assert rec["refusal"] == "criterion fails against the tree plus stub: extra.sh"
     by_name = {c["name"]: c for c in rec["criteria"]}
-    assert by_name["extra.sh"] == {"name": "extra.sh", "on_tree": 1, "on_stub": 1}
+    assert by_name["extra.sh"] == {"name": "extra.sh", "kind": "structural", "on_tree": 1, "on_stub": 1}
 
 
 def write_build_record(root: Path, item: str, *, sha: str, status: str) -> None:
@@ -400,7 +402,7 @@ def test_spec_gate_built_after_halted_build_that_committed(tmp_path: Path) -> No
 
     rec = latest_record(root, "1", "spec")
     assert rec["status"] == "built"
-    assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 0, "on_stub": 0}]
+    assert rec["criteria"] == [{"name": "checks_marker.sh", "kind": "structural", "on_tree": 0, "on_stub": 0}]
     assert rec["refusal"] is None
 
 
@@ -424,7 +426,7 @@ def test_spec_gate_stub_verdict_after_halted_build_that_committed_nothing(tmp_pa
 
     rec = latest_record(root, "1", "spec")
     assert rec["status"] == "pass"
-    assert rec["criteria"] == [{"name": "checks_marker.sh", "on_tree": 1, "on_stub": 0}]
+    assert rec["criteria"] == [{"name": "checks_marker.sh", "kind": "structural", "on_tree": 1, "on_stub": 0}]
     assert rec["refusal"] is None
 
 
@@ -580,3 +582,173 @@ def test_spec_gate_refuses_a_stub_that_touches_a_path_the_claims_do_not_name(tmp
     run = run_attavo(root, "spec-gate", "1")
     assert run.returncode == 0, run.stdout + run.stderr
     assert latest_record(root, "1", "spec")["status"] == "pass"
+
+
+# Issue #340 (rulings 1 and 2 on #299): criterion kinds, so a stub can be thin.
+
+def set_criteria(root: Path, lines: list[str], scripts: dict[str, str],
+                 stub: dict[str, str] | None = None) -> None:
+    """Replace the valid fixture's Criteria with `lines` (spec.md bullets),
+    write each script executable, and set the stub overlay to `stub`
+    (path -> content) in place of the fixture's marker.txt."""
+    spec_dir = root / "specs" / "1"
+    spec_md = spec_dir / "spec.md"
+    head = spec_md.read_text().split("## Criteria")[0]
+    spec_md.write_text(head + "## Criteria\n\n" + "\n".join(lines) + "\n")
+    criteria = spec_dir / "criteria"
+    for old in criteria.iterdir():
+        old.unlink()
+    for name, body in scripts.items():
+        (criteria / name).write_text("#!/bin/sh\n" + body + "\n")
+        (criteria / name).chmod(0o755)
+    shutil.rmtree(spec_dir / "stub")
+    for rel, content in (stub or {}).items():
+        (spec_dir / "stub" / rel).parent.mkdir(parents=True, exist_ok=True)
+        (spec_dir / "stub" / rel).write_text(content)
+    commit_all(root, "criteria with kinds")
+
+
+STRUCT = "- [structural] checks_marker.sh: the marker file exists"
+BEHAV = "- [behavioural] logic.sh: the logic reports done"
+THIN_SCRIPTS = {"checks_marker.sh": "test -f src/marker.txt",
+                "logic.sh": "test \"$(cat src/logic.txt 2>/dev/null)\" = done"}
+THIN_STUB = {"src/marker.txt": "ok\n", "src/logic.txt": "todo\n"}
+
+
+def test_a_thin_stub_passes_and_the_record_carries_each_criterions_kind(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    set_criteria(root, [STRUCT, BEHAV], THIN_SCRIPTS, THIN_STUB)
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "pass"
+    assert rec["criteria"] == [
+        {"name": "checks_marker.sh", "kind": "structural", "on_tree": 1, "on_stub": 0},
+        {"name": "logic.sh", "kind": "behavioural", "on_tree": 1, "on_stub": 1}]
+
+
+def test_a_behavioural_criterion_that_passes_on_the_stub_is_refused_by_name(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    set_criteria(root, [STRUCT, BEHAV], THIN_SCRIPTS,
+                 {"src/marker.txt": "ok\n", "src/logic.txt": "done\n"})
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+    want = "criterion labelled behavioural passes on the tree plus stub: logic.sh"
+    assert want in run.stdout, run.stdout
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused" and rec["refusal"] == want
+
+
+def test_a_structural_criterion_that_fails_on_the_stub_is_refused_by_name(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    set_criteria(root, [STRUCT, BEHAV], THIN_SCRIPTS, {"src/logic.txt": "todo\n"})
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+    want = "criterion labelled structural fails on the tree plus stub: checks_marker.sh"
+    assert want in run.stdout, run.stdout
+    assert latest_record(root, "1", "spec")["refusal"] == want
+
+
+def test_an_unknown_kind_label_is_refused_by_name(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    set_criteria(root, ["- [cosmetic] checks_marker.sh: the marker file exists"],
+                 {"checks_marker.sh": "test -f src/marker.txt"}, {"src/marker.txt": "ok\n"})
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+    want = "criterion has an unknown kind [cosmetic]: checks_marker.sh"
+    assert want in run.stdout, run.stdout
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused" and rec["refusal"] == want
+
+
+def test_an_unlabelled_criterion_is_structural(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert latest_record(root, "1", "spec")["criteria"] == [
+        {"name": "checks_marker.sh", "kind": "structural", "on_tree": 1, "on_stub": 0}]
+    # An unlabelled criterion failing on the stub is refused as structural.
+    set_criteria(root, ["- checks_marker.sh: the marker file exists"],
+                 {"checks_marker.sh": "test -f src/marker.txt"}, {})
+    assert run_attavo(root, "spec-gate", "1").returncode == 1
+
+
+@pytest.mark.own_records
+def test_every_merged_spec_parses_with_unlabelled_criteria_structural() -> None:
+    """Regression: the specs under attest/specs/ predate labels, so each
+    must parse as it did: no refusal, every criterion structural, no label
+    leaking into a name."""
+    from attavo.spec import parse_spec
+    specs = sorted((ROOT / "attest" / "specs").glob("*/spec.md"))
+    assert specs
+    for spec_md in specs:
+        parsed, refusal = parse_spec(spec_md)
+        assert refusal is None and parsed is not None, spec_md
+        assert all(not n.startswith("[") for n in parsed["criteria"]), spec_md
+        assert set(parsed["kinds"].values()) <= {"structural"}, spec_md
+        assert list(parsed["kinds"]) == parsed["criteria"], spec_md
+
+
+def test_built_refuses_a_behavioural_criterion_that_fails_on_the_tree(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    approve_valid(root)
+    assert run_real_build(root).returncode == 0
+    spec_md = root / "specs" / "1" / "spec.md"
+    spec_md.write_text(spec_md.read_text() + BEHAV + "\n")
+    script = root / "specs" / "1" / "criteria" / "logic.sh"
+    script.write_text("#!/bin/sh\n" + THIN_SCRIPTS["logic.sh"] + "\n")
+    script.chmod(0o755)
+    (root / "specs" / "1" / "stub" / "src" / "logic.txt").write_text("todo\n")
+    commit_all(root, "amend: a behavioural criterion the build never met")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+    want = "criterion labelled behavioural fails on the tree: logic.sh"
+    assert want in run.stdout, run.stdout
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused" and rec["refusal"] == want
+
+
+def test_built_accepts_a_behavioural_criterion_that_passes_on_the_tree(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    approve_valid(root)
+    assert run_real_build(root).returncode == 0
+    spec_md = root / "specs" / "1" / "spec.md"
+    spec_md.write_text(spec_md.read_text() + BEHAV + "\n")
+    script = root / "specs" / "1" / "criteria" / "logic.sh"
+    script.write_text("#!/bin/sh\n" + THIN_SCRIPTS["logic.sh"] + "\n")
+    script.chmod(0o755)
+    (root / "specs" / "1" / "stub" / "src" / "logic.txt").write_text("todo\n")
+    (root / "src" / "logic.txt").write_text("done\n")
+    commit_all(root, "amend: a behavioural criterion the build met")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "built"
+    by_name = {c["name"]: c for c in rec["criteria"]}
+    assert by_name["logic.sh"] == {"name": "logic.sh", "kind": "behavioural", "on_tree": 0, "on_stub": 1}
+
+
+NO_STRUCTURAL = ("no structural criterion: nothing shows the stub reaches "
+                 "what the behavioural criteria test")
+
+
+def test_a_spec_of_only_behavioural_criteria_is_refused(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    set_criteria(root, [BEHAV], {"logic.sh": THIN_SCRIPTS["logic.sh"]},
+                 {"src/logic.txt": "todo\n"})
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+    assert NO_STRUCTURAL in run.stdout, run.stdout
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused" and rec["refusal"] == NO_STRUCTURAL
+
+
+def test_the_no_structural_refusal_comes_before_any_criterion_refusal(tmp_path: Path) -> None:
+    """The one behavioural criterion here also passes on the stub, which
+    alone would be refused by name; the spec-level refusal is reported."""
+    root = make_tenant(tmp_path, "valid")
+    set_criteria(root, [BEHAV], {"logic.sh": THIN_SCRIPTS["logic.sh"]},
+                 {"src/logic.txt": "done\n"})
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+    assert latest_record(root, "1", "spec")["refusal"] == NO_STRUCTURAL
