@@ -29,6 +29,10 @@ ROOT_CAUSE_LINE = re.compile(r"^Root-cause:\s*([a-z0-9][a-z0-9-]*)\s*$")
 ROOT_CAUSE_ENTRY = re.compile(r"^- ([a-z0-9][a-z0-9-]*):\s+\S")
 CLASS_LINE = re.compile(r"^Class:\s*(\S+)\s*$")
 CLASSES = ("core", "fix")
+KINDS = ("behavioural", "structural")
+# "- [kind] name.sh: ..." -- the label is parsed off before the name, which
+# is everything between the dash (and label) and the first colon.
+KIND_LABEL = re.compile(r"^\[([^\]]*)\]\s*")
 
 
 def parse_spec(spec_md: Path) -> tuple[dict[str, Any] | None, str | None]:
@@ -64,13 +68,24 @@ def parse_spec(spec_md: Path) -> tuple[dict[str, Any] | None, str | None]:
             item_class = cm.group(1)
             break
     criteria = []
+    kinds: dict[str, str] = {}
     for l in lines[idx_criteria + 1:]:
         s = l.strip()
         if not s.startswith("- ") or ":" not in s:
             continue
-        name = s[2:].split(":", 1)[0].strip()
+        body = s[2:]
+        label = KIND_LABEL.match(body)
+        kind = "structural"
+        if label:
+            body = body[label.end():]
+            kind = label.group(1).strip()
+        name = body.split(":", 1)[0].strip()
+        if kind not in KINDS:
+            return None, f"criterion has an unknown kind [{kind}]: {name}"
         criteria.append(name)
-    return {"claims": claims, "criteria": criteria, "root_cause": root_cause, "class": item_class}, None
+        kinds[name] = kind
+    return {"claims": claims, "criteria": criteria, "kinds": kinds,
+            "root_cause": root_cause, "class": item_class}, None
 
 
 def root_causes_path(root: Path, m: dict[str, Any]) -> Path:
@@ -201,7 +216,8 @@ def stub_removed_refusal(root: Path, spec_dir: Path) -> str | None:
     return None
 
 
-def run_criteria(root: Path, spec_dir: Path, names: list[str]) -> list[dict[str, Any]]:
+def run_criteria(root: Path, spec_dir: Path, names: list[str],
+                 kinds: dict[str, str] | None = None) -> list[dict[str, Any]]:
     criteria_dir = spec_dir / "criteria"
     stub_dir = spec_dir / "stub"
     with tempfile.TemporaryDirectory() as tmp:
@@ -224,6 +240,7 @@ def run_criteria(root: Path, spec_dir: Path, names: list[str]) -> list[dict[str,
         for name in names:
             exe = criteria_dir / name
             results.append({"name": name,
+                            "kind": (kinds or {}).get(name, "structural"),
                             "on_tree": run_criterion(exe, tree),
                             "on_stub": run_criterion(exe, stubbed)})
         return results
@@ -314,9 +331,16 @@ def cmd_spec_gate(argv: list[str]) -> int:
                 # passing on the stub is a new obligation the next build
                 # must meet -- an operator scripting a ruling the executor
                 # skipped. Refused only when a criterion satisfies neither.
-                results = run_criteria(root, spec_dir, parsed["criteria"])
-                fail = next((c for c in results if c["on_tree"] != 0 and c["on_stub"] != 0), None)
-                if fail:
+                results = run_criteria(root, spec_dir, parsed["criteria"], parsed["kinds"])
+                # A behavioural criterion fails on the stub by design, so
+                # after a build it is judged on the tree alone.
+                fail_behav = next((c for c in results
+                                   if c["kind"] == "behavioural" and c["on_tree"] != 0), None)
+                fail = next((c for c in results if c["kind"] == "structural"
+                             and c["on_tree"] != 0 and c["on_stub"] != 0), None)
+                if fail_behav:
+                    refusal = f"criterion labelled behavioural fails on the tree: {fail_behav['name']}"
+                elif fail:
                     refusal = f"criterion fails against the tree plus stub: {fail['name']}"
         elif not parsed["claims"]:
             refusal = "claims: empty; the build may touch nothing"
@@ -347,14 +371,22 @@ def cmd_spec_gate(argv: list[str]) -> int:
             else:
                 refusal = stub_removed_refusal(root, spec_dir)
                 if refusal is None:
-                    results = run_criteria(root, spec_dir, listed)
+                    results = run_criteria(root, spec_dir, listed, parsed["kinds"])
                     fail_tree = next((c for c in results if c["on_tree"] == 0), None)
                     if fail_tree:
                         refusal = f"criterion passes against the tree: {fail_tree['name']}"
                     else:
-                        fail_stub = next((c for c in results if c["on_stub"] != 0), None)
+                        # The label is checked against the measured exits.
+                        fail_stub = next((c for c in results if c["kind"] == "structural"
+                                          and c["on_stub"] != 0), None)
+                        pass_stub = next((c for c in results if c["kind"] == "behavioural"
+                                          and c["on_stub"] == 0), None)
                         if fail_stub:
-                            refusal = f"criterion fails against the tree plus stub: {fail_stub['name']}"
+                            refusal = ("criterion labelled structural fails on the tree plus stub: "
+                                       f"{fail_stub['name']}")
+                        elif pass_stub:
+                            refusal = ("criterion labelled behavioural passes on the tree plus stub: "
+                                       f"{pass_stub['name']}")
 
     status = "refused" if refusal else ("built" if built else "pass")
     record = {"sha": git(root, "rev-parse", "HEAD").strip(),
@@ -397,6 +429,12 @@ when that file is absent, before any criterion runs -- a spec with no
 root-cause line is untouched. spec-gate also refuses, before any
 criterion runs, "stub touches a path the claims do not name: <path>" for
 the first path under stub/ (or in stub/.removed) that no claim matches.
+A criterion line may carry a kind after its dash, "- [behavioural] name.sh: ..."
+or "- [structural] name.sh: ..."; unlabelled is structural. Structural must
+fail on the tree and pass on the tree plus stub; behavioural must fail on
+both, so the stub can be thin. A label the measured exits contradict is
+refused by name, as is an unknown one. After a build a behavioural
+criterion must pass on the tree.
 See the spec contract in the project's Phase 1 issue for the full rules
 each one enforces."""),
         ),
