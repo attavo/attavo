@@ -43,6 +43,28 @@
         "description": "[executor.<adapter-name>]: that adapter's own configuration, passed through as ATTAVO_ADAPTER_CONFIG and copied verbatim into build-NN.json as adapter_config. The product does not know what an adapter's settings mean -- any keys, none required. Never put a secret in here: it lands in a record."
       }
     },
+    "cost": {
+      "type": "object",
+      "description": "What a tenant publishes so the statement can price a stage whose adapter reports tokens and no cost. The product carries no rate of its own.",
+      "additionalProperties": false,
+      "properties": {
+        "rates": {
+          "type": "object",
+          "description": "[cost.rates.\"<model>\"]: the model's published price per million tokens, dated and sourced. attest prices a record with a null cost_usd, numeric tokens and this model as tokens times these rates, and says the amount is estimated; a model absent here stays not read.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["input_usd_per_mtok", "output_usd_per_mtok", "as_of", "source"],
+            "properties": {
+              "input_usd_per_mtok": {"type": "number", "minimum": 0},
+              "output_usd_per_mtok": {"type": "number", "minimum": 0},
+              "as_of": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "The date (YYYY-MM-DD) the rate was read from its source."},
+              "source": {"type": "string", "minLength": 1, "description": "The URL the rate was read from."}
+            }
+          }
+        }
+      }
+    },
     "tests": {
       "type": "object",
       "description": "How build finds and runs the tests for a touched path. Both keys are required together; a tenant with no [tests] table has not declared selection, and attavo build refuses to run on it.",
