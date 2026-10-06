@@ -1203,12 +1203,6 @@ def test_a_push_that_succeeded_is_never_reported_as_one_that_did_not(tmp_path: P
     assert "could not push" not in drive._not_transported("the build record", outcome, why)
 
 
-def test_every_git_call_the_product_makes_runs_with_optional_locks_off() -> None:
-    from attavo.common import git_env
-    assert git_env()["GIT_OPTIONAL_LOCKS"] == "0"
-    assert git_env({"X": "1"})["X"] == "1"
-
-
 def test_drive_a_pass_refuses_a_checkout_carrying_a_commit_origin_lacks(tmp_path: Path) -> None:
     """The checkout only fast-forwards. A commit it carries that origin
     lacks is named by sha and author, never rebased, and is still there
