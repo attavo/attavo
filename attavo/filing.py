@@ -10,6 +10,7 @@ from attavo.common import MANIFEST, derive_item_id, read_manifest
 from attavo.records import latest_record, parse_attempts
 from attavo.stops import STOP_STAGES, counsel_record_for, gate_stop
 from attavo.types import Stop
+from attavo import Command
 
 # --- file-findings: one tenant issue per finding, nothing filed silently ---
 
@@ -183,3 +184,34 @@ def cmd_file_stops(argv: list[str]) -> int:
 
     print(f"attavo file-stops: filed {len(pending)} issue(s)")
     return 0
+
+
+COMMANDS = (
+    Command(
+        name='file-findings',
+        run=cmd_file_findings,
+        usage=('attavo file-findings [N]',),
+        rank=70,
+    ),
+    Command(
+        name='file-stops',
+        run=cmd_file_stops,
+        usage=('attavo file-stops [N]',),
+        rank=80,
+        help=(
+            (120, """\
+file-stops opens one tenant issue per stop record of the item with no
+issue filed for it yet, through [forge].file_issue_command, naming the
+class, the provenance, the record path, and the log's last twenty
+lines; a record it has already filed carries a <stage>-NN.filed marker
+beside it, holding the filing command's own stdout, so a second run
+files nothing new. Like a build or verify record, this command writes
+the marker and leaves it uncommitted -- drive commits it, in the same
+commit as the record it names (issue #89). It refuses (exit 1,
+nothing filed) a stop whose class is unclassed and whose detail is
+empty -- a stop the product cannot even describe is not filed as if it
+could. See issue #89's lane for the full rules it enforces."""),
+        ),
+        transport=True,
+    ),
+)

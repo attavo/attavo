@@ -48,6 +48,7 @@ from attavo.records import (
 from attavo.stops import RETRYABLE_CLASSES, counsel_record_for, signature_of
 from attavo.verify import cmd_verify, read_forge_checks
 from attavo import workcopy
+from attavo import Command
 
 if TYPE_CHECKING:
     from attavo.types import DriveReport
@@ -1122,3 +1123,110 @@ def cmd_drive(argv: list[str]) -> int:
             if done:
                 print(f"attavo drive: {done}")
     return rc
+
+
+COMMANDS = (
+    Command(
+        name='drive',
+        run=cmd_drive,
+        usage=('attavo drive [N] [--until-ready] [--again --by LOGIN] [--report]', 'attavo drive --all'),
+        rank=120,
+        help=(
+            (180, """\
+drive N from the tenant's own checkout (any branch but attavo/N-*) works in
+the item's working copy, ../attavo-worktree-N, which the pass ensures: made
+on origin's one attavo/N-* branch at its tip when absent, pruned and made
+again when git lists it but its directory is gone, fast-forwarded when
+behind, its executor- or driver-authored unpushed commits pushed as a
+fast-forward. A directory git does not list, tracked changes, or a commit
+origin lacks by anyone else is refused, and nothing is deleted or reset.
+--report there reads origin's branch in a detached worktree removed after.
+When the report reads merged, the pass removes the working copy with a plain
+`git worktree remove`, never --force, only when it is tracked-clean, no
+marker lacks its record, and its HEAD is in origin's default branch; its
+<git-dir>/attavo moves to <common git dir>/attavo/archive/<N>/ first, and
+anything short of that is reported and the copy stays. `drive --all`, run
+there, passes every origin attavo/<N>-* whose item is not merged, and every
+existing copy whose item is merged.
+
+drive (reconciler R2) is one short pass: it fast-forwards its working copy
+to origin's branch (never while a worker holds it), reads the item's
+report (attavo.report, issue #206) exactly as --report would, and acts at
+most once -- one of the three states that are the product's own move --
+before returning, almost always within seconds. owes-recovery writes the
+died or hung record for the one invocation the report named (what
+--recover used to do, by hand); next-build and next-review start their
+stage. Starting a stage is the lease: drive writes the invocation marker,
+commits it, and pushes that one commit as a plain fast-forward, no merge
+and no retry -- a rejection that is not a fast-forward, or a ref another
+push already holds, means another pass started this attempt first, and
+this one says so, resets its own marker commit, and starts nothing; a
+push the remote refuses outright is exit 1 and starts nothing either way.
+On a pushed marker drive spawns `attavo worker N <build|verify> NN` in
+its own session, its stdout and stderr appended to
+<git-dir>/attavo/<stage>-NN.worker.log, and returns -- the worker
+outlives the pass. Every other level is printed in the report's own
+words and left alone, exit 0; exit 1 is a refusal. See issue #217's lane
+(the reconciler's R2) for the full rules it enforces."""),
+            (210, """\
+--until-ready repeats the pass in this same process, sleeping
+ATTAVO_DRIVE_POLL_INTERVAL_S between passes, until the level is the
+operator's or done (exit 0), a concluded check reads red (exit 1), or an
+unconcluded one has not concluded within ATTAVO_DRIVE_POLL_BOUND_S (exit
+1) -- a stage running in its own worker is not bounded by either
+constant, only time spent waiting on the forge is. Without the flag,
+drive is one pass, then stop.
+
+--again --by LOGIN starts the next attempt of a stopped stage -- the
+operator's own resume, until a later reconciler ruling drives a retry
+itself; --by names who pressed it, as approve's does, and the marker
+carries it. A stage's liveness is read from the worker's heartbeat, the
+file the process holding it writes, never from a pid someone else
+recorded. --recover
+is gone: `attavo drive --recover` now exits 2 saying so; recovery is
+what a pass does on its own, the moment the report owes one.
+
+--all runs one pass, in its own process, in every ../attavo-worktree-N
+beside this checkout -- each line either prints is prefixed with the
+worktree's own directory name.
+
+--report prints, as JSON against schema/drive-report.schema.json, what
+item N is waiting on: its state, whose move it is (yours, waits, acts,
+done), and one sentence in the operator's words. It reads exactly what a
+pass reads -- the item's records, its invocation markers and heartbeats,
+one read of the forge -- and does nothing else: it writes no record,
+starts nothing, terminates nothing, and does not poll, so a concluded
+red check reads as blocked-on-checks for as long as it is red. It exits
+0 on every state. See issue #206's lane for the states."""),
+        ),
+        transport=True,
+    ),
+    Command(
+        name='worker',
+        run=cmd_worker,
+        usage=('attavo worker N <build|verify> NN',),
+        rank=130,
+        help=(
+            (200, """\
+worker N <build|verify> NN is the stage itself, run in the detached child
+a pass just started: build or verify in-process, exactly as the pass used
+to run it inline before R2, touching
+<git-dir>/attavo/<stage>-NN.heartbeat every ATTAVO_HEARTBEAT_S seconds
+(15) while it runs -- what a report or a pass reads first to tell a
+running invocation from a died one, falling back to the pid only when
+there is no heartbeat file at all. A record the stage writes that is not
+pass is counseled (counsel, issue #100) and filed (file-stops, issue #89)
+before it is transported, so its .filed marker exists in time to be
+committed alongside it; the worker then commits the stage record and the
+counsel record together -- each with its own log and marker -- with
+`git commit --only`, never sweeping the index, and pushes, with the
+record push's own retry: a push a divergent remote rejects is retried
+once after `git pull --no-rebase --no-edit`, never a rebase, since the
+record already names the commit's sha. On a review, ATTAVO_FORGE_CHECKS
+names the file the pass already wrote the forge's own read into (the
+checks it saw on the head before its marker, reconciler ruling B); verify
+reads that file instead of polling when it is set."""),
+        ),
+        transport=True,
+    ),
+)

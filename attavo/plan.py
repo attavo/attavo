@@ -41,6 +41,7 @@ from typing import Any
 
 from attavo import store
 from attavo.common import MANIFEST, now_iso, read_manifest
+from attavo import Command
 
 DOC = "plan"
 SCHEMA = "plan/1"
@@ -332,3 +333,28 @@ def cmd_plan(argv: list[str]) -> int:
         return _write(root, move(current["body"], args[0], epic), current["version"], by)
     except store.StoreRefusal as r:
         return _refuse(str(r))
+
+
+COMMANDS = (
+    Command(
+        name='plan',
+        run=cmd_plan,
+        usage=('attavo plan get [--version V] | put FILE --base V --by LOGIN | log', 'attavo plan rank <EPIC|#N> (--before <EPIC|#M> | --last) --by LOGIN', 'attavo plan move #N --epic EPIC --by LOGIN', 'attavo plan claims #N (<PATH>... | --clear) --by LOGIN'),
+        rank=160,
+        help=(
+            (80, """\
+plan keeps the Plan's order in the product's datastore, never in git:
+the epics in rank order, each with its issues in rank order, the edges
+between issues, and policy. The store is <git common dir>/attavo/store/
+(ATTAVO_STORE overrides it): shared by every worktree of the clone, never
+staged, one file per version. get prints the plan and its version; put
+writes the next version from a file and refuses a stale --base by naming
+the latest version and its author; log lists versions; rank and move
+change one position or one membership and write the next version; claims
+sets (or --clear removes) the repository paths an issue will change before
+it has a spec, with who set them and when, and refuses an issue the plan
+does not place. A re-rank is a new version, not a commit: priority is
+working material the attestation does not bind to."""),
+        ),
+    ),
+)

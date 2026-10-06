@@ -13,6 +13,7 @@ from attavo.common import MANIFEST, STAGES, git, read_manifest
 from attavo.doctor import INVOCATION_MARKER_SUFFIX, _merges_reachable, merge_introducing_records
 from attavo.records import RECORD_RE, _load_record
 from attavo.stops import item_stops
+from attavo import Command
 
 # --- ledger: every act on an item by identity and class (issue #128) ---
 
@@ -284,3 +285,32 @@ def cmd_ledger(argv: list[str]) -> int:
     if not ledgers:
         print(f"attavo ledger: no item found under {records_rel}")
     return 0
+
+
+COMMANDS = (
+    Command(
+        name='ledger',
+        run=cmd_ledger,
+        usage=('attavo ledger [N] [--json]',),
+        rank=140,
+        help=(
+            (250, """\
+ledger reads, never writes. For item N (or every item under
+paths.records when N is omitted), it walks the commits from the item's
+first spec commit to its merge (the same derivation doctor's proof two
+and attest use) or to HEAD when the item has not merged, and prints one
+row per act: the sha, the identity as git names it, and a class from a
+closed list -- spec, amend, approve, launch, record, change, transport,
+merge -- derived from who committed it and, for an approval, build, or
+verify record, what the record itself says. A summary line follows:
+operator acts (approve, amend, launch, transport, merge), product acts
+(record), executor commits (change), stops (non-pass records), and
+since (the product version on the first record). A build or verify
+record's own commit, from before v0.18.0 gave the driver and the
+executor their own identities, prints as record-or-launch with a note,
+counted toward neither total, rather than guessed. --json prints the
+rows and the summary as one object. See issue #128's lane for the full
+rules it enforces."""),
+        ),
+    ),
+)

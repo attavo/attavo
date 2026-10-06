@@ -30,6 +30,7 @@ from attavo.spec import parse_spec, run_criterion
 from attavo.stops import _log_last_line, derive_stop, gate_of, signature_of
 from attavo.testtool import (TEST_BYPASS_STEER, read_events, run_bounded,
                              runner_calls_outside_the_tool, without_records)
+from attavo import Command
 
 # --- build: adapter, claims boundary, criteria, and the tenant's tests ---
 
@@ -779,3 +780,74 @@ def cmd_build(argv: list[str]) -> int:
     if status_out == "halted":
         return BUILD_HALT_EXIT
     return 0 if status_out == "pass" else 1
+
+
+COMMANDS = (
+    Command(
+        name='build',
+        run=cmd_build,
+        usage=('attavo build [N]',),
+        rank=50,
+        help=(
+            (60, """\
+build refuses (exit 1, naming the cause, no record) unless the manifest
+declares [executor].build and [tests].select and [tests].run, and unless
+approval-status would print valid. It exports the executor's identity
+(issue #33) into the adapter's environment as GIT_AUTHOR_NAME/EMAIL and
+GIT_COMMITTER_NAME/EMAIL, set by the product and never the tenant's git
+config, then invokes the named adapter (adapters/<name>/run) with the
+spec, the corpus, and the branch. It refuses (status refused) a commit
+between start_sha and HEAD not authored by that identity, checks that
+every path touched matches a spec claim, records the adapter's own
+declared "reports" -- the fields adapters/<name>/conformance.json says
+it can supply with a real value (issue #41), so a field it claims and
+never supplies is a defect the conformance suite catches rather than a
+silent null -- then runs the criteria, the
+tests [tests].select and [tests].run name for the touched paths, and --
+when the manifest declares [checks].command -- the tenant's own
+whole-tree check, all three run in a detached worktree of HEAD and
+never in the executor's own directory: the gate reads the commit, not
+the tree, so a path written and never committed cannot pass a
+criterion, a test, or a check on the executor's behalf. An iteration
+that ends with HEAD unchanged since start_sha is told, in the feed and
+the log, that the executor committed nothing and that the gate reads
+the commit, and iterates; the last iteration ending that way halts the
+build instead of failing it, stop class empty, provenance executor,
+detail naming that the executor committed nothing and how many paths
+it left modified or untracked. pass requires every criterion,
+the test run, and the tenant's checks (if declared) to exit 0, and HEAD
+to have moved since start_sha; any non-zero exit iterates, with the
+failure as feedback, up to a fixed budget. [checks] is optional; a
+tenant that declares none is not refused. Before the adapter is invoked
+it asks whether this machine can
+run the checks -- of [checks].probe, run once inside [checks].probe_timeout_s
+(exit 0 yes; anything else, or the bound, an environment refusal), or,
+for a tenant that declares no probe, by running [checks].command whole
+(exit 2 no) -- and says both the question and the answer in the feed
+(issue #212). The adapter is given ATTAVO_TEST_COMMAND, `attavo test N`,
+and ATTAVO_TEST_TIMEOUT_S when [tests].call_timeout_s is declared; it
+is not given the tenant's checks. The claude-code adapter tells the
+executor the claims at the edit: its Edit and Write are allowed on the
+spec's claimed paths only (a trailing-slash claim covers its subtree) and
+an edit outside them is refused when tried, and its Bash foreground is
+that bound plus 60 s. It writes the next build-NN.json under paths.records/N/, with
+the adapter's transcript -- each iteration's gate output (criteria
+exits, the selected tests' stdout, the tenant's checks' tail) appended
+under an "--- attavo gates, iteration N ---" heading, issue #89 -- beside
+it as build-NN.log. Every record whose status is not pass carries stop:
+{class, provenance, detail}, derived from the record's own fields (the
+adapter's report-line class, a halt's question, the refusal's kind, the
+gate's results), never from the transcript: a refusal for a commit the
+executor did not author is class foreign-commit, provenance tenant; a
+build whose events show a Bash call that ran a test runner other than
+through `attavo test` is returned as class test-bypass, provenance
+executor, naming the call, and its retry is steered to the tool (#317); a
+build whose own gate is red is class gate, provenance executor; a stop
+with no structure to class it is unclassed, and only then does the log's
+last line serve as its detail. A pass record carries stop: null. See the
+build contract in the project's Phase 2 issue for the full rules it
+enforces."""),
+        ),
+        transport=True,
+    ),
+)
