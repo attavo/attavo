@@ -19,6 +19,7 @@ from attavo.common import (
     last_commit_touching,
     now_iso,
     read_manifest,
+    git_env,
 )
 from attavo.records import latest_record, write_record
 from attavo import Command
@@ -251,7 +252,7 @@ def commit_postdates(root: Path, earlier: str, later: str) -> bool:
     if earlier == later:
         return False
     run = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", earlier, later],
-                         capture_output=True, check=False)
+                         capture_output=True, check=False, env=git_env())
     return run.returncode == 0
 
 

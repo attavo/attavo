@@ -15,6 +15,7 @@ Run: python3 -m pytest tests -q
 import importlib
 import json
 import os
+import shutil
 import socket
 import queue
 import subprocess
@@ -1102,6 +1103,104 @@ def test_drive_a_record_push_rejected_under_the_stage_commits_is_refused_not_mer
     assert head_of(root) == stage_commit
     assert remote_head(bare, branch) == remote_before
     assert git(root, "log", "--merges", "--format=%H", "HEAD").split() == []
+
+
+def test_a_read_in_the_checkout_cannot_fail_a_record_transport_after_its_push(tmp_path: Path,
+                                                                              monkeypatch: Any) -> None:
+    """Rejection test (#343, the two hangs captured for #335). A pass's `git
+    status` in the checkout takes git's optional index lock, and the worker's
+    `git add` there (_stage_copies, after its push succeeded) then fails on
+    it: "could not push", with the record on origin and untracked in the
+    checkout. The read is held open by a stand-in git on PATH that does what
+    git does (takes .git/index.lock for a `status` unless GIT_OPTIONAL_LOCKS
+    is 0) and lets go when the test releases it, so the lock is held at the
+    moment the transport stages its copies and no timing decides it."""
+    from attavo import drive
+
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    bare = add_bare_remote(root, tmp_path)
+    approve_item(root)
+    publish_approval(root)
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    stage_sha = head_of(root)
+    body = json.dumps({"status": "pass", "sha": stage_sha})
+    mine = root / "records" / "1" / "build-01.json"
+    mine.parent.mkdir(parents=True, exist_ok=True)
+    mine.write_text(body)  # the worker's own copy, untracked, as it writes it
+
+    real_git = shutil.which("git")
+    shim_dir = tmp_path / "shim"
+    shim_dir.mkdir()
+    entered, release = tmp_path / "read-entered", tmp_path / "read-release"
+    shim = shim_dir / "git"
+    shim.write_text(
+        "#!/bin/sh\n"
+        'case " $* " in *" status "*)\n'
+        f'  if [ "${{GIT_OPTIONAL_LOCKS:-1}}" != 0 ]; then touch "$2/.git/index.lock"; held=1; fi\n'
+        f'  touch "{entered}"\n'
+        f'  n=0; while [ ! -f "{release}" ] && [ "$n" -lt 1200 ]; do sleep 0.1; n=$((n+1)); done\n'
+        '  [ -z "${held:-}" ] || rm -f "$2/.git/index.lock";;\n'
+        "esac\n"
+        f'exec "{real_git}" "$@"\n')
+    shim.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shim_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.delenv("GIT_OPTIONAL_LOCKS", raising=False)
+
+    reader = threading.Thread(target=drive.uncommitted_record, args=(root, mine.parent, "build"), daemon=True)
+    reader.start()
+    pace = threading.Event()  # never set: a look's pause, not a deadline
+    for _ in range(900):
+        if entered.exists():
+            break
+        pace.wait(0.2)
+    assert entered.exists(), "the pass's read never got inside git status"
+
+    def write(tree: Path) -> list[Path]:
+        rec = tree / "records" / "1" / "build-01.json"
+        rec.parent.mkdir(parents=True, exist_ok=True)
+        rec.write_text(body)
+        return [rec]
+
+    try:
+        outcome = drive.transport_records(root, branch, "attavo: build record for item 1 (build-01)", write)
+    finally:
+        release.write_text("go\n")
+        reader.join(timeout=60)
+    assert outcome == ("pushed", None), outcome
+    assert remote_head(bare, branch) == head_of(root)
+    assert "records/1/build-01.json" in git(root, "ls-files"), "the record is still untracked in the checkout"
+    assert git(root, "status", "--porcelain", "--", "records/1/build-01.json") == ""
+
+
+def test_a_push_that_succeeded_is_never_reported_as_one_that_did_not(tmp_path: Path, monkeypatch: Any) -> None:
+    """#343: the push landed and the checkout then could not take the
+    commit. The outcome names the push as done, and the drive's line says so."""
+    from attavo import drive
+
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    bare = add_bare_remote(root, tmp_path)
+    approve_item(root)
+    publish_approval(root)
+    branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+
+    def write(tree: Path) -> list[Path]:
+        rec = tree / "records" / "1" / "build-01.json"
+        rec.parent.mkdir(parents=True, exist_ok=True)
+        rec.write_text("{}")
+        return [rec]
+
+    def cannot_take(root: Path, target: str) -> None:
+        raise drive.TransportRefused("a stand-in refusal")
+
+    monkeypatch.setattr(drive, "sync_checkout", cannot_take)
+    outcome, why = drive.transport_records(root, branch, "attavo: build record", write)
+    assert outcome == "unsynced" and why == "pushed; the checkout could not take it: a stand-in refusal", (outcome, why)
+    assert git(bare, "log", "-1", "--format=%s", branch).strip() == "attavo: build record"
+    assert drive._not_transported("the build record", outcome, why) == (
+        "the build record was pushed; the checkout could not take it: a stand-in refusal")
+    assert "could not push" not in drive._not_transported("the build record", outcome, why)
 
 
 def test_drive_a_pass_refuses_a_checkout_carrying_a_commit_origin_lacks(tmp_path: Path) -> None:

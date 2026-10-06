@@ -52,9 +52,18 @@ def parse_manifest(text: str) -> dict[str, Any]:
     return tomllib.loads(text)
 
 
+def git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment every git call the product makes runs in. Git takes
+    an "optional" index lock even for a read (`git status` refreshes the
+    index), and a pass's read in a checkout would then fail a worker's
+    write there, after its push had succeeded (#343). With optional locks
+    off, a read never holds the index."""
+    return {**os.environ, "GIT_OPTIONAL_LOCKS": "0", **(extra or {})}
+
+
 def git(root: Path, *args: str, env: dict[str, str] | None = None) -> str:
     out = subprocess.run(["git", "-C", str(root), *args],
-                         capture_output=True, text=True, check=False, env=env)
+                         capture_output=True, text=True, check=False, env=git_env(env))
     if out.returncode != 0:
         raise RuntimeError(out.stderr.strip() or "git failed")
     return out.stdout
@@ -104,7 +113,7 @@ def derive_item_id(root: Path) -> str | None:
     if env_item:
         return env_item
     out = subprocess.run(["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"],
-                         capture_output=True, text=True, check=False)
+                         capture_output=True, text=True, check=False, env=git_env())
     branch = out.stdout.strip()
     m = re.match(r"^attavo/(\d+)-", branch)
     return m.group(1) if m else None
@@ -131,12 +140,12 @@ class ShallowCheckoutError(RuntimeError):
 
 def last_commit_touching(root: Path, relpath: str) -> str | None:
     shallow = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-shallow-repository"],
-                             capture_output=True, text=True, check=False)
+                             capture_output=True, text=True, check=False, env=git_env())
     if shallow.stdout.strip() == "true":
         raise ShallowCheckoutError(
             "shallow checkout: git log -1 -- <path> returns HEAD for every path on a "
             "shallow clone; check out with fetch-depth: 0")
     out = subprocess.run(["git", "-C", str(root), "log", "-1", "--format=%H", "--", relpath],
-                         capture_output=True, text=True, check=False)
+                         capture_output=True, text=True, check=False, env=git_env())
     sha = out.stdout.strip()
     return sha or None

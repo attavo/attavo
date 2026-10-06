@@ -30,7 +30,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
-from attavo.common import now_iso
+from attavo.common import now_iso, git_env
 
 NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 VERSION_FILE = re.compile(r"^([0-9]+)\.json$")
@@ -47,7 +47,7 @@ def store_root(root: Path) -> Path:
     if env:
         return Path(env).expanduser().resolve()
     run = subprocess.run(["git", "-C", str(root), "rev-parse", "--git-common-dir"],
-                         capture_output=True, text=True, check=False)
+                         capture_output=True, text=True, check=False, env=git_env())
     common = run.stdout.strip()
     if run.returncode != 0 or not common:
         raise StoreRefusal(f"{root} is not in a git clone and ATTAVO_STORE is not set")

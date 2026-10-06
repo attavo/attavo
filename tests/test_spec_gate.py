@@ -675,18 +675,27 @@ def test_an_unlabelled_criterion_is_structural(tmp_path: Path) -> None:
 
 @pytest.mark.own_records
 def test_every_merged_spec_parses_with_unlabelled_criteria_structural() -> None:
-    """Regression: the specs under attest/specs/ predate labels, so each
-    must parse as it did: no refusal, every criterion structural, no label
-    leaking into a name."""
-    from attavo.spec import parse_spec
+    """Regression: every spec under attest/specs/ parses with no refusal and
+    no label leaking into a name, and each criterion's kind is the one its
+    line declares: unlabelled is structural. Specs written before labels
+    are all unlabelled; #344's was the first labelled one, and an earlier
+    form of this test asserted that no spec would ever carry a label."""
+    from attavo.spec import KIND_LABEL, parse_spec
     specs = sorted((ROOT / "attest" / "specs").glob("*/spec.md"))
     assert specs
     for spec_md in specs:
         parsed, refusal = parse_spec(spec_md)
         assert refusal is None and parsed is not None, spec_md
         assert all(not n.startswith("[") for n in parsed["criteria"]), spec_md
-        assert set(parsed["kinds"].values()) <= {"structural"}, spec_md
         assert list(parsed["kinds"]) == parsed["criteria"], spec_md
+        for line in spec_md.read_text().split("## Criteria", 1)[1].splitlines():
+            s = line.strip()
+            if not s.startswith("- ") or ":" not in s:
+                continue
+            label = KIND_LABEL.match(s[2:])
+            name = (s[2:][label.end():] if label else s[2:]).split(":", 1)[0].strip()
+            declared = label.group(1).strip() if label else "structural"
+            assert parsed["kinds"][name] == declared, (spec_md, name)
 
 
 def test_built_refuses_a_behavioural_criterion_that_fails_on_the_tree(tmp_path: Path) -> None:
