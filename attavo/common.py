@@ -43,8 +43,13 @@ def read_manifest(root: Path) -> dict[str, Any] | None:
     path = root / MANIFEST
     if not path.is_file():
         return None
-    with path.open("rb") as fh:
-        return tomllib.load(fh)
+    return parse_manifest(path.read_text(encoding="utf-8"))
+
+
+def parse_manifest(text: str) -> dict[str, Any]:
+    """The manifest's text as read_manifest reads it, for a copy that is
+    not on disk (the manifest as it stood at a commit)."""
+    return tomllib.loads(text)
 
 
 def git(root: Path, *args: str, env: dict[str, str] | None = None) -> str:

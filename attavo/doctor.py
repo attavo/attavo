@@ -14,6 +14,7 @@ from attavo.build import build_is_empty, driver_identity
 from attavo.common import (
     MANIFEST,
     Proof,
+    parse_manifest,
     STAGES,
     fixture_item_id,
     git,
@@ -904,12 +905,21 @@ def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_s
     except (RuntimeError, ValueError):
         sealed_at = None
     version = _predicate_version(statement, predicate)
-    # v5 prices a record by the rates its own cost block carries -- what the
-    # tenant's manifest said when it was sealed, which a later edit to the
-    # manifest does not unseal; v3 and v4 priced nothing.
-    carried = stated_cost.get("rates") if version >= 5 else None
+    # v5 prices a record by the [cost.rates] the tenant's manifest declared
+    # at the sealed commit, never by the rates the statement carries: the
+    # carried block is then compared like any field, and a later edit to the
+    # manifest cannot unseal anything. v3 and v4 priced nothing.
+    rates: dict[str, Any] | None = None
+    if version >= 5:
+        try:
+            declared = parse_manifest(git(root, "show", f"{merge_sha}:{MANIFEST}"))
+        except (RuntimeError, ValueError) as exc:
+            return (f"{where}: the manifest {MANIFEST} cannot be read at the sealed commit, "
+                    f"so a v5 statement's estimate cannot be checked ({exc})")
+        found = (declared.get("cost") or {}).get("rates")
+        rates = found if isinstance(found, dict) else {}
     summed_time, summed_cost, summed_tokens = item_accounting(
-        item_records_dir, sealed_at, carried if isinstance(carried, dict) else None)
+        item_records_dir, sealed_at, rates)
     cost_now = {k: v for k, v in summed_cost.items() if version >= 5 or k not in V5_COST_FIELDS}
     if version < 5:  # v3 and v4 named the record, never the missing rate
         cost_now["not_read"] = [n.split(" (no [cost.rates]")[0] for n in summed_cost["not_read"]]

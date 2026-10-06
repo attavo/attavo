@@ -22,6 +22,8 @@ from typing import Any
 import jsonschema
 import pytest
 
+from attavo.doctor import _accounting_disagrees
+from helpers import git
 from test_attest_time import (INVOCATIONS, V5_COST_FIELDS, attest, make_item, proof_six, seal)
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -209,3 +211,49 @@ def test_an_item_with_no_priced_record_keeps_the_v4_totals(tmp_path: Path) -> No
     cost = attest(root)["cost"]
     assert cost["usd"] == 0.875 and cost["estimated_usd"] == 0.0
     assert cost["not_read"] == ["verify-01", "verify-02", "counsel-01"]
+
+
+def test_a_v5_statement_whose_carried_rate_differs_from_the_manifest_at_its_sealed_commit_fails(
+        tmp_path: Path) -> None:
+    """#277's verify-01 priced at a rate the manifest never declared at the
+    sealed commit: the statement's own arithmetic is consistent, but the
+    rate it quotes is not the tenant's, so proof six fails, naming cost.rates."""
+    root, merge = specimen(tmp_path, RATE_TABLE)
+    statement = attest(root)
+    quoted = {**CODEX_RATE, "input_usd_per_mtok": 0.01, "output_usd_per_mtok": 0.01}
+    statement["cost"]["rates"] = {CODEX: quoted}
+    statement["cost"]["estimated_usd"] = 0.003604
+    statement["cost"]["by_stage_usd"]["verify"] = 0.003604
+    statement["cost"]["by_adapter_usd"]["codex"] = 0.003604
+    statement["cost"]["usd"] = 0.503604
+    seal(root, merge, statement, "https://attavo.dev/attestation/v5")
+    failed = proof_six(root)
+    assert failed["holds"] is False, failed
+    assert "item 1" in failed["reason"] and "cost.rates" in failed["reason"], failed
+
+
+def test_a_v5_statement_still_holds_after_the_manifests_rate_changes_in_a_later_commit(
+        tmp_path: Path) -> None:
+    """The sealed commit does not move: a rate edited afterwards unseals nothing."""
+    root, merge = specimen(tmp_path, RATE_TABLE)
+    seal(root, merge, attest(root), "https://attavo.dev/attestation/v5")
+    manifest = root / "attavo.toml"
+    manifest.write_text(manifest.read_text().replace("input_usd_per_mtok = 1.25",
+                                                     "input_usd_per_mtok = 9.99"))
+    git(root, "commit", "-q", "-am", "reprice")
+    held = proof_six(root)
+    assert held["holds"] is True and held["sealed"] == ["1"], held
+
+
+def test_a_v5_statement_fails_when_the_manifest_cannot_be_read_at_its_sealed_commit(
+        tmp_path: Path) -> None:
+    """No fallback to the carried rates: a sealed commit that holds no
+    manifest fails the proof and names that."""
+    root, _ = specimen(tmp_path, RATE_TABLE)
+    statement = attest(root)
+    empty = git(root, "hash-object", "-t", "tree", "/dev/null").strip()
+    bare = git(root, "commit-tree", empty, "-m", "no manifest").strip()
+    envelope = {"predicateType": "https://attavo.dev/attestation/v5", "predicate": statement}
+    reason = _accounting_disagrees(root, root / "records" / "1", "1", bare, envelope)
+    assert reason is not None and "item 1" in reason, reason
+    assert "attavo.toml cannot be read at the sealed commit" in reason, reason
