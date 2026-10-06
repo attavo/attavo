@@ -347,6 +347,11 @@ def cmd_spec_gate(argv: list[str]) -> int:
         elif stub_outside_claims(spec_dir, parsed["claims"]) is not None:
             refusal = ("stub touches a path the claims do not name: "
                        f"{stub_outside_claims(spec_dir, parsed['claims'])}")
+        elif parsed["criteria"] and "structural" not in parsed["kinds"].values():
+            # A behavioural criterion only has to fail on the stub, so a
+            # spec of nothing else proves nothing reachable before approval.
+            refusal = ("no structural criterion: nothing shows the stub reaches "
+                       "what the behavioural criteria test")
         else:
             criteria_dir = spec_dir / "criteria"
             listed = parsed["criteria"]
@@ -432,7 +437,8 @@ the first path under stub/ (or in stub/.removed) that no claim matches.
 A criterion line may carry a kind after its dash, "- [behavioural] name.sh: ..."
 or "- [structural] name.sh: ..."; unlabelled is structural. Structural must
 fail on the tree and pass on the tree plus stub; behavioural must fail on
-both, so the stub can be thin. A label the measured exits contradict is
+both, so the stub can be thin; before approval a spec needs at least one
+structural criterion. A label the measured exits contradict is
 refused by name, as is an unknown one. After a build a behavioural
 criterion must pass on the tree.
 See the spec contract in the project's Phase 1 issue for the full rules

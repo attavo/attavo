@@ -726,3 +726,29 @@ def test_built_accepts_a_behavioural_criterion_that_passes_on_the_tree(tmp_path:
     assert rec["status"] == "built"
     by_name = {c["name"]: c for c in rec["criteria"]}
     assert by_name["logic.sh"] == {"name": "logic.sh", "kind": "behavioural", "on_tree": 0, "on_stub": 1}
+
+
+NO_STRUCTURAL = ("no structural criterion: nothing shows the stub reaches "
+                 "what the behavioural criteria test")
+
+
+def test_a_spec_of_only_behavioural_criteria_is_refused(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    set_criteria(root, [BEHAV], {"logic.sh": THIN_SCRIPTS["logic.sh"]},
+                 {"src/logic.txt": "todo\n"})
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+    assert NO_STRUCTURAL in run.stdout, run.stdout
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused" and rec["refusal"] == NO_STRUCTURAL
+
+
+def test_the_no_structural_refusal_comes_before_any_criterion_refusal(tmp_path: Path) -> None:
+    """The one behavioural criterion here also passes on the stub, which
+    alone would be refused by name; the spec-level refusal is reported."""
+    root = make_tenant(tmp_path, "valid")
+    set_criteria(root, [BEHAV], {"logic.sh": THIN_SCRIPTS["logic.sh"]},
+                 {"src/logic.txt": "done\n"})
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+    assert latest_record(root, "1", "spec")["refusal"] == NO_STRUCTURAL
