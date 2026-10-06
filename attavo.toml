@@ -71,3 +71,9 @@ ceiling_s = 1200
 
 [counsel]
 reads = ["docs/method-rules.md", "docs/counsel-rulings.md", "docs/r3-rulings.md", "docs/storage-ruling.md"]
+
+[cost.rates."gpt-5.6-sol"]
+input_usd_per_mtok = 5.0
+output_usd_per_mtok = 30.0
+as_of = "2026-10-06"
+source = "https://openai.com/api/pricing/"
