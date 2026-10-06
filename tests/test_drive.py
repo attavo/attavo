@@ -127,6 +127,36 @@ def utc_stamp(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def hang_evidence(root: Path) -> str:
+    """Diagnosis only, read when the hang guard fires: what the stage
+    left behind. It asserts nothing and declares nothing."""
+    from attavo.doctor import heartbeat_pid
+    from attavo.events import stage_events_dir
+
+    def sh(*cmd: str) -> str:
+        done = subprocess.run(list(cmd), capture_output=True, text=True)
+        return (done.stdout + done.stderr).strip()
+
+    parts = []
+    events = stage_events_dir(root)
+    for log in sorted(events.glob("*.worker.log")):
+        parts.append(f"--- {log.name} (last 80 lines)\n" + "\n".join(log.read_text(errors="replace").splitlines()[-80:]))
+    for beat in sorted(events.glob("*.heartbeat")):
+        pid = heartbeat_pid(beat)
+        alive = None if pid is None else pid_alive(pid)
+        parts.append(f"--- {beat.name}: pid {pid}, alive {alive}, last touched {beat.stat().st_mtime}")
+    parts.append("--- records/1/ in the checkout\n" + "\n".join(
+        sorted(str(f.relative_to(root)) for f in root.glob("**/records/1/*") if ".git" not in f.parts)))
+    parts.append("--- git status --short\n" + sh("git", "-C", str(root), "status", "--short"))
+    branch = sh("git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD")
+    bare = sh("git", "-C", str(root), "remote", "get-url", "origin")
+    parts.append(f"--- checkout HEAD {sh('git', '-C', str(root), 'rev-parse', 'HEAD')} on {branch}\n"
+                 + sh("git", "-C", str(root), "log", "--oneline", "-3"))
+    parts.append(f"--- origin {branch} {sh('git', '-C', bare, 'rev-parse', branch)}\n"
+                 + sh("git", "-C", bare, "log", "--oneline", "-3", branch))
+    return "\n".join(parts)
+
+
 def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None,
                timeout: float = 300, killed: bool = False) -> subprocess.CompletedProcess[str]:
     """No death is declared here unless the test says a worker it had an
@@ -152,7 +182,8 @@ def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None,
             f"attavo {' '.join(args)} had not returned after {timeout:.0f} s. The clock it reads is held at "
             f"{held_clock(root).read_text()}: a poll of the forge ends when a read concludes or when a read "
             f"advances ATTAVO_CLOCK_FILE past the poll bound, and a worker that died is judged so when the "
-            f"clock passes three beats; none of those happened. stdout so far: {out!r}") from None
+            f"clock passes three beats; none of those happened. stdout so far: {out!r}\n"
+            f"{hang_evidence(root)}") from None
     return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
 
 
@@ -789,7 +820,9 @@ def test_a_worker_that_ends_normally_is_never_declared_dead_while_the_pass_runs(
     try:
         from attavo.doctor import heartbeat_pid
         from attavo.events import stage_events_dir
-        beats = lambda: sorted(stage_events_dir(root).glob("*.heartbeat"))  # noqa: E731
+        def beats() -> list[Path]:
+            return sorted(stage_events_dir(root).glob("*.heartbeat"))
+
         wait_for(lambda: len(beats()) == 2, "both stages' heartbeats on disk: the build's, and the held review's")
         build_pid = heartbeat_pid(beats()[0])
         assert build_pid is not None
