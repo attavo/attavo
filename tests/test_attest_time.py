@@ -54,7 +54,9 @@ def tokens_of(stage: str, n: int) -> dict[str, int]:
 
 
 def make_item(tmp_path: Path, invocations: list[tuple[str, int, float | None, float | None, str]],
-              tokenless: frozenset[str] = frozenset()) -> tuple[Path, str]:
+              tokenless: frozenset[str] = frozenset(), manifest_extra: str = "",
+              models: dict[str, str] | None = None,
+              tokens: dict[str, dict[str, int]] | None = None) -> tuple[Path, str]:
     """A tenant with one item merged on main's first-parent line: spec and
     approval records, then every invocation in `invocations`, the chain
     coherent on the latest of each stage. Returns (root, merge sha)."""
@@ -65,7 +67,7 @@ def make_item(tmp_path: Path, invocations: list[tuple[str, int, float | None, fl
     git(root, "config", "user.name", "fixture")
     (root / "attavo.toml").write_text(
         '[paths]\nrecords = "records"\nspecs = "specs"\n\n'
-        '[forge]\nattestation_command = "sh ./fake-store"\n')
+        '[forge]\nattestation_command = "sh ./fake-store"\n' + manifest_extra)
     (root / "fake-store").write_text(
         '#!/bin/sh\nread sha\ntest -f "statements/$sha.json" && cat "statements/$sha.json"\n')
     git(root, "add", "-A")
@@ -79,8 +81,11 @@ def make_item(tmp_path: Path, invocations: list[tuple[str, int, float | None, fl
                                 "approval_sha": "a1", "cost_usd": cost}
         if wall is not None:
             body["wall_clock_s"] = wall
-        if f"{stage}-{n:02d}" not in tokenless:
-            body["tokens"] = tokens_of(stage, n)
+        name = f"{stage}-{n:02d}"
+        if models and name in models:
+            body["model"] = models[name]
+        if name not in tokenless:
+            body["tokens"] = (tokens or {}).get(name) or tokens_of(stage, n)
         if stage == "verify":
             last_build = max(i[1] for i in invocations if i[0] == "build")
             body["build_sha"] = f"build{last_build}"
@@ -176,10 +181,13 @@ def test_doctor_proof_six_fails_a_statement_whose_time_is_not_its_records(tmp_pa
     assert proof_six(root)["holds"] is True
 
 
-def seal(root: Path, merge: str, statement: dict[str, Any]) -> None:
+def seal(root: Path, merge: str, statement: dict[str, Any],
+         predicate_type: str | None = None) -> None:
     store = root / "statements"
     store.mkdir(exist_ok=True)
-    envelope = {"_type": "https://in-toto.io/Statement/v1", "predicate": statement}
+    envelope: dict[str, Any] = {"_type": "https://in-toto.io/Statement/v1", "predicate": statement}
+    if predicate_type:
+        envelope["predicateType"] = predicate_type
     (store / f"{merge}.json").write_text(json.dumps(envelope))
 
 
@@ -287,6 +295,7 @@ def test_doctor_rejects_large_integer_that_rounds_to_summed_float(tmp_path: Path
     assert "item 1" in failed["reason"] and "time.build" in failed["reason"], failed
 
 
+V5_COST_FIELDS = ("reported_usd", "estimated_usd", "basis_by_stage", "rates", "estimate_note")
 RETIRED = ("cost_by_stage_usd", "wall_clock_by_stage_s", "tokens_by_stage")
 
 
@@ -312,9 +321,10 @@ def test_statement_carries_only_the_summed_accounting(tmp_path: Path) -> None:
     assert statement["tokens"]["partial"] is False and statement["tokens"]["not_read"] == []
 
 
-def test_schema_is_v4_and_names_no_retired_field() -> None:
-    """#309: the predicate type moves to v4 with the three fields gone."""
-    assert SCHEMA["$id"] == "https://attavo.dev/attestation/v4"
+def test_schema_is_v5_and_names_no_retired_field() -> None:
+    """#309: the predicate type moved to v4 with the three fields gone; #307
+    moves it to v5, and they stay gone."""
+    assert SCHEMA["$id"] == "https://attavo.dev/attestation/v5"
     for field in RETIRED:
         assert field not in SCHEMA["properties"] and field not in SCHEMA["required"]
     assert "tokens" in SCHEMA["required"]
@@ -366,6 +376,8 @@ def test_doctor_still_holds_a_v3_statement_sealed_before_tokens(tmp_path: Path) 
     root, merge = make_item(tmp_path, INVOCATIONS)
     statement = attest(root)
     statement.pop("tokens", None)
+    for field in V5_COST_FIELDS:
+        statement["cost"].pop(field)
     statement["tokens_by_stage"] = {"build": {"input": 3000, "output": 30}, "verify": None}
     statement["cost_by_stage_usd"] = {"build": 0.125, "verify": None}
     statement["wall_clock_by_stage_s"] = {"build": 50.25, "verify": 30.0}

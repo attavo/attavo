@@ -203,14 +203,30 @@ class ItemTime(TypedDict):
     not_read: list[str]
 
 
+class CostRate(TypedDict):
+    """A tenant's published price for one model ([cost.rates."<model>"])."""
+    input_usd_per_mtok: float
+    output_usd_per_mtok: float
+    as_of: str
+    source: str
+
+
 class ItemCost(TypedDict):
-    """Every record's cost_usd summed: the item's total across stages and
-    executors, with a subtotal per stage and per adapter. A record with no
-    cost_usd is named in not_read and makes every sum it belongs to
-    partial -- absent is never zero."""
+    """Every record's cost summed: the item's total across stages and
+    executors, with a subtotal per stage and per adapter. A reported
+    cost_usd is taken as it stands; a null one whose model has a tenant
+    rate is priced as tokens times that rate (issue #307), and the basis
+    says which. A record neither reported nor priceable is named in
+    not_read and makes every sum it belongs to partial -- absent is never
+    zero."""
     usd: float
+    reported_usd: float
+    estimated_usd: float
     by_stage_usd: dict[str, float]
+    basis_by_stage: dict[str, str]
     by_adapter_usd: dict[str, float]
+    rates: dict[str, CostRate]
+    estimate_note: str
     partial: bool
     not_read: list[str]
 

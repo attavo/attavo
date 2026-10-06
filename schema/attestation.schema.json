@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/attestation/v4",
-  "title": "The attestation statement `attavo attest` prints on a coherent chain (v4: `time`, `cost` and `tokens` are the only accounting, summed over every attempt; v3 statements sealed earlier also carry cost_by_stage_usd, wall_clock_by_stage_s and tokens_by_stage, the final attempt of each stage)",
+  "$id": "https://attavo.dev/attestation/v5",
+  "title": "The attestation statement `attavo attest` prints on a coherent chain (v5: `cost` also prices, from the tenant's published rates, a record whose adapter reported none, and says so; v4: `time`, `cost` and `tokens` are the only accounting, summed over every attempt; v3 statements sealed earlier also carry cost_by_stage_usd, wall_clock_by_stage_s and tokens_by_stage, the final attempt of each stage)",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -69,13 +69,36 @@
     },
     "cost": {
       "type": "object",
-      "description": "Every record's cost_usd summed by attest: the item's total across stages and executors (ruled 2026-09-19, superseding the 2026-09-09 ruling against a cross-executor sum), with a subtotal per stage and per adapter. Each figure is what the record carries. A record with no cost_usd is named in not_read and makes usd and the subtotals it belongs to partial: absent is never zero, and a partial total says so.",
+      "description": "Every record's cost summed by attest: the item's total across stages and executors (ruled 2026-09-19), with a subtotal per stage and per adapter. A record's cost_usd is taken as the adapter reported it; a record that reported none, with numeric tokens and a model the tenant's manifest has a [cost.rates] entry for, is priced as tokens times that rate (ruled 2026-10-05: computed here, never written into a record). usd is reported_usd plus estimated_usd. A record neither reported nor priceable is named in not_read, naming the missing rate, and makes usd and the subtotals it belongs to partial: absent is never zero, and a partial total says so.",
       "additionalProperties": false,
-      "required": ["usd", "by_stage_usd", "by_adapter_usd", "partial", "not_read"],
+      "required": ["usd", "reported_usd", "estimated_usd", "by_stage_usd", "basis_by_stage", "by_adapter_usd", "rates", "estimate_note", "partial", "not_read"],
       "properties": {
         "usd": {"type": "number", "minimum": 0},
+        "reported_usd": {"type": "number", "minimum": 0},
+        "estimated_usd": {"type": "number", "minimum": 0},
         "by_stage_usd": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0}},
+        "basis_by_stage": {
+          "type": "object",
+          "description": "For each stage with an amount: reported (every amount the adapter's), estimated (every amount priced here) or mixed.",
+          "additionalProperties": {"enum": ["reported", "estimated", "mixed"]}
+        },
         "by_adapter_usd": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0}},
+        "rates": {
+          "type": "object",
+          "description": "The tenant's rates this statement priced a record by, per model, as the manifest carried them: empty when nothing was priced.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["input_usd_per_mtok", "output_usd_per_mtok", "as_of", "source"],
+            "properties": {
+              "input_usd_per_mtok": {"type": "number", "minimum": 0},
+              "output_usd_per_mtok": {"type": "number", "minimum": 0},
+              "as_of": {"type": "string", "minLength": 1},
+              "source": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "estimate_note": {"type": "string", "const": "Estimated amounts are tokens times the tenant's published rates: a meter at API prices, not a bill."},
         "partial": {"type": "boolean"},
         "not_read": {"type": "array", "items": {"type": "string", "minLength": 1}}
       }

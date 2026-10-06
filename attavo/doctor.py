@@ -14,6 +14,7 @@ from attavo.build import build_is_empty, driver_identity
 from attavo.common import (
     MANIFEST,
     Proof,
+    parse_manifest,
     STAGES,
     fixture_item_id,
     git,
@@ -860,14 +861,23 @@ def _carried(predicate: dict[str, Any], key: str) -> str:
 V3_ONLY_FIELDS = ("cost_by_stage_usd", "wall_clock_by_stage_s", "tokens_by_stage")
 
 
-def _is_v3(statement: dict[str, Any], predicate: dict[str, Any]) -> bool:
-    """A statement sealed under .../attestation/v3 (issue #309): named so by
-    its envelope's predicateType, else known by the final-attempt fields v4
-    retired. Judged by v3's rules -- time and cost, no tokens block."""
+V5_COST_FIELDS = ("reported_usd", "estimated_usd", "basis_by_stage", "rates", "estimate_note")
+
+
+def _predicate_version(statement: dict[str, Any], predicate: dict[str, Any]) -> int:
+    """The attestation version a statement was sealed under (issues #309,
+    #307): named by its envelope's predicateType, else known by what it
+    carries -- v3 by the final-attempt fields v4 retired, v5 by the rates
+    its cost block carries, v4 otherwise. Each is judged by its own rules;
+    nothing sealed is rewritten."""
     declared = statement.get("predicateType")
-    if isinstance(declared, str) and declared.endswith("/attestation/v3"):
-        return True
-    return any(key in predicate for key in V3_ONLY_FIELDS)
+    named = re.search(r"/attestation/v(\d+)$", declared) if isinstance(declared, str) else None
+    if named:
+        return int(named.group(1))
+    if any(key in predicate for key in V3_ONLY_FIELDS):
+        return 3
+    cost = predicate.get("cost")
+    return 5 if isinstance(cost, dict) and "rates" in cost else 4
 
 
 def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_sha: str,
@@ -894,10 +904,28 @@ def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_s
         sealed_at: int | None = int(git(root, "show", "-s", "--format=%ct", merge_sha).strip())
     except (RuntimeError, ValueError):
         sealed_at = None
-    summed_time, summed_cost, summed_tokens = item_accounting(item_records_dir, sealed_at)
+    version = _predicate_version(statement, predicate)
+    # v5 prices a record by the [cost.rates] the tenant's manifest declared
+    # at the sealed commit, never by the rates the statement carries: the
+    # carried block is then compared like any field, and a later edit to the
+    # manifest cannot unseal anything. v3 and v4 priced nothing.
+    rates: dict[str, Any] | None = None
+    if version >= 5:
+        try:
+            declared = parse_manifest(git(root, "show", f"{merge_sha}:{MANIFEST}"))
+        except (RuntimeError, ValueError) as exc:
+            return (f"{where}: the manifest {MANIFEST} cannot be read at the sealed commit, "
+                    f"so a v5 statement's estimate cannot be checked ({exc})")
+        found = (declared.get("cost") or {}).get("rates")
+        rates = found if isinstance(found, dict) else {}
+    summed_time, summed_cost, summed_tokens = item_accounting(
+        item_records_dir, sealed_at, rates)
+    cost_now = {k: v for k, v in summed_cost.items() if version >= 5 or k not in V5_COST_FIELDS}
+    if version < 5:  # v3 and v4 named the record, never the missing rate
+        cost_now["not_read"] = [n.split(" (no [cost.rates]")[0] for n in summed_cost["not_read"]]
     differing = (_differences("time", stated_time, dict(summed_time))
-                 + _differences("cost", stated_cost, dict(summed_cost)))
-    if not _is_v3(statement, predicate):
+                 + _differences("cost", stated_cost, cost_now))
+    if version >= 4:
         stated_tokens = predicate.get("tokens")
         if isinstance(stated_tokens, dict):
             differing += _differences("tokens", stated_tokens, dict(summed_tokens))

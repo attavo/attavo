@@ -8,7 +8,7 @@ from typing import Any, cast
 
 from attavo.common import MANIFEST, git, now_iso, product_version, read_manifest
 from attavo.records import latest_attempt_path, latest_record, parse_attempts
-from attavo.types import (ApprovalRecord, AttestRecord, BuildRecord, ItemCost, ItemTime,
+from attavo.types import (ApprovalRecord, AttestRecord, BuildRecord, CostRate, ItemCost, ItemTime,
                           ItemTokens, SpecRecord, StageTime, StageTokens, VerifyRecord)
 from attavo import Command
 
@@ -76,22 +76,49 @@ def item_tokens(records_dir: Path) -> ItemTokens:
     }
 
 
-def item_accounting(records_dir: Path, sealed_at_epoch: int | None
+def item_accounting(records_dir: Path, sealed_at_epoch: int | None,
+                    rates: dict[str, Any] | None = None
                     ) -> tuple[ItemTime, ItemCost, ItemTokens]:
     """The item's `time`, `cost` and `tokens`: the statement's whole
-    accounting, from one call doctor's sixth proof repeats."""
-    item_time, item_cost = item_time_and_cost(records_dir, sealed_at_epoch)
+    accounting, from one call doctor's sixth proof repeats. `rates` is the
+    tenant's [cost.rates] table, by model; with none, nothing is priced."""
+    item_time, item_cost = item_time_and_cost(records_dir, sealed_at_epoch, rates)
     return item_time, item_cost, item_tokens(records_dir)
 
 
-def item_time_and_cost(records_dir: Path, sealed_at_epoch: int | None) -> tuple[ItemTime, ItemCost]:
+ESTIMATE_NOTE = ("Estimated amounts are tokens times the tenant's published rates: "
+                 "a meter at API prices, not a bill.")
+
+
+def read_cost_rate(rates: dict[str, Any] | None, model: Any) -> CostRate | None:
+    """The tenant's rate for `model`, as the statement carries it, or None
+    when the table has no complete one -- a rate that cannot price both
+    directions, or that names no date or source, prices nothing."""
+    entry = (rates or {}).get(model) if isinstance(model, str) else None
+    if not isinstance(entry, dict):
+        return None
+    in_rate, out_rate = entry.get("input_usd_per_mtok"), entry.get("output_usd_per_mtok")
+    as_of, source = entry.get("as_of"), entry.get("source")
+    if not (_is_number(in_rate) and _is_number(out_rate) and as_of and isinstance(source, str)):
+        return None
+    return {"input_usd_per_mtok": float(cast(float, in_rate)),
+            "output_usd_per_mtok": float(cast(float, out_rate)),
+            "as_of": str(as_of), "source": source}
+
+
+def item_time_and_cost(records_dir: Path, sealed_at_epoch: int | None,
+                       rates: dict[str, Any] | None = None) -> tuple[ItemTime, ItemCost]:
     """The item's accounting, summed from the records attest already reads
     (issue: a view showed #158 as 20 minutes, its final build plus its final
     verify, where its nineteen invocations ran 115): every build, verify,
     and counsel attempt's wall_clock_s and cost_usd, per stage and for the
     item, never the final attempt alone. A record that carries no number
     is named in not_read and makes each sum it belongs to partial --
-    absent is never zero. lead_s runs from the first approval record's
+    absent is never zero. A record with no cost_usd but numeric tokens and
+    a model in `rates` is priced here as tokens times the rate (issue #307:
+    computed, never written into a record), its basis `estimated`; with no
+    rate for its model it is named in not_read with the missing rate.
+    lead_s runs from the first approval record's
     `at` to sealed_at_epoch (the committer time of the commit the statement
     is computed at); both it and waiting_s are None when either end cannot
     be read. doctor's sixth proof calls this same function over the same
@@ -102,6 +129,9 @@ def item_time_and_cost(records_dir: Path, sealed_at_epoch: int | None) -> tuple[
     cost_not_read: list[str] = []
     by_stage: dict[str, float] = {}
     by_adapter: dict[str, float] = {}
+    bases: dict[str, set[str]] = {}
+    used_rates: dict[str, CostRate] = {}
+    reported_usd = estimated_usd = 0.0
     for stage in INVOCATION_STAGES:
         attempts = parse_attempts(records_dir, stage)
         seconds = 0.0
@@ -115,13 +145,33 @@ def item_time_and_cost(records_dir: Path, sealed_at_epoch: int | None) -> tuple[
                 partial = True
                 time_not_read.append(name)
             cost = rec.get("cost_usd")
-            if _is_number(cost):
-                by_stage[stage] = by_stage.get(stage, 0.0) + float(cost)
-                adapter = rec.get("adapter")
-                key = adapter if isinstance(adapter, str) and adapter else "not read"
-                by_adapter[key] = by_adapter.get(key, 0.0) + float(cost)
-            else:
+            basis = "reported"
+            if not _is_number(cost):
+                cost, basis = None, "estimated"
+                tok = rec.get("tokens")
+                tok = tok if isinstance(tok, dict) else {}
+                model = rec.get("model")
+                if _is_number(tok.get("input")) and _is_number(tok.get("output")) \
+                        and isinstance(model, str) and model:
+                    rate = read_cost_rate(rates, model)
+                    if rate is None:
+                        cost_not_read.append(f"{name} (no [cost.rates] for {model})")
+                        continue
+                    cost = (tok["input"] * rate["input_usd_per_mtok"]
+                            + tok["output"] * rate["output_usd_per_mtok"]) / 1_000_000
+                    used_rates[model] = rate
+            if cost is None:
                 cost_not_read.append(name)
+                continue
+            by_stage[stage] = by_stage.get(stage, 0.0) + float(cost)
+            bases.setdefault(stage, set()).add(basis)
+            if basis == "reported":
+                reported_usd += float(cost)
+            else:
+                estimated_usd += float(cost)
+            adapter = rec.get("adapter")
+            key = adapter if isinstance(adapter, str) and adapter else "not read"
+            by_adapter[key] = by_adapter.get(key, 0.0) + float(cost)
         stages[stage] = {"attempts": len(attempts), "invocation_s": round(seconds, 3),
                          "partial": partial}
 
@@ -145,8 +195,14 @@ def item_time_and_cost(records_dir: Path, sealed_at_epoch: int | None) -> tuple[
     }
     item_cost: ItemCost = {
         "usd": round(sum(by_stage.values()), 6),
+        "reported_usd": round(reported_usd, 6),
+        "estimated_usd": round(estimated_usd, 6),
         "by_stage_usd": {k: round(v, 6) for k, v in by_stage.items()},
+        "basis_by_stage": {k: next(iter(b)) if len(b) == 1 else "mixed"
+                           for k, b in bases.items()},
         "by_adapter_usd": {k: round(v, 6) for k, v in by_adapter.items()},
+        "rates": used_rates,
+        "estimate_note": ESTIMATE_NOTE,
         "partial": bool(cost_not_read),
         "not_read": cost_not_read,
     }
@@ -298,7 +354,8 @@ def cmd_attest(argv: list[str]) -> int:
         sealed_at: int | None = int(git(root, "show", "-s", "--format=%ct", "HEAD").strip())
     except (RuntimeError, ValueError):
         sealed_at = None
-    item_time, item_cost, item_tokens_ = item_accounting(records_dir, sealed_at)
+    item_time, item_cost, item_tokens_ = item_accounting(
+        records_dir, sealed_at, (m.get("cost") or {}).get("rates"))
 
     statement: AttestRecord = {
         "sha": head_sha,
@@ -357,7 +414,10 @@ and the commit the statement was computed at (sha and merge_sha are the
 same commit here; on the merge group that commit is the one that lands).
 `time`, `cost` and `tokens` are the statement's only accounting, each
 summed over every build, verify and counsel attempt; a record that
-carries no figure is named in not_read, never counted as zero.
+carries no figure is named in not_read, never counted as zero. A record
+whose adapter reported no cost is priced, in the statement and never in the
+record, as tokens times the tenant's [cost.rates] for its model; `cost`
+says which amounts are estimated and carries the rates it used.
 The four stage records already under paths.records are the evidence for
 that statement; a forge-specific template signs the printed JSON,
 unmodified, as the predicate, against the commit that lands, on the merge
