@@ -12,7 +12,7 @@ own `additionalProperties` allows for the adapter-owned ones.
 """
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 # The stage names a record file's <stage>-NN.json prefix can carry, one per
 # schema under schema/records/.
@@ -152,6 +152,16 @@ class VerifyRecord(_VerifyRequired, _VerifyOptional):
     absent on a record written before this release."""
 
 
+class CounselCitation(TypedDict):
+    """One counsel citation (#328): `resolution` is absent for a repository
+    file at the record's sha."""
+    kind: str
+    path: str | None
+    symbol: str | None
+    ruling_id: str | None
+    resolution: NotRequired[Literal["input", "not_in_repository", "not_found_at_sha"]]
+
+
 CounselRecord = TypedDict("CounselRecord", {
     "record_version": int,
     "item": str,
@@ -171,7 +181,7 @@ CounselRecord = TypedDict("CounselRecord", {
     "status": str,
     "class": str | None,
     "verdict": str | None,
-    "citations": list[dict[str, Any]],
+    "citations": list[CounselCitation],
     "proposal": dict[str, Any],
     "forge": dict[str, Any],
     "question": str | None,

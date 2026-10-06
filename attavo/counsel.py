@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -21,7 +22,7 @@ from attavo.build import (
 )
 from attavo.common import MANIFEST, PRODUCT_ROOT, derive_item_id, git, now_iso, read_manifest
 from attavo.records import latest_attempt_path, latest_record, parse_attempts, write_record
-from attavo.types import SpecRecord, StageRecord
+from attavo.types import CounselCitation, SpecRecord, StageRecord
 from attavo.verify import diff_since_approval, read_forge_checks
 from attavo.workcopy import item_events_file
 from attavo import Command
@@ -307,6 +308,62 @@ def cmd_record_turn(root: Path, item_id: str, m: dict[str, Any], k: int, by: str
     return 0
 
 
+_LINE_SUFFIX = re.compile(r":\d+(?:-\d+)?$")
+_PRIOR_ENTRY = re.compile(r"^(turn|counsel)-(\d+)$")
+
+
+def normalise_citations(root: Path, tree: Path, sha: str, citations: list[Any],
+                        inputs: dict[Path, str | None]) -> list[Any]:
+    """Each citation's path as a reader can open it: repository-relative, at
+    sha (#328). A path under the tree counsel read loses that prefix, its
+    :line kept; one of counsel's own temporary inputs is named for what it
+    is (inputs maps its path to the name, None for the prior-readings file,
+    named by the entry the citation's symbol picks); a path outside the
+    tree is kept as written. resolution marks what is not a file at sha:
+    "input", "not_in_repository" or "not_found_at_sha". Nothing is dropped
+    and nothing is rewritten into something else."""
+    prefixes = {tree, tree.resolve()}
+    named = {**inputs, **{k.resolve(): v for k, v in inputs.items()}}
+    out: list[Any] = []
+    for c in citations:
+        path = c.get("path") if isinstance(c, dict) else None
+        if not isinstance(path, str) or not path:
+            out.append(c)
+            continue
+        cite = cast(CounselCitation, dict(c))
+        line = _LINE_SUFFIX.search(path)
+        base, suffix = (path[:line.start()], line.group()) if line else (path, "")
+        if Path(base) in named:
+            label = named[Path(base)]
+            entry = _PRIOR_ENTRY.match(cite.get("symbol") or "")
+            if label is None and entry:
+                label = (f"turn {int(entry[2])}" if entry[1] == "turn"
+                         else f"prior reading counsel-{int(entry[2]):02d}")
+                cite["symbol"] = None
+            cite["path"] = label or "the prior readings"
+            cite["resolution"] = "input"
+            out.append(cite)
+            continue
+        rel: str | None = None
+        if Path(base).is_absolute():
+            rel = next((str(Path(base).relative_to(p)) for p in prefixes
+                        if Path(base).is_relative_to(p)), None)
+        else:
+            norm = os.path.normpath(base)
+            rel = None if norm == "." or norm.startswith("..") else norm
+        if rel is None:
+            cite["resolution"] = "not_in_repository"
+            out.append(cite)
+            continue
+        cite["path"] = rel + suffix
+        try:
+            git(root, "cat-file", "-e", f"{sha}:{rel}")
+        except RuntimeError:
+            cite["resolution"] = "not_found_at_sha"
+        out.append(cite)
+    return out
+
+
 def cmd_counsel(argv: list[str]) -> int:
     root = Path(".").resolve()
     ask: str | None = None
@@ -471,6 +528,7 @@ def _counsel(root: Path, ev: Path, m: dict[str, Any], item_id: str, ask: str | N
     stop_sha = stop_record.get("sha") if stop_record else None
 
     started = time.monotonic()
+    inputs: dict[Path, str | None] = {}
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -492,6 +550,11 @@ def _counsel(root: Path, ev: Path, m: dict[str, Any], item_id: str, ask: str | N
             events_path.write_text("".join(events_file.read_text().splitlines(keepends=True)[-EVENTS_TAIL_LINES:]))
         else:
             events_path.write_text("")
+
+        inputs.update({diff_path: "the diff since approval", checks_path: "the checks",
+                       graph_path: "the graph", events_path: "the events tail", prior_path: None})
+        if hand_log and log_path is not None and record_path is not None:
+            inputs[log_path] = f"the {record_path.stem} log"
 
         env = dict(os.environ)
         env["ATTAVO_SPEC_DIR"] = str(spec_dir)
@@ -540,7 +603,8 @@ def _counsel(root: Path, ev: Path, m: dict[str, Any], item_id: str, ask: str | N
         cost_usd = payload.get("cost_usd")
         cls = payload.get("class")
         verdict = payload.get("verdict")
-        citations = payload.get("citations") or []
+        citations = normalise_citations(root, ev, git(root, "rev-parse", "HEAD").strip(),
+                                        payload.get("citations") or [], inputs)
         proposal = {**proposal, **(payload.get("proposal") or {})}
 
     wall_clock_s = round(time.monotonic() - started, 3)

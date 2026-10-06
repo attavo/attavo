@@ -423,7 +423,7 @@ def test_a_follow_up_is_handed_the_earlier_turns_and_the_events_tail(tmp_path: P
 def test_record_turn_writes_the_record_and_the_next_build_steers_from_it(tmp_path: Path) -> None:
     """#312 change 4: the only way a question becomes a record, and so the
     only way it can steer, is the operator's explicit act. The record
-    validates against counsel/5, carries turn {n, sha256, by}, and the
+    validates against counsel/6, carries turn {n, sha256, by}, and the
     next build is steered from it."""
     root = halted_and_committed(tmp_path)
     assert ask(root, "what should the next attempt do?",
@@ -478,7 +478,7 @@ def test_record_turn_refuses_an_unknown_turn_and_a_missing_by(tmp_path: Path) ->
 
 def test_the_stop_path_still_writes_its_record_with_a_null_turn(tmp_path: Path) -> None:
     """#312 change 5: `attavo counsel N` without --ask is unchanged -- its
-    record is written, and carries turn: null under counsel/5."""
+    record is written, and carries turn: null under counsel/6."""
     root = make_tenant(tmp_path, "build_valid")
     configure_counsel_adapter(root)
     approve_and_halt(root)
@@ -487,13 +487,13 @@ def test_the_stop_path_still_writes_its_record_with_a_null_turn(tmp_path: Path) 
     assert run.returncode == 0, run.stdout + run.stderr
     record = json.loads((records_dir(root) / "counsel-01.json").read_text())
     jsonschema.validate(record, COUNSEL_SCHEMA)
-    assert record["turn"] is None and record["record_version"] == 5
+    assert record["turn"] is None and record["record_version"] == 6
 
 
 def test_the_counsel_schema_is_bumped_and_the_types_mirror_it() -> None:
-    """#312 change 4: counsel/5 adds `turn`; attavo/types.py carries it."""
+    """#312 change 4: counsel/6 adds `turn`; attavo/types.py carries it."""
     from attavo import types
-    assert COUNSEL_SCHEMA["$id"].endswith("/counsel/5")
+    assert COUNSEL_SCHEMA["$id"].endswith("/counsel/6")
     assert "turn" in COUNSEL_SCHEMA["properties"] and "turn" in COUNSEL_SCHEMA["required"]
     assert "turn" in types.CounselRecord.__annotations__
 
