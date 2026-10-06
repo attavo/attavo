@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from attavo.common import MANIFEST, derive_item_id, git, read_manifest
+from attavo import Command
 
 # --- test: the executor's one test command (issue #212) --
 # The tests [tests].select names for every path the item has changed since
@@ -508,3 +509,54 @@ def cmd_test(argv: list[str]) -> int:
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(json.dumps(cache))
     return code
+
+
+COMMANDS = (
+    Command(
+        name='test',
+        run=cmd_test,
+        usage=('attavo test [N] [--all | <test>...] [--fresh]',),
+        rank=190,
+        help=(
+            (100, """\
+test [N] runs the tests [tests].select names for every path the item has
+changed since it left the default branch (refs/remotes/origin/HEAD),
+committed or not and untracked included, paths.records aside, through
+[tests].run (mode mapped, the default). On this repository [tests].run
+excludes, by the pytest.mark.own_records marker and by nothing else, the
+tests that read this repository's own records -- the doctor's proofs
+among them -- since they belong to the doctor job alone. test N <test>... runs exactly the
+named tests instead (mode named), so an executor working on one test runs
+one test; test N --all runs the whole suite through [tests].run with
+"tests" as the one identifier (mode all), the same bound, event, and
+exclusion as the other two. Naming tests and --all together is refused
+(exit 2). It prints how many were selected (or that none was, and runs
+nothing), exits as the run does, and, when [tests].call_timeout_s is
+declared and the run outlasts it, ends the run and everything it started
+and exits 124, printing, in place of the runner's partial output, what
+passed, what failed and what did not run, and the command that narrows it
+(for a tenant that declares [tests].progress; otherwise that the run was
+ended and the narrowing command). Each call that runs takes a slot under
+<common git dir>/attavo/test-slots/ and exports ATTAVO_TEST_WORKERS to
+[tests].run: max(1, cores // calls holding a slot), so items building at
+once share the machine; it prints the workers it took, and a slot whose
+holder died is reaped by its pid. Paths the selector cannot place select the
+whole suite and the selector's reason is printed. It exits 2 when it cannot
+name the changes or the selector fails. A run that exits 0 is cached against a fingerprint of the tree
+(HEAD, the diff against it, and every untracked unignored file's name and
+content hash, together with the mode and the identifiers); asked again on
+an unchanged tree it says so -- unchanged since the earlier run, not
+rerun -- without spending a second on it; --fresh reruns anyway. A
+failing run is never cached, since the next question after one is always
+whether an edit fixed it. [tests].exclude_in_executor names test
+identifiers left out, and said so, when ATTAVO_STAGE is set (inside an
+executor); they run outside one and in CI. When ATTAVO_EVENTS is set, one
+event of kind test is written per invocation, naming the mode, the count
+selected, the exit code, and the seconds spent (or that the answer came
+from the cache). It is the one test command an executor is given (issue
+#212); the product's own transport -- drive, worker, build, verify,
+counsel, file-stops -- refuses to run at all when ATTAVO_STAGE is set,
+since the transport is the pass's, not the executor's."""),
+        ),
+    ),
+)

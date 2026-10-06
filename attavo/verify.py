@@ -39,6 +39,7 @@ from attavo.stops import (
     returned_stop,
     signature_of,
 )
+from attavo import Command
 
 # --- verify: the forge's own read first, a judge only once it is green ---
 
@@ -505,3 +506,37 @@ def poll_forge_checks(root: Path, checks_command: str, sha: str) -> tuple[dict[s
         time.sleep(interval)
         forge_checks, ok = read_forge_checks(root, checks_command, sha)
     return forge_checks, ok
+
+
+COMMANDS = (
+    Command(
+        name='verify',
+        run=cmd_verify,
+        usage=('attavo verify [N]',),
+        rank=60,
+        help=(
+            (110, """\
+verify refuses (exit 1) unless the item's latest build record has
+status pass, and unless the manifest declares [forge].checks_command --
+a tenant command, taking a full commit sha on argv, that prints one
+line per check as "<name> <conclusion>". verify runs it on the build
+record's sha first: any conclusion other than success, neutral, or
+skipped writes verify-NN.json with status returned and calls no
+adapter, because a judge is never spent on a tree the forge already
+called red. With the forge green, verify calls the adapter named by
+[executor].verify (defaulting to [executor].build) with the diff since
+the build's approval, the spec, and the build record, and records its
+findings and its declared "reports" (issue #41). [executor.<adapter>.<stage>] shadows [executor.<adapter>] for
+build or verify alone; both merge parent then stage before setting
+ATTAVO_ADAPTER_CONFIG, and the record's adapter_config is the merged
+result. Like build, every verify record whose status is not pass
+carries stop: {class, provenance, detail} (issue #89); a pass record
+carries stop: null. file-findings opens one tenant issue per finding in
+the item's latest verify record via [forge].file_issue_command, and
+refuses (exit 1, nothing filed) a record carrying a finding with no
+retires. See the verify contract in the project's Phase 2 issue for the
+full rules both enforce."""),
+        ),
+        transport=True,
+    ),
+)

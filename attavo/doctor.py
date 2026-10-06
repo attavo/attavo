@@ -33,6 +33,7 @@ from attavo.stops import (
     recovery_fault,
     rederive_stop,
 )
+from attavo import Command
 
 # --- doctor's three proofs ---
 
@@ -1087,3 +1088,68 @@ def cmd_doctor(argv: list[str]) -> int:
               else f"doctor: not done ({sum(not p.holds for p in proofs)} of "
                    f"{len(proofs)} proofs fail)")
     return 0 if all(p.holds for p in proofs) else 1
+
+
+COMMANDS = (
+    Command(
+        name='doctor',
+        run=cmd_doctor,
+        usage=('attavo doctor [TENANT_ROOT] [--json]',),
+        rank=10,
+        help=(
+            (20, """\
+The doctor is the definition of done. It asserts five proofs against a
+tenant root and exits 1 until every proof holds:
+
+  1. every-gate-rejects      every gate in the manifest's [gates] table,
+                             run against its rejection fixture, exits non-zero,
+                             and carries a non-empty retires
+  2. one-item-every-stage    one work item under paths.records carries a
+                             record for every stage -- spec, approval,
+                             build, verify -- all four introduced by one
+                             merge commit reachable from HEAD
+  3. no-commit-lacks-record  every commit on the default branch after the
+                             manifest was introduced is named by a record's
+                             sha or commits list, or itself writes under
+                             paths.records (a record is committed with the
+                             code it describes; an item's merge commit
+                             carries its own record paths this way)
+  4. no-stop-lacks-cause     every build or verify record under
+                             paths.records at record_version 3 or later,
+                             with a status other than pass, carries a stop
+                             naming an enumerated class and provenance, a
+                             non-empty detail when unclassed, the gates
+                             heading when a build failed after running
+                             them, and the tool's own error line when an
+                             adapter exit ended the log -- records before
+                             record_version 3 are counted and reported,
+                             never refused
+  5. every-attested-item-is-sealed
+                             every merged item that carries a record for
+                             every stage has a statement in the forge's
+                             attestation store for its merge commit, read
+                             through [forge].attestation_command -- a
+                             merge at or before [forge].sealed_since is
+                             named as before the window instead of failed.
+                             [forge].attestation_command exiting 2 means
+                             the store itself could not be read, reported
+                             as not_read by item and never as unsealed
+  6. no-attested-item-is-empty
+                             no attested item is empty: every merged,
+                             fully-staged item's passing build record
+                             names a change, sha not equal to start_sha.
+                             [doctor].built_since names a commit at or
+                             before which merges are named as before the
+                             window instead of failed, so the specimen
+                             that motivated this proof stands on the
+                             record without failing the tenant forever;
+                             absent, the window is proof three's. A build
+                             record with no start_sha is counted as not
+                             readable, never as failed.
+
+Nothing in doctor is a gate. The doctor reads; it never writes and it never
+blocks a merge by itself. It is what CI runs to say whether the product
+is done."""),
+        ),
+    ),
+)

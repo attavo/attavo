@@ -44,6 +44,7 @@ from attavo.common import MANIFEST, read_manifest
 from attavo.issues import Issue, read_issues
 from attavo.plan import BACKLOG, DOC
 from attavo.records import RecordItemMismatch, _load_record
+from attavo import Command
 
 ORDER = ("epic rank, then issue rank within the epic; an open issue the plan does not place "
          "is Backlog, last, by number")
@@ -282,3 +283,29 @@ def cmd_frontier(argv: list[str]) -> int:
         for x in out["not_placed"]:
             print(f"  #{x['issue']} {x['title']}: {'; '.join(x['why'])}")
     return 0
+
+
+COMMANDS = (
+    Command(
+        name='frontier',
+        run=cmd_frontier,
+        usage=('attavo frontier [--json]',),
+        rank=170,
+        help=(
+            (90, """\
+frontier [--json] builds the waves from three reads and writes nothing:
+the plan's latest version in the store (the order: epic rank, then issue
+rank; an open issue the plan does not place is Backlog, last), the
+tenant's issues through [forge].issues_command (state, class), the
+plan's claims for an issue with no spec, and work in flight from git
+(wave 0, whose branch claims govern once an item's branch exists). Wave 1 takes each open issue in
+order whose predecessors are closed or placed, whose claims overlap
+nothing held in flight or already in the wave, and nothing an open issue
+ranked above it claims (strict opportunism); each later wave does the
+same as if the earlier ones had merged. An issue with no claims in the
+plan is not placed. Each placed issue says where its claims came from (claims_from:
+store or branch). Every issue says why it waits. Epic progress is closed over
+total. No plan, or no issues command, is "not read", exit 2."""),
+        ),
+    ),
+)

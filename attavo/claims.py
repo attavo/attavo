@@ -31,6 +31,7 @@ from typing import Any
 
 from attavo.common import MANIFEST, read_manifest
 from attavo.spec import parse_spec
+from attavo import Command
 
 WILDCARDS = "*?["
 ITEM_BRANCH = re.compile(r"^attavo/(\d+)-")
@@ -160,3 +161,26 @@ def cmd_claims(argv: list[str]) -> int:
             else:
                 print(f"item {item}: no collision with work in flight")
     return 1 if found else 0
+
+
+COMMANDS = (
+    Command(
+        name='claims',
+        run=cmd_claims,
+        usage=('attavo claims [N] [--json]',),
+        rank=150,
+        help=(
+            (70, """\
+claims [N] [--json] reads what is in flight from git alone: every branch
+under refs/remotes/origin/ not yet on the default branch
+(refs/remotes/origin/HEAD), with the paths it changes outside
+paths.records and paths.specs and, when it carries an item's spec, that
+spec's Claims. Without N it lists only: it never takes the item from the
+current branch or from ATTAVO_ITEM. With an item, it compares the item's Claims with every
+other branch in flight, names each overlap by branch and path, and exits
+1 when there is one. A claim is a glob; two claims overlap when either
+matches the other or their literal prefixes nest. It writes nothing and
+gates nothing: run it before filing or starting an item."""),
+        ),
+    ),
+)
