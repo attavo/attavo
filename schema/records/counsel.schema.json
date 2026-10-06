@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/schema/records/counsel/5",
+  "$id": "https://attavo.dev/schema/records/counsel/6",
   "title": "attavo counsel record (counsel-NN.json)",
   "type": "object",
   "additionalProperties": false,
@@ -68,7 +68,7 @@
     },
     "citations": {
       "type": "array",
-      "description": "instruction, mechanism, guard -- each a path and symbol or a ruling id.",
+      "description": "instruction, mechanism, guard -- each a repository-relative path and symbol or a ruling id (#328).",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -77,7 +77,12 @@
           "kind": {"type": "string", "enum": ["instruction", "mechanism", "guard"]},
           "path": {"type": ["string", "null"]},
           "symbol": {"type": ["string", "null"]},
-          "ruling_id": {"type": ["string", "null"]}
+          "ruling_id": {"type": ["string", "null"]},
+          "resolution": {
+            "type": "string",
+            "enum": ["input", "not_in_repository", "not_found_at_sha"],
+            "description": "Absent when path is a file of the repository at this record's sha (a path is repository-relative, with any :line kept). \"input\": path names one of counsel's own temporary inputs (turn N, the events tail, a prior reading). \"not_in_repository\": path was outside the tree counsel read and is kept as written. \"not_found_at_sha\": path is inside that tree but is not a file at sha."
+          }
         }
       }
     },
