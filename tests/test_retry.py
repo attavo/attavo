@@ -24,6 +24,7 @@ from typing import Any
 from helpers import commit_all, git, make_tenant
 from test_drive import (
     GREEN_FORGE,
+    KILL_SELF,
     add_bare_remote,
     add_forge,
     approve_item,
@@ -141,12 +142,12 @@ def test_died_and_hung_retry_on_the_next_pass(tmp_path: Path) -> None:
     recovered it, with no wait and no counsel; the retried record names
     what it retries."""
     prelude = ('  if [ ! -f "$ATTAVO_RECORDS_DIR/build-01.json" ]; then\n'
-               "    kill -9 $PPID\n    sleep 3\n  fi")
+               "    " + KILL_SELF + "\n    sleep 3\n  fi")
     root, bare = approved_tenant(tmp_path, prelude)
-    assert run_attavo(root, "drive", "1", env=FAST).returncode == 0
-    passes_until(root, lambda: (records_dir(root) / "build-01.json").exists())
+    assert run_attavo(root, "drive", "1", env=FAST, killed=True).returncode == 0
+    passes_until(root, lambda: (records_dir(root) / "build-01.json").exists(), killed=True)
     assert stop_of(root, "build", 1)["class"] == "died"
-    passes_until(root, lambda: len(record_files(root, "build")) == 2)
+    passes_until(root, lambda: len(record_files(root, "build")) == 2, killed=True)
     rec = latest_record(root, "build")
     assert rec["status"] == "pass" and rec["retry_of"] == "build-01", rec
     assert counsel_records(root) == []
@@ -308,12 +309,12 @@ def test_identical_failures_stop_early_and_the_budget_holds(tmp_path: Path) -> N
     starts."""
     same = ('  at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"\n'
             '  printf \'{"at":"%s","kind":"tool_call","text":"fixture-tool waiting on lock 4471"}\\n\' "$at" >> "$ATTAVO_EVENTS"\n'
-            "  kill -9 $PPID\n  sleep 3")
+            "  " + KILL_SELF + "\n  sleep 3")
     root, bare = approved_tenant(tmp_path / "same", same)
-    passes_until(root, lambda: len(record_files(root, "build")) == 2)
+    passes_until(root, lambda: len(record_files(root, "build")) == 2, killed=True)
     wait_for(lambda: pushed(bare, "build record for item 1 (build-02)"), "build-02's record on origin")
     for _ in range(6):
-        run_attavo(root, "drive", "1", env=FAST)
+        run_attavo(root, "drive", "1", env=FAST, killed=True)
     assert len(record_files(root, "build")) == 2
     assert not (records_dir(root) / "build-03.started").exists()
     assert stop_of(root, "build", 1)["signature"] == stop_of(root, "build", 2)["signature"]
@@ -321,12 +322,12 @@ def test_identical_failures_stop_early_and_the_budget_holds(tmp_path: Path) -> N
     differ = ('  at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"\n'
               '  n=$(ls "$ATTAVO_RECORDS_DIR" | grep -c "^build-.*\\.started$")\n'
               '  printf \'{"at":"%s","kind":"tool_call","text":"fixture-tool step %s of the plan"}\\n\' "$at" "$(printf "%s" "$n" | tr 0-9 a-j)" >> "$ATTAVO_EVENTS"\n'
-              "  kill -9 $PPID\n  sleep 3")
+              "  " + KILL_SELF + "\n  sleep 3")
     root2, bare2 = approved_tenant(tmp_path / "differ", differ)
-    passes_until(root2, lambda: len(record_files(root2, "build")) == 3)
+    passes_until(root2, lambda: len(record_files(root2, "build")) == 3, killed=True)
     wait_for(lambda: pushed(bare2, "build record for item 1 (build-03)"), "build-03's record on origin")
     for _ in range(6):
-        run_attavo(root2, "drive", "1", env=FAST)
+        run_attavo(root2, "drive", "1", env=FAST, killed=True)
     assert len(record_files(root2, "build")) == 3
     assert not (records_dir(root2) / "build-04.started").exists()
     out = report(root2)
@@ -338,14 +339,14 @@ def test_every_marker_spends_the_budget(tmp_path: Path) -> None:
     one transient attempt spend the budget and a third never starts,
     though the two signatures differ."""
     prelude = ('  n=$(ls "$ATTAVO_RECORDS_DIR" | grep -c "^build-.*\\.started$")\n'
-               '  if [ "$n" = 1 ]; then kill -9 $PPID; sleep 3; fi\n'
+               '  if [ "$n" = 1 ]; then ' + KILL_SELF + '; sleep 3; fi\n'
                f'  if [ "$n" = 2 ]; then echo \'{TRANSIENT_LINE}\'; exit 1; fi')
     root, bare = approved_tenant(tmp_path, prelude, attempts=2)
-    passes_until(root, lambda: len(record_files(root, "build")) == 2)
+    passes_until(root, lambda: len(record_files(root, "build")) == 2, killed=True)
     # the record is in the copy before the worker has pushed it; a pass in between is refused
     wait_for(lambda: pushed(bare, "build record for item 1 (build-02)"), "build-02's record on origin")
     for _ in range(6):
-        run_attavo(root, "drive", "1", env=FAST)
+        run_attavo(root, "drive", "1", env=FAST, killed=True)
     assert len(record_files(root, "build")) == 2
     assert not (records_dir(root) / "build-03.started").exists()
     out = report(root)
@@ -380,17 +381,17 @@ def test_again_resets_a_spent_budget_only(tmp_path: Path) -> None:
     says the pass retries on its own."""
     same = ('  at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"\n'
             '  printf \'{"at":"%s","kind":"tool_call","text":"fixture-tool waiting on lock"}\\n\' "$at" >> "$ATTAVO_EVENTS"\n'
-            "  kill -9 $PPID\n  sleep 3")
+            "  " + KILL_SELF + "\n  sleep 3")
     root, bare = approved_tenant(tmp_path, same)
-    passes_until(root, lambda: len(record_files(root, "build")) == 1)
-    inside = run_attavo(root, "drive", "1", "--again", "--by", "alice", env=FAST)
+    passes_until(root, lambda: len(record_files(root, "build")) == 1, killed=True)
+    inside = run_attavo(root, "drive", "1", "--again", "--by", "alice", env=FAST, killed=True)
     assert inside.returncode == 0 and "retries on its own" in inside.stdout, inside.stdout
-    passes_until(root, lambda: len(record_files(root, "build")) == 2)
+    passes_until(root, lambda: len(record_files(root, "build")) == 2, killed=True)
     wait_for(lambda: pushed(bare, "build record for item 1 (build-02)"), "build-02's record on origin")
     for _ in range(3):
-        run_attavo(root, "drive", "1", env=FAST)
+        run_attavo(root, "drive", "1", env=FAST, killed=True)
     assert len(record_files(root, "build")) == 2
-    again = run_attavo(root, "drive", "1", "--again", "--by", "alice", env=FAST)
+    again = run_attavo(root, "drive", "1", "--again", "--by", "alice", env=FAST, killed=True)
     assert again.returncode == 0 and "Build started" in again.stdout, again.stdout
     marker = json.loads((records_dir(root) / "build-03.started").read_text())
     assert marker.get("again_by") == "alice", marker

@@ -57,14 +57,14 @@ def pushed(bare: Path, subject: str) -> bool:
     return subject in log
 
 
-def passes_until(root: Path, pred: Any, env: dict[str, str] | None = None) -> None:
+def passes_until(root: Path, pred: Any, env: dict[str, str] | None = None, killed: bool = False) -> None:
     """Passes, spaced, until pred holds: how an operator's loop, the
     screen's poll, or a scheduler line would drive the item."""
     full = dict(FAST)
     full.update(env or {})
 
     def a_pass_then_the_fact() -> bool:
-        run_attavo(root, "drive", "1", env=full)
+        run_attavo(root, "drive", "1", env=full, killed=killed)
         return bool(pred())
 
     wait_for(a_pass_then_the_fact, "a pass to bring about the condition", looks=360, pause_s=0.5)

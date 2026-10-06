@@ -108,33 +108,41 @@ def decide_dead_workers(root: Path, beats_of: Path | None = None) -> None:
             clock_file.write_text(str(stale_at))
 
 
+KILL_SELF = 'touch "$ATTAVO_CLOCK_FILE.killed.$PPID"; kill -9 $PPID'
+
+
+def decide_self_killed(root: Path) -> None:
+    """The worker an adapter killed (KILL_SELF) wrote its own pid's marker
+    first, so its death is a fact the adapter left, not one read off a
+    gone pid: a worker that ended any other way has no marker and is never
+    declared dead. Once the pid is gone the clock goes past three beats."""
+    clock_file = held_clock(root)
+    for marker in clock_file.parent.glob(f"{clock_file.name}.killed.*"):
+        pid = int(marker.name.rsplit(".", 1)[1])
+        wait_for(lambda: not pid_alive(pid), f"pid {pid}, which killed itself, to be gone")
+        decide_dead_workers(root)
+
+
 def utc_stamp(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None,
-               timeout: float = 300) -> subprocess.CompletedProcess[str]:
-    """`timeout` is a hang guard, not an assertion on speed: a run that
+               timeout: float = 300, killed: bool = False) -> subprocess.CompletedProcess[str]:
+    """No death is declared here unless the test says a worker it had an
+    adapter kill is dead (`killed`, decide_self_killed): a happy-path run has
+    none declared for it, whatever a scheduler does.
+    `timeout` is a hang guard, not an assertion on speed: a run that
     needs it has not finished at all, and says what it was waiting for."""
     full_env = dict(os.environ)
     full_env.update(FAST_POLL_ENV)
     full_env["ATTAVO_CLOCK_FILE"] = str(held_clock(root))
-    decide_dead_workers(root)
+    if killed:
+        decide_self_killed(root)
     if env:
         full_env.update(env)
     proc = subprocess.Popen([sys.executable, str(ATTAVO), *args], cwd=str(root), stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, env=full_env)
-    over = threading.Event()
-
-    def decide_while_it_runs() -> None:
-        """A process that loops (--until-ready) outlives the moment a worker it started dies, and on a
-        held clock nothing else would ever say so: the fact is decided again for as long as it runs."""
-        while not over.wait(0.2):
-            decide_dead_workers(root)
-
-    watcher = threading.Thread(target=decide_while_it_runs, daemon=True)
-    if "--until-ready" in args:
-        watcher.start()
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -145,8 +153,6 @@ def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None,
             f"{held_clock(root).read_text()}: a poll of the forge ends when a read concludes or when a read "
             f"advances ATTAVO_CLOCK_FILE past the poll bound, and a worker that died is judged so when the "
             f"clock passes three beats; none of those happened. stdout so far: {out!r}") from None
-    finally:
-        over.set()
     return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
 
 
@@ -742,6 +748,67 @@ def test_drive_pass_turns_a_red_forge_on_a_passed_build_into_a_returned_record(t
     assert latest_record(root, "build")["retry_of"] == "build-01"
     assert record_files(root, "counsel") == []
 
+
+
+def test_a_worker_that_ends_normally_is_never_declared_dead_while_the_pass_runs(tmp_path: Path) -> None:
+    """Rejection test (#332, CI on #335). A happy-path --until-ready run: the
+    build worker ends normally, so its pid is gone and its heartbeat is still
+    on disk, while the pass goes on to a review that the test holds (a file).
+    A helper that read a gone pid as a death and pushed the held clock past
+    three beats would make the live review's beat stale and write a died
+    record. No death is declared for this run, so it reaches ready with none.
+    The window is made by the held review, never by how fast a machine is."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_bare_remote(root, tmp_path)
+    approve_item(root)
+    release = tmp_path / "release"
+    d = root / "attavo" / "adapters" / "held"
+    d.mkdir(parents=True)
+    (d / "run").write_text(
+        "#!/bin/sh\nset -eu\n"
+        'if [ "${ATTAVO_STAGE:-build}" = "verify" ]; then\n'
+        f'  n=0; while [ ! -f "{release}" ] && [ "$n" -lt 1200 ]; do sleep 0.1; n=$((n+1)); done\n'
+        '  printf \'{"model":"held","model_version":null,"adapter_version":"held-1",'
+        '"tokens":{"input":1,"output":1},"cost_usd":0.0,"findings":[],"tests_named":[]}\\n\'\n'
+        "  exit 0\nfi\n"
+        "echo built > built.txt\ngit add built.txt\ngit commit -q -m 'held: write built.txt'\n"
+        'echo \'{"status":"done","question":null,"model":"held","model_version":null,'
+        '"adapter_version":"held-1","tokens":{"input":1,"output":1},"cost_usd":0.0}\'\n')
+    (d / "run").chmod(0o755)
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace('build = "fixture"', 'build = "held"').replace('verify = "fixture"', 'verify = "held"'))
+    commit_all(root, "use a held adapter")
+
+    full_env = dict(os.environ)
+    full_env.update(FAST_POLL_ENV)
+    full_env["ATTAVO_CLOCK_FILE"] = str(held_clock(root))
+    clock_before = held_clock(root).read_text()
+    proc = subprocess.Popen([sys.executable, str(ATTAVO), "drive", "1", "--until-ready"], cwd=str(root),
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=full_env)
+    try:
+        from attavo.doctor import heartbeat_pid
+        from attavo.events import stage_events_dir
+        beats = lambda: sorted(stage_events_dir(root).glob("*.heartbeat"))  # noqa: E731
+        wait_for(lambda: len(beats()) == 2, "both stages' heartbeats on disk: the build's, and the held review's")
+        build_pid = heartbeat_pid(beats()[0])
+        assert build_pid is not None
+        wait_for(lambda: not pid_alive(build_pid), "the build worker, which ended normally, to be gone")
+        review_beat = beats()[1]
+        first = review_beat.stat().st_mtime_ns
+        wait_for(lambda: review_beat.stat().st_mtime_ns != first, "the held review's heartbeat to beat again")
+        assert proc.poll() is None, "the pass ended while the review was held"
+        assert held_clock(root).read_text() == clock_before, "a death was declared for a worker that ended normally"
+        release.write_text("go\n")
+        out, _ = proc.communicate(timeout=300)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 0, out
+    assert "ready to merge" in out.lower(), out
+    assert "as died" not in out, out
+    assert [r for r in record_files(root, "build") + record_files(root, "verify")
+            if (json.loads(r.read_text()).get("stop") or {}).get("class") == "died"] == []
 
 
 def test_drive_until_ready_waits_out_the_bound_on_a_forge_still_running(tmp_path: Path) -> None:
