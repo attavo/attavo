@@ -39,6 +39,8 @@ class Stop(_StopRequired, _StopOptional):
 
 class _SpecOptional(TypedDict, total=False):
     # Written from spec/3 on (ruled 2026-09-27); records before it carry neither.
+    # Each entry of `criteria` carries `kind` ("behavioural" | "structural")
+    # from spec/4 on; an older entry carries none and was structural.
     # "class" is a Python keyword, hence the functional form below.
     research: str
 
