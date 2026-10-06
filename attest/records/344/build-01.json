@@ -1,0 +1,62 @@
+{
+  "sha": "a2b5f4c18cf38d6157b45b4320623241273e17a5",
+  "start_sha": "1004702fb7ab51d48661d050a697d8adde841bb0",
+  "spec_sha": "eb065925df63ae421b0bda0e9b30b02601ed9f34",
+  "approval_sha": "113fb7e93628d165c1b46b4a25efb206c0ca2fff",
+  "at": "2026-10-06T22:25:24Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.292 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "the-rejection-test-exists.sh",
+      "exit": 0
+    },
+    {
+      "name": "a-spec-with-no-criteria-is-refused.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q -n ${ATTAVO_TEST_WORKERS:-auto} -m 'not own_records'",
+    "count": 17,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 506308,
+    "output": 7539
+  },
+  "cost_usd": 0.33251300000000006,
+  "wall_clock_s": 330.807,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "refusal_kind": null,
+  "report_class": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 12,
+  "item": "344",
+  "product_version": "v0.34.0-2-g197d622",
+  "product_pin": "v0.34.0"
+}
