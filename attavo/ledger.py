@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from attavo.build import commits_with_diffs, driver_identity
-from attavo.common import MANIFEST, STAGES, git, read_manifest
+from attavo.common import MANIFEST, STAGES, git, read_manifest, git_env
 from attavo.doctor import INVOCATION_MARKER_SUFFIX, _merges_reachable, merge_introducing_records
 from attavo.records import RECORD_RE, _load_record
 from attavo.stops import item_stops
@@ -66,7 +66,7 @@ def _record_blobs_at(root: Path, specs: list[tuple[str, str]], item_id: str) -> 
         return {}
     stdin = "".join(f"{sha}:{relpath}\n" for sha, relpath in specs)
     out = subprocess.run(["git", "-C", str(root), "cat-file", "--batch"],
-                         input=stdin.encode(), capture_output=True, check=False)
+                         input=stdin.encode(), capture_output=True, check=False, env=git_env())
     data = out.stdout
     pos = 0
     result: dict[tuple[str, str], dict[str, Any]] = {}

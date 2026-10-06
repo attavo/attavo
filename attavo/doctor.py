@@ -20,6 +20,7 @@ from attavo.common import (
     git,
     product_version,
     read_manifest,
+    git_env,
 )
 from attavo.events import stage_events_dir
 from attavo.records import RECORD_RE, load_records, parse_attempts
@@ -102,14 +103,14 @@ def _merges_reachable(root: Path, ref: str | None = None) -> tuple[list[dict[str
     them, in the same order, newest first."""
     symref = subprocess.run(
         ["git", "-C", str(root), "symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
-        capture_output=True, text=True, check=False)
+        capture_output=True, text=True, check=False, env=git_env())
     if symref.returncode != 0:
         return [], "refs/remotes/origin/HEAD is not set; run `git remote set-head origin -a`"
     default_remote_ref = symref.stdout.strip()
     default_branch = default_remote_ref.rsplit("/", 1)[-1]
     current_branch = subprocess.run(
         ["git", "-C", str(root), "symbolic-ref", "-q", "--short", "HEAD"],
-        capture_output=True, text=True, check=False)
+        capture_output=True, text=True, check=False, env=git_env())
     default_ref = ref or ("HEAD" if current_branch.returncode == 0
                           and current_branch.stdout.strip() == default_branch
                           else default_remote_ref)
@@ -810,7 +811,7 @@ def statement_for(root: Path, cmd: str, merge_sha: str) -> tuple[dict[str, Any] 
 
 def _is_ancestor(root: Path, earlier: str, later: str) -> bool:
     run = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", earlier, later],
-                         capture_output=True, check=False)
+                         capture_output=True, check=False, env=git_env())
     return run.returncode == 0
 
 

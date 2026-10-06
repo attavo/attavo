@@ -20,7 +20,7 @@ from attavo.build import (
     resolve_adapter,
     split_adapter_stdout,
 )
-from attavo.common import MANIFEST, PRODUCT_ROOT, derive_item_id, git, now_iso, read_manifest
+from attavo.common import MANIFEST, PRODUCT_ROOT, derive_item_id, git, now_iso, read_manifest, git_env
 from attavo.records import latest_attempt_path, latest_record, parse_attempts, write_record
 from attavo.types import CounselCitation, SpecRecord, StageRecord
 from attavo.verify import diff_since_approval, read_forge_checks
@@ -171,7 +171,7 @@ def counsel_graph_text(root: Path, m: dict[str, Any], item_id: str, sha: str | N
 
     symref = subprocess.run(
         ["git", "-C", str(root), "symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
-        capture_output=True, text=True, check=False)
+        capture_output=True, text=True, check=False, env=git_env())
     default_ref = symref.stdout.strip() if symref.returncode == 0 else None
 
     if default_ref:

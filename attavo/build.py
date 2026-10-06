@@ -23,6 +23,7 @@ from attavo.common import (
     last_commit_touching,
     now_iso,
     read_manifest,
+    git_env,
 )
 from attavo.events import append_event, stage_events_dir
 from attavo.records import latest_record, next_attempt_number, parse_attempts, write_record
@@ -111,12 +112,12 @@ def build_is_empty(root: Path, approval_sha: str, sha: str, claims: list[str]) -
     known, not asserted."""
     for commit in (approval_sha, sha):
         resolved = subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{commit}^{{commit}}"],
-                                  capture_output=True, text=True, check=False)
+                                  capture_output=True, text=True, check=False, env=git_env())
         if resolved.returncode != 0:
             return None
     pathspec = claims if claims else ["."]
     out = subprocess.run(["git", "-C", str(root), "diff", "--quiet", approval_sha, sha,
-                          "--", *pathspec], capture_output=True, text=True, check=False)
+                          "--", *pathspec], capture_output=True, text=True, check=False, env=git_env())
     if out.returncode not in (0, 1):
         return None
     return out.returncode == 0
@@ -565,7 +566,7 @@ def cmd_build(argv: list[str]) -> int:
             # refusal, named, before any path is read against it.
             rewound = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor",
                                       start_sha, "HEAD"],
-                                     capture_output=True, text=True, check=False).returncode != 0
+                                     capture_output=True, text=True, check=False, env=git_env()).returncode != 0
             if rewound:
                 status_out = "refused"
                 refusal = (f"HEAD no longer contains {start_sha[:12]}, the commit this stage "
