@@ -1574,6 +1574,55 @@ def test_the_worker_writes_its_own_pid_as_the_heartbeat_content(tmp_path: Path) 
     wait_for(lambda: not pid_alive(worker_pid), f"worker pid {worker_pid} to end")
 
 
+def test_the_pass_writes_the_workers_first_heartbeat_before_it_says_the_worker_started(
+        tmp_path: Path, monkeypatch: Any) -> None:
+    """Rejection test (CI on #335). A marker from this host with no heartbeat
+    file reads as died, so a worker that has not yet run its first line of
+    code was recovered as died by the next pass (--until-ready passes again
+    after a short interval; on a loaded or slow-starting host the worker is
+    not there yet): liveness by proxy, "no first beat yet" read as "never
+    lived". The pass writes the first heartbeat itself, naming the worker's
+    pid, before it prints "started". The worker here is held before any code
+    of its own runs (a sitecustomize that waits on a file, for the worker
+    only), so the heartbeat is the pass's, and no timing decides it."""
+    import re
+    from attavo import drive
+
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_bare_remote(root, tmp_path)
+    slow_build_adapter(root)
+    approve_item(root)
+
+    hold = tmp_path / "worker-hold"
+    boot = tmp_path / "boot"
+    boot.mkdir()
+    (boot / "sitecustomize.py").write_text(
+        "import os\n"
+        "import threading\n"
+        "if os.environ.get('HOLD_WORKER_FILE') and os.getppid() != int(os.environ['HOLD_WORKER_TEST_PID']):\n"
+        "    pace = threading.Event()\n"
+        "    for _ in range(1200):\n"
+        "        if os.path.exists(os.environ['HOLD_WORKER_FILE']):\n"
+        "            break\n"
+        "        pace.wait(0.1)\n")
+    env = {"HOLD_WORKER_FILE": str(hold), "HOLD_WORKER_TEST_PID": str(os.getpid()),
+           "PYTHONPATH": f"{boot}{os.pathsep}{os.environ.get('PYTHONPATH', '')}"}
+    run = run_attavo(root, "drive", "1", env=env)
+    assert run.returncode == 0, run.stdout + run.stderr
+    pid = int(re.search(r"worker pid (\d+)", run.stdout).group(1))  # type: ignore[union-attr]
+    try:
+        beat = heartbeat_file(root)
+        assert beat.exists() and beat.read_text() == f"{pid}\n", "the pass said started with no heartbeat naming the worker"
+        marker = records_dir(root) / "build-01.started"
+        monkeypatch.setenv("ATTAVO_CLOCK_FILE", str(held_clock(root)))
+        assert drive.read_invocation(root, None, marker, json.loads(marker.read_text())).cls == "running"
+    finally:
+        hold.write_text("go\n")
+        release(root)
+    wait_for(lambda: not pid_alive(pid), f"worker pid {pid} to end")
+
+
 def test_hung_recovery_signals_the_pid_the_heartbeat_names(tmp_path: Path) -> None:
     """The hung recovery used to signal the marker's pid -- the driver's,
     long gone -- and report "terminated" over a live hung worker. It
