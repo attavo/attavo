@@ -692,6 +692,14 @@ def _start_stage(root: Path, m: dict[str, Any], item_id: str, stage: str,
             [sys.executable, str(PRODUCT_ROOT / "bin" / "attavo"), "worker", item_id, stage, f"{nn:02d}"],
             cwd=str(root), env=env, stdin=devnull, stdout=fh, stderr=subprocess.STDOUT,
             start_new_session=True)
+    # The worker's first heartbeat, written here: a marker from this host
+    # with no heartbeat file reads as died, and a worker that has not yet
+    # run its first line has none. "No first beat yet" is not "never
+    # lived"; with this, no heartbeat from this host means the worker never
+    # started. The worker rewrites the same file with the same pid.
+    beat = heartbeat_path(root, stage, nn)
+    beat.parent.mkdir(parents=True, exist_ok=True)
+    beat.write_text(f"{proc.pid}\n")
     word = "Build" if stage == "build" else "Review"
     print(f"attavo drive: {word} started (attempt {nn:02d}, worker pid {proc.pid})")
     return 0
@@ -962,8 +970,8 @@ def _until_ready(root: Path, m: dict[str, Any], item_id: str, again: str | None)
 
         if state == "waiting-on-checks":
             if waiting_since is None:
-                waiting_since = time.monotonic()
-            elif time.monotonic() - waiting_since >= bound:
+                waiting_since = clock.now()
+            elif clock.now() - waiting_since >= bound:
                 print(f"attavo drive: stopped: the checks did not conclude within {bound:.0f}s")
                 return 1
         else:

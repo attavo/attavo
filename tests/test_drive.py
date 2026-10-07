@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import IO, Any, cast
 
 from helpers import commit_all as _commit_all
-from helpers import git, make_tenant
+from helpers import git, make_tenant, wait_for
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -50,19 +50,23 @@ GREEN_FORGE = "printf 'ci success\\n'"
 # the one still running for the bound, but stops on the first read of a
 # check that has already concluded, whether or not it passed.
 RED_FORGE = "printf 'ci failure\\n'"
-UNCONCLUDED_FORGE = "printf 'ci in_progress\\n'"
+# Each read of a forge that has not concluded is a hundred seconds on the held
+# clock the product process reads (ATTAVO_CLOCK_FILE): the poll's bound is
+# crossed by reads, never by waiting, and the number of reads is a fact.
+TICK = "echo $(( $(cut -d. -f1 $ATTAVO_CLOCK_FILE) + 100 )) > $ATTAVO_CLOCK_FILE"
+UNCONCLUDED_FORGE = f"{TICK}; printf 'ci in_progress\\n'"
 
 # The real defaults (ATTAVO_DRIVE_POLL_BOUND_S=600, _INTERVAL_S=20) are a
 # real forge's clock, not a test's -- tenant zero's own checks conclude
-# about five minutes after a push. Every `attavo drive` call here runs
-# against this much shorter clock instead, read at call time from the
-# same environment variables; test_drive_forge_poll_defaults_are_a_real_
-# forges_clock is the one test that leaves them unset, to assert the
-# defaults themselves. The interval is kept well above typical subprocess
-# startup overhead so a zero-sleep stop and a polled one are easy to tell
-# apart by wall clock alone.
-FAST_POLL_ENV = {"ATTAVO_DRIVE_POLL_BOUND_S": "0.9", "ATTAVO_DRIVE_POLL_INTERVAL_S": "0.5",
-                 "ATTAVO_HEARTBEAT_S": "0.2"}
+# about five minutes after a push. Every `attavo drive` call here judges the
+# bound on the held clock (a forge that has not concluded advances it, TICK)
+# and paces its looks at the forge by a short interval, which judges nothing;
+# test_drive_forge_poll_defaults_are_a_real_forges_clock is the one test that
+# asserts the defaults themselves. The heartbeat's beat is real time, but
+# what the beat means (running or died) is judged on the held clock, so its
+# length decides only how soon a test sees the next beat.
+BEAT_S = 1
+FAST_POLL_ENV = {"ATTAVO_DRIVE_POLL_INTERVAL_S": "0.05", "ATTAVO_HEARTBEAT_S": str(BEAT_S)}
 
 
 def held_clock(root: Path, at: float | None = None) -> Path:
@@ -100,28 +104,88 @@ def decide_dead_workers(root: Path, beats_of: Path | None = None) -> None:
             pass
         except PermissionError:
             continue
-        stale_at = beat.stat().st_mtime + 0.7
+        stale_at = beat.stat().st_mtime + 3 * BEAT_S + 0.1
         if float(clock_file.read_text()) < stale_at:
             clock_file.write_text(str(stale_at))
+
+
+KILL_SELF = 'touch "$ATTAVO_CLOCK_FILE.killed.$PPID"; kill -9 $PPID'
+
+
+def decide_self_killed(root: Path) -> None:
+    """The worker an adapter killed (KILL_SELF) wrote its own pid's marker
+    first, so its death is a fact the adapter left, not one read off a
+    gone pid: a worker that ended any other way has no marker and is never
+    declared dead. Once the pid is gone the clock goes past three beats."""
+    clock_file = held_clock(root)
+    for marker in clock_file.parent.glob(f"{clock_file.name}.killed.*"):
+        pid = int(marker.name.rsplit(".", 1)[1])
+        wait_for(lambda: not pid_alive(pid), f"pid {pid}, which killed itself, to be gone")
+        decide_dead_workers(root)
 
 
 def utc_stamp(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def hang_evidence(root: Path) -> str:
+    """Diagnosis only, read when the hang guard fires: what the stage
+    left behind. It asserts nothing and declares nothing."""
+    from attavo.doctor import heartbeat_pid
+    from attavo.events import stage_events_dir
+
+    def sh(*cmd: str) -> str:
+        done = subprocess.run(list(cmd), capture_output=True, text=True)
+        return (done.stdout + done.stderr).strip()
+
+    parts = []
+    events = stage_events_dir(root)
+    for log in sorted(events.glob("*.worker.log")):
+        parts.append(f"--- {log.name} (last 80 lines)\n" + "\n".join(log.read_text(errors="replace").splitlines()[-80:]))
+    for beat in sorted(events.glob("*.heartbeat")):
+        pid = heartbeat_pid(beat)
+        alive = None if pid is None else pid_alive(pid)
+        parts.append(f"--- {beat.name}: pid {pid}, alive {alive}, last touched {beat.stat().st_mtime}")
+    parts.append("--- records/1/ in the checkout\n" + "\n".join(
+        sorted(str(f.relative_to(root)) for f in root.glob("**/records/1/*") if ".git" not in f.parts)))
+    parts.append("--- git status --short\n" + sh("git", "-C", str(root), "status", "--short"))
+    branch = sh("git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD")
+    bare = sh("git", "-C", str(root), "remote", "get-url", "origin")
+    parts.append(f"--- checkout HEAD {sh('git', '-C', str(root), 'rev-parse', 'HEAD')} on {branch}\n"
+                 + sh("git", "-C", str(root), "log", "--oneline", "-3"))
+    parts.append(f"--- origin {branch} {sh('git', '-C', bare, 'rev-parse', branch)}\n"
+                 + sh("git", "-C", bare, "log", "--oneline", "-3", branch))
+    return "\n".join(parts)
+
+
 def run_attavo(root: Path, *args: str, env: dict[str, Any] | None = None,
-               timeout: float | None = None) -> subprocess.CompletedProcess[str]:
-    """`timeout` is a hang guard, not an assertion on speed: a run that
-    needs it has not finished at all (subprocess.TimeoutExpired)."""
+               timeout: float = 300, killed: bool = False) -> subprocess.CompletedProcess[str]:
+    """No death is declared here unless the test says a worker it had an
+    adapter kill is dead (`killed`, decide_self_killed): a happy-path run has
+    none declared for it, whatever a scheduler does.
+    `timeout` is a hang guard, not an assertion on speed: a run that
+    needs it has not finished at all, and says what it was waiting for."""
     full_env = dict(os.environ)
     full_env.update(FAST_POLL_ENV)
     full_env["ATTAVO_CLOCK_FILE"] = str(held_clock(root))
-    decide_dead_workers(root)
+    if killed:
+        decide_self_killed(root)
     if env:
         full_env.update(env)
-    return subprocess.run([sys.executable, str(ATTAVO), *args], cwd=str(root),
-                          capture_output=True, text=True, check=False, env=full_env,
-                          timeout=timeout)
+    proc = subprocess.Popen([sys.executable, str(ATTAVO), *args], cwd=str(root), stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, env=full_env)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, err = proc.communicate()
+        raise AssertionError(
+            f"attavo {' '.join(args)} had not returned after {timeout:.0f} s. The clock it reads is held at "
+            f"{held_clock(root).read_text()}: a poll of the forge ends when a read concludes or when a read "
+            f"advances ATTAVO_CLOCK_FILE past the poll bound, and a worker that died is judged so when the "
+            f"clock passes three beats; none of those happened. stdout so far: {out!r}\n"
+            f"{hang_evidence(root)}") from None
+    return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
 
 
 def drive(root: Path, *args: str, env: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
@@ -133,16 +197,19 @@ def drive(root: Path, *args: str, env: dict[str, Any] | None = None) -> subproce
     run = run_attavo(root, "drive", *args, env=env)
     import re
     pids = [int(x) for x in re.findall(r"worker pid (\d+)", run.stdout)]
-    deadline = time.monotonic() + 90
-    while pids and time.monotonic() < deadline:
-        try:
-            os.kill(pids[-1], 0)
-        except ProcessLookupError:
-            break
-        time.sleep(0.2)
+    if pids:
+        wait_for(lambda: not pid_alive(pids[-1]), f"worker pid {pids[-1]} to end")
     logs = sorted(Path(git(root, "rev-parse", "--absolute-git-dir").strip(), "attavo").glob("*.worker.log"))
     tail = "".join(p.read_text() for p in logs)
     return subprocess.CompletedProcess(run.args, run.returncode, run.stdout + tail, run.stderr)
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 def attavo_module() -> Any:
@@ -486,9 +553,7 @@ def test_drive_until_ready_runs_build_then_verify_to_ready_in_one_call(tmp_path:
     approve_item(root)
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
 
-    # the poll ends on the forge's conclusion; a long bound keeps a slow machine from ending it early
-    slow_ok = {"ATTAVO_DRIVE_POLL_BOUND_S": "120"}
-    run = run_attavo(root, "drive", "1", "--until-ready", env=slow_ok, timeout=300)
+    run = run_attavo(root, "drive", "1", "--until-ready")
     assert run.returncode == 0, run.stdout + run.stderr
     assert "ready to merge" in run.stdout.lower()
 
@@ -496,11 +561,13 @@ def test_drive_until_ready_runs_build_then_verify_to_ready_in_one_call(tmp_path:
     assert len(record_files(root, "verify")) == 1
     assert latest_record(root, "build")["status"] == "pass"
     assert latest_record(root, "verify")["status"] == "pass"
-    assert remote_head(bare, branch) == head_of(root)
+    # the pass says ready when the review's record is read; the worker's push of it and the
+    # checkout's fast-forward to it are facts that follow, so the test waits on them
+    wait_for(lambda: remote_head(bare, branch) == head_of(root), "origin's branch and the checkout to agree")
 
     # Idempotence, same as the single-pass form: a further --until-ready
     # call repeats exactly the same ready-to-merge result, writing nothing.
-    run2 = run_attavo(root, "drive", "1", "--until-ready", env=slow_ok, timeout=300)
+    run2 = run_attavo(root, "drive", "1", "--until-ready")
     assert run2.returncode == 0
     assert "ready to merge" in run2.stdout.lower()
     assert len(record_files(root, "build")) == 1
@@ -545,7 +612,7 @@ def test_drive_until_ready_stops_on_a_halt(tmp_path: Path) -> None:
     assert len(record_files(root, "build")) == 1
     assert latest_record(root, "build")["status"] == "halted"
     assert record_files(root, "verify") == []
-    assert remote_head(bare, branch) == head_of(root)
+    wait_for(lambda: remote_head(bare, branch) == head_of(root), "origin's branch and the checkout to agree")
 
 
 
@@ -715,6 +782,69 @@ def test_drive_pass_turns_a_red_forge_on_a_passed_build_into_a_returned_record(t
 
 
 
+def test_a_worker_that_ends_normally_is_never_declared_dead_while_the_pass_runs(tmp_path: Path) -> None:
+    """Rejection test (#332, CI on #335). A happy-path --until-ready run: the
+    build worker ends normally, so its pid is gone and its heartbeat is still
+    on disk, while the pass goes on to a review that the test holds (a file).
+    A helper that read a gone pid as a death and pushed the held clock past
+    three beats would make the live review's beat stale and write a died
+    record. No death is declared for this run, so it reaches ready with none.
+    The window is made by the held review, never by how fast a machine is."""
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_bare_remote(root, tmp_path)
+    approve_item(root)
+    release = tmp_path / "release"
+    d = root / "attavo" / "adapters" / "held"
+    d.mkdir(parents=True)
+    (d / "run").write_text(
+        "#!/bin/sh\nset -eu\n"
+        'if [ "${ATTAVO_STAGE:-build}" = "verify" ]; then\n'
+        f'  n=0; while [ ! -f "{release}" ] && [ "$n" -lt 1200 ]; do sleep 0.1; n=$((n+1)); done\n'
+        '  printf \'{"model":"held","model_version":null,"adapter_version":"held-1",'
+        '"tokens":{"input":1,"output":1},"cost_usd":0.0,"findings":[],"tests_named":[]}\\n\'\n'
+        "  exit 0\nfi\n"
+        "echo built > built.txt\ngit add built.txt\ngit commit -q -m 'held: write built.txt'\n"
+        'echo \'{"status":"done","question":null,"model":"held","model_version":null,'
+        '"adapter_version":"held-1","tokens":{"input":1,"output":1},"cost_usd":0.0}\'\n')
+    (d / "run").chmod(0o755)
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace('build = "fixture"', 'build = "held"').replace('verify = "fixture"', 'verify = "held"'))
+    commit_all(root, "use a held adapter")
+
+    full_env = dict(os.environ)
+    full_env.update(FAST_POLL_ENV)
+    full_env["ATTAVO_CLOCK_FILE"] = str(held_clock(root))
+    clock_before = held_clock(root).read_text()
+    proc = subprocess.Popen([sys.executable, str(ATTAVO), "drive", "1", "--until-ready"], cwd=str(root),
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=full_env)
+    try:
+        from attavo.doctor import heartbeat_pid
+        from attavo.events import stage_events_dir
+        def beats() -> list[Path]:
+            return sorted(stage_events_dir(root).glob("*.heartbeat"))
+
+        wait_for(lambda: len(beats()) == 2, "both stages' heartbeats on disk: the build's, and the held review's")
+        build_pid = heartbeat_pid(beats()[0])
+        assert build_pid is not None
+        wait_for(lambda: not pid_alive(build_pid), "the build worker, which ended normally, to be gone")
+        review_beat = beats()[1]
+        first = review_beat.stat().st_mtime_ns
+        wait_for(lambda: review_beat.stat().st_mtime_ns != first, "the held review's heartbeat to beat again")
+        assert proc.poll() is None, "the pass ended while the review was held"
+        assert held_clock(root).read_text() == clock_before, "a death was declared for a worker that ended normally"
+        release.write_text("go\n")
+        out, _ = proc.communicate(timeout=300)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 0, out
+    assert "ready to merge" in out.lower(), out
+    assert "as died" not in out, out
+    assert [r for r in record_files(root, "build") + record_files(root, "verify")
+            if (json.loads(r.read_text()).get("stop") or {}).get("class") == "died"] == []
+
+
 def test_drive_until_ready_waits_out_the_bound_on_a_forge_still_running(tmp_path: Path) -> None:
     """Acceptance row 4, the unconcluded case, under R2: a check still
     carrying a status (in_progress) is not red. The pass reads it once
@@ -729,18 +859,19 @@ def test_drive_until_ready_waits_out_the_bound_on_a_forge_still_running(tmp_path
 
     assert drive(root, "1").returncode == 0  # builds
 
-    # a pass reads the forge once and returns: with a bound of an hour, a pass
-    # that waited would not come back inside the hang guard (TimeoutExpired)
-    run = run_attavo(root, "drive", "1", env={"ATTAVO_DRIVE_POLL_BOUND_S": "3600"}, timeout=120)
+    # a pass reads the forge once and returns: one read is one tick of the held clock
+    before = int(float(held_clock(root).read_text()))
+    run = run_attavo(root, "drive", "1")
     assert run.returncode == 0, run.stdout + run.stderr
+    assert (int(float(held_clock(root).read_text())) - before) // 100 == 1, "the pass read the forge more than once"
     assert "Waiting on the checks" in run.stdout and "in_progress" in run.stdout
     assert "did not conclude" not in run.stdout
 
     # --until-ready repeats the pass, then gives up naming the check
-    run2 = run_attavo(root, "drive", "1", "--until-ready", timeout=120)
+    run2 = run_attavo(root, "drive", "1", "--until-ready", env={"ATTAVO_DRIVE_POLL_BOUND_S": "600"})
     assert run2.returncode == 1, run2.stdout + run2.stderr
     assert "in_progress" in run2.stdout and "did not conclude" in run2.stdout
-    assert run2.stdout.count("Waiting on the checks") >= 2, run2.stdout
+    assert run2.stdout.count("Waiting on the checks") >= 6, run2.stdout  # six reads of a hundred seconds
 
     assert record_files(root, "verify") == []
 
@@ -967,17 +1098,28 @@ def test_drive_a_second_run_in_the_same_state_files_nothing(tmp_path: Path) -> N
 
 
 
-def slow_build_adapter(root: Path, seconds: float) -> None:
+def release_file(root: Path) -> Path:
+    return root.parent / f"{root.name}.release"
+
+
+def release(root: Path) -> None:
+    """Let the held build stage end: the stage ends when the test says so, never after a time."""
+    release_file(root).touch()
+
+
+def slow_build_adapter(root: Path) -> None:
     """A tenant-side build adapter: the product's own fixture adapter,
-    after `seconds` of sleep on the build stage -- long enough for a test
-    to act between the pass's marker push and the worker's record push."""
+    held on the build stage until the test releases it (a file) -- long
+    enough for a test to act between the pass's marker push and the
+    worker's record push."""
     d = root / "attavo" / "adapters" / "fixture"
     d.mkdir(parents=True, exist_ok=True)
     run = d / "run"
-    run.write_text(f'#!/bin/sh\nif [ "${{ATTAVO_STAGE:-build}}" = build ]; then sleep {seconds}; fi\n'
-                   f'exec sh {ROOT / "adapters" / "fixture" / "run"}\n')
+    run.write_text(f'#!/bin/sh\nif [ "${{ATTAVO_STAGE:-build}}" = build ]; then\n'
+                   f'  n=0; while [ ! -f "{release_file(root)}" ] && [ "$n" -lt 1200 ]; do sleep 0.1; n=$((n+1)); done\n'
+                   f'fi\nexec sh {ROOT / "adapters" / "fixture" / "run"}\n')
     run.chmod(0o755)
-    commit_all(root, "a slow tenant-side adapter")
+    commit_all(root, "a held tenant-side adapter")
 
 
 def test_drive_pass_fast_forwards_to_a_branch_that_moved_before_taking_the_lease(tmp_path: Path) -> None:
@@ -1413,7 +1555,7 @@ def test_the_worker_writes_its_own_pid_as_the_heartbeat_content(tmp_path: Path) 
     root = make_tenant(tmp_path, "build_valid")
     add_forge(root, GREEN_FORGE)
     add_bare_remote(root, tmp_path)
-    slow_build_adapter(root, 3)
+    slow_build_adapter(root)
     approve_item(root)
 
     run = run_attavo(root, "drive", "1")
@@ -1421,22 +1563,64 @@ def test_the_worker_writes_its_own_pid_as_the_heartbeat_content(tmp_path: Path) 
     import re
     worker_pid = int(re.search(r"worker pid (\d+)", run.stdout).group(1))  # type: ignore[union-attr]
     beat = heartbeat_file(root)
-    deadline = time.monotonic() + 20
-    while time.monotonic() < deadline and not (beat.exists() and beat.read_text().strip()):
-        time.sleep(0.1)
+    wait_for(lambda: beat.exists() and beat.read_text().strip() != "", "the worker's first beat")
     assert beat.read_text() == f"{worker_pid}\n"
     first = beat.stat().st_mtime
-    time.sleep(0.6)
-    assert beat.stat().st_mtime > first, "the heartbeat did not move"
+    wait_for(lambda: beat.stat().st_mtime > first, "the heartbeat to move")
     assert beat.read_text() == f"{worker_pid}\n"
     marker = json.loads((records_dir(root) / "build-01.started").read_text())
     assert "pid" not in marker and marker["host"] == socket.gethostname()
-    while time.monotonic() < deadline:
-        try:
-            os.kill(worker_pid, 0)
-        except ProcessLookupError:
-            break
-        time.sleep(0.2)
+    release(root)
+    wait_for(lambda: not pid_alive(worker_pid), f"worker pid {worker_pid} to end")
+
+
+def test_the_pass_writes_the_workers_first_heartbeat_before_it_says_the_worker_started(
+        tmp_path: Path, monkeypatch: Any) -> None:
+    """Rejection test (CI on #335). A marker from this host with no heartbeat
+    file reads as died, so a worker that has not yet run its first line of
+    code was recovered as died by the next pass (--until-ready passes again
+    after a short interval; on a loaded or slow-starting host the worker is
+    not there yet): liveness by proxy, "no first beat yet" read as "never
+    lived". The pass writes the first heartbeat itself, naming the worker's
+    pid, before it prints "started". The worker here is held before any code
+    of its own runs (a sitecustomize that waits on a file, for the worker
+    only), so the heartbeat is the pass's, and no timing decides it."""
+    import re
+    from attavo import drive
+
+    root = make_tenant(tmp_path, "build_valid")
+    add_forge(root, GREEN_FORGE)
+    add_bare_remote(root, tmp_path)
+    slow_build_adapter(root)
+    approve_item(root)
+
+    hold = tmp_path / "worker-hold"
+    boot = tmp_path / "boot"
+    boot.mkdir()
+    (boot / "sitecustomize.py").write_text(
+        "import os\n"
+        "import threading\n"
+        "if os.environ.get('HOLD_WORKER_FILE') and os.getppid() != int(os.environ['HOLD_WORKER_TEST_PID']):\n"
+        "    pace = threading.Event()\n"
+        "    for _ in range(1200):\n"
+        "        if os.path.exists(os.environ['HOLD_WORKER_FILE']):\n"
+        "            break\n"
+        "        pace.wait(0.1)\n")
+    env = {"HOLD_WORKER_FILE": str(hold), "HOLD_WORKER_TEST_PID": str(os.getpid()),
+           "PYTHONPATH": f"{boot}{os.pathsep}{os.environ.get('PYTHONPATH', '')}"}
+    run = run_attavo(root, "drive", "1", env=env)
+    assert run.returncode == 0, run.stdout + run.stderr
+    pid = int(re.search(r"worker pid (\d+)", run.stdout).group(1))  # type: ignore[union-attr]
+    try:
+        beat = heartbeat_file(root)
+        assert beat.exists() and beat.read_text() == f"{pid}\n", "the pass said started with no heartbeat naming the worker"
+        marker = records_dir(root) / "build-01.started"
+        monkeypatch.setenv("ATTAVO_CLOCK_FILE", str(held_clock(root)))
+        assert drive.read_invocation(root, None, marker, json.loads(marker.read_text())).cls == "running"
+    finally:
+        hold.write_text("go\n")
+        release(root)
+    wait_for(lambda: not pid_alive(pid), f"worker pid {pid} to end")
 
 
 def test_hung_recovery_signals_the_pid_the_heartbeat_names(tmp_path: Path) -> None:
@@ -1542,7 +1726,7 @@ def test_a_beat_seconds_late_reads_running_on_a_held_clock_and_died_once_the_clo
 
     root = make_tenant(tmp_path, "build_valid")
     add_drive_stall_bound(root)
-    monkeypatch.setenv("ATTAVO_HEARTBEAT_S", "0.2")
+    monkeypatch.setenv("ATTAVO_HEARTBEAT_S", "2")
     beat = heartbeat_path(root, "build", 1)
     beat.parent.mkdir(parents=True, exist_ok=True)
     beat.write_text("")
@@ -1551,9 +1735,9 @@ def test_a_beat_seconds_late_reads_running_on_a_held_clock_and_died_once_the_clo
     marker = write_dead_marker(root, "build", 1)
     info = {"at": utc_stamp(beat_at), "host": socket.gethostname(), "events": str(beat.parent)}
 
-    monkeypatch.setenv("ATTAVO_CLOCK_FILE", str(held_clock(root, beat_at + 0.1)))
+    monkeypatch.setenv("ATTAVO_CLOCK_FILE", str(held_clock(root, beat_at + 1)))
     assert drive.read_invocation(root, 60, marker, info).cls == "running"
-    advance_clock(root, 0.5)
+    advance_clock(root, 5)
     assert drive.read_invocation(root, 60, marker, info).cls == "running"
-    advance_clock(root, 0.2)
+    advance_clock(root, 2)
     assert drive.read_invocation(root, 60, marker, info).cls == "died"

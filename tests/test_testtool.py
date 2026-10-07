@@ -22,7 +22,7 @@ import jsonschema
 import pytest
 
 from attavo.testtool import bound_report, read_progress, runner_calls_outside_the_tool
-from helpers import commit_all, git, make_tenant
+from helpers import commit_all, git, make_tenant, wait_for
 from test_drive import approve_item, record_files, run_attavo
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -157,13 +157,12 @@ def test_attavo_test_ends_a_run_past_its_bound_with_everything_it_started(tmp_pa
     child = int((root / "child.pid").read_text())
     # a process that was ended but not yet reaped still has a pid; its state says Z.
     # Ended means ended before the sleep it was started with would have: poll for the state.
-    for _ in range(100):
+    def ended() -> bool:
         state = subprocess.run(["ps", "-o", "stat=", "-p", str(child)], capture_output=True, text=True,
                                check=False).stdout.strip()
-        if state == "" or state.startswith("Z"):
-            break
-        time.sleep(0.1)
-    assert state == "" or state.startswith("Z"), f"the run's own child outlived the timeout (state {state!r})"
+        return state == "" or state.startswith("Z")
+
+    wait_for(ended, f"the run's own child (pid {child}) to be ended by the timeout")
 
 
 def test_build_hands_the_executor_the_test_command_and_no_checks_command(tmp_path: Path) -> None:
@@ -575,7 +574,7 @@ def test_the_import_graph_is_built_from_source_and_follows_imports_through_modul
 # --- #317: the worker budget ---
 
 def slot_tenant(tmp_path: Path, run: str) -> Path:
-    return tenant(tmp_path, tests=f'[tests]\nselect = "cat"\ncall_timeout_s = 60\nrun = "{run}"')
+    return tenant(tmp_path, tests=f'[tests]\nselect = "cat"\ncall_timeout_s = 3600\nrun = "{run}"')
 
 
 WORKERS_RUN = "sh -c 'cat >/dev/null; echo workers=$ATTAVO_TEST_WORKERS'"
@@ -631,15 +630,17 @@ def test_concurrent_calls_hold_one_slot_each_and_the_last_to_arrive_sees_all_thr
     barrier.mkdir()
     seen = tmp_path / "slots-held-at-barrier"
     run_cmd = (f"sh -c 'cat >/dev/null; touch {barrier}/$$; "
-               f"while [ $(ls {barrier} | grep -vc done) -lt 3 ]; do sleep 0.05; done; "
+               f"n=0; while [ $(ls {barrier} | grep -vc done) -lt 3 ] && [ $n -lt 12000 ]; do sleep 0.05; n=$((n+1)); done; "
                f"ls {slot_dir(tmp_path / 'build_valid')} | wc -l >> {seen}; touch {barrier}/done.$$; "
-               f"while [ $(ls {barrier} | grep -c done) -lt 3 ]; do sleep 0.05; done; "
+               f"n=0; while [ $(ls {barrier} | grep -c done) -lt 3 ] && [ $n -lt 12000 ]; do sleep 0.05; n=$((n+1)); done; "
                f"echo workers=$ATTAVO_TEST_WORKERS'")
     root = slot_tenant(tmp_path, run_cmd)
     procs = [subprocess.Popen([sys.executable, str(ROOT / "bin" / "attavo"), "test", "1", f"tests/t{i}.py"],
                               cwd=str(root), stdout=subprocess.PIPE, text=True,
                               env={**os.environ, "ATTAVO_TEST_CORES": "6"}) for i in range(3)]
-    outs = [p.communicate(timeout=120)[0] for p in procs]
+    # the three wait on each other's arrival (a fact, looks counted above); the call's bound and this
+    # are hang guards a loaded machine cannot cross by being slow to start the last of them
+    outs = [p.communicate(timeout=900)[0] for p in procs]
     workers = sorted(int(o.split("workers=")[1].split()[0]) for o in outs)
     assert all(p.returncode == 0 for p in procs), outs
     assert workers[0] == 2 and workers[-1] <= 6, workers     # the last to take a slot found three

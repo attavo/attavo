@@ -8,8 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 @pytest.fixture(autouse=True)
 def _short_forge_poll(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The drive's forge poll reads its bound and interval from the environment at call time (issue #84) so a test never waits out the production bound; since #178 verify polls too, and a fixture whose checks_command prints nothing is unconcluded and would wait 600 s. Every test gets a sub-second clock unless it sets its own."""
-    monkeypatch.setenv("ATTAVO_DRIVE_POLL_BOUND_S", "0.5")
+    """The drive's forge poll reads its bound and interval from the environment at call time (issue #84). The bound is judged on the one clock (#332), which no test advances unless it says so, and an unconcluded forge read (an empty one is) polls until the bound: left at the production default that is 600 s. Every test therefore gets a bound of zero, one read and no wait, judged on no clock; the interval only paces looks. A test that needs the poll to keep waiting sets its own bound and advances ATTAVO_CLOCK_FILE (a forge read that ticks it, test_drive.TICK)."""
+    monkeypatch.setenv("ATTAVO_DRIVE_POLL_BOUND_S", "0")
     monkeypatch.setenv("ATTAVO_DRIVE_POLL_INTERVAL_S", "0.05")
 
 
