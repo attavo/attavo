@@ -345,6 +345,10 @@ def cmd_spec_gate(argv: list[str]) -> int:
                     refusal = f"criterion fails against the tree plus stub: {fail['name']}"
         elif not parsed["claims"]:
             refusal = "claims: empty; the build may touch nothing"
+        elif not parsed["criteria"]:
+            # Zero criteria match zero files in criteria/, so the prose check
+            # below would pass a spec that asserts nothing, and approve it.
+            refusal = "criteria: empty; the spec asserts nothing"
         elif stub_outside_claims(spec_dir, parsed["claims"]) is not None:
             refusal = ("stub touches a path the claims do not name: "
                        f"{stub_outside_claims(spec_dir, parsed['claims'])}")

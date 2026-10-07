@@ -1,0 +1,15 @@
+{
+  "sha": "eb065925df63ae421b0bda0e9b30b02601ed9f34",
+  "spec_sha": "eb065925df63ae421b0bda0e9b30b02601ed9f34",
+  "at": "2026-10-06T21:59:27Z",
+  "status": "refused",
+  "approval_sha": null,
+  "criteria": [],
+  "refusal": "criterion is prose: [structural] the-rejection-test-exists.sh",
+  "class": "fix",
+  "research": "not required by policy",
+  "record_version": 3,
+  "item": "344",
+  "product_version": "v0.33.0",
+  "product_pin": "v0.33.0"
+}

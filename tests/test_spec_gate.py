@@ -761,3 +761,25 @@ def test_the_no_structural_refusal_comes_before_any_criterion_refusal(tmp_path: 
     run = run_attavo(root, "spec-gate", "1")
     assert run.returncode == 1
     assert latest_record(root, "1", "spec")["refusal"] == NO_STRUCTURAL
+
+
+NO_CRITERIA = "criteria: empty; the spec asserts nothing"
+
+
+def test_a_spec_with_no_criteria_is_refused_before_any_criterion_runs(tmp_path: Path) -> None:
+    """An empty Criteria section and no criteria/ directory asserts nothing.
+    Zero criteria match zero files, so before this rule the gate passed it
+    and an approval bound to no executable claim could follow."""
+    root = make_tenant(tmp_path, "build_valid")
+    spec_dir = root / "specs" / "1"
+    spec_md = spec_dir / "spec.md"
+    spec_md.write_text(spec_md.read_text().split("## Criteria")[0] + "## Criteria\n\n")
+    shutil.rmtree(spec_dir / "criteria")
+    commit_all(root, "criteria emptied")
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1
+    assert NO_CRITERIA in run.stdout, run.stdout
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused"
+    assert rec["criteria"] == []
+    assert rec["refusal"] == NO_CRITERIA
