@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,32 @@ def first_commit_touching(root: Path, relpath: str) -> str | None:
     out = git(root, "log", "--reverse", "--format=%H", "--", relpath)
     lines = out.split()
     return lines[0] if lines else None
+
+
+def _single_commit_with_diff(root: Path, sha: str) -> dict[str, Any]:
+    """commits_with_diffs's own shape, for one commit read directly rather
+    than by a range -- the one case `_commits_from` needs it for: a
+    commit with no parent, which `^` cannot name."""
+    out = git(root, "show", "--diff-merges=first-parent", "--name-only",
+             "--format=\x01%H\x1f%an\x1f%ae", sha)
+    header, _, rest = out.split("\x01")[1].partition("\n")
+    c_sha, name, email = header.split("\x1f")
+    return {"sha": c_sha, "name": name, "email": email,
+           "touched": [line for line in rest.splitlines() if line.strip()]}
+
+
+def _commits_from(root: Path, first_sha: str, end: str) -> list[dict[str, Any]]:
+    """commits_with_diffs's own range, from first_sha up to and including
+    end: first_sha^..end, the ordinary case. `^` cannot name the parent of
+    a commit that has none -- the repository's own root commit, which a
+    fixture or a squash merge can leave as an item's first spec commit --
+    and `A..B` always excludes A regardless, root or not; here, first_sha's
+    own diff is read directly and put first."""
+    try:
+        git(root, "rev-parse", "--verify", f"{first_sha}^")
+    except RuntimeError:
+        return [_single_commit_with_diff(root, first_sha)] + commits_with_diffs(root, first_sha, end=end)
+    return commits_with_diffs(root, f"{first_sha}^", end=end)
 
 
 def _record_blobs_at(root: Path, specs: list[tuple[str, str]], item_id: str) -> dict[tuple[str, str], dict[str, Any]]:
@@ -135,10 +162,10 @@ def item_ledger(root: Path, m: dict[str, Any], item_id: str, merges: list[dict[s
     merge_sha, _ = merge_introducing_records(root, records_rel, item_id, STAGES, merges=merges)
     if merge_sha is not None:
         branch_tip = next(mrg["parents"][1] for mrg in merges if mrg["sha"] == merge_sha)
-        commits = commits_with_diffs(root, f"{first_spec_sha}^", end=branch_tip)
+        commits = _commits_from(root, first_spec_sha, branch_tip)
         commits += commits_with_diffs(root, f"{merge_sha}^1", end=merge_sha)
     else:
-        commits = commits_with_diffs(root, f"{first_spec_sha}^", end="HEAD")
+        commits = _commits_from(root, first_spec_sha, "HEAD")
 
     driver = driver_identity()
 
@@ -238,6 +265,51 @@ def item_ledger(root: Path, m: dict[str, Any], item_id: str, merges: list[dict[s
     summary = {"operator_acts": operator_acts, "product_acts": product_acts,
               "executor_commits": executor_commits, "stops": stops, "since": since}
     return {"item": item_id, "rows": rows, "summary": summary}
+
+
+# The statement's own two lists (issue #349): acts is the operator's ruled
+# acts (approve, merge); rule stays in the schema's enum for the ruling
+# record (#276) and is never produced here. interventions is every other
+# operator row -- amend, launch, transport.
+ACT_CLASSES = ("approve", "merge")
+INTERVENTION_CLASSES = ("amend", "launch", "transport")
+
+
+def _committer_time_iso(root: Path, shas: list[str]) -> dict[str, str]:
+    """Each sha's own committer time, in the same shape attest's own `at`
+    fields already carry -- one `git show` process for every sha an
+    item's acts and interventions need, not one git call per row."""
+    if not shas:
+        return {}
+    out = git(root, "show", "-s", "--format=%H\x1f%ct", *shas)
+    times: dict[str, str] = {}
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        sha, epoch = line.split("\x1f")
+        times[sha] = datetime.fromtimestamp(int(epoch), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return times
+
+
+def item_acts_and_interventions(root: Path, m: dict[str, Any], item_id: str,
+                                merges: list[dict[str, Any]] | None = None
+                                ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(acts, interventions): the statement's own two lists, read from
+    item_ledger's own rows between the item's first spec commit and its
+    merge -- each commit classed exactly once there, never classified
+    twice. acts carries every approve and merge row as {act, sha, by, at};
+    interventions carries every amend, launch, and transport row as
+    {class, sha, by, at}. `by` is the commit's own author name
+    (item_ledger's `identity`); `at` is its committer time."""
+    rows = item_ledger(root, m, item_id, merges=merges)["rows"]
+    act_rows = [r for r in rows if r["class"] in ACT_CLASSES]
+    intervention_rows = [r for r in rows if r["class"] in INTERVENTION_CLASSES]
+    times = _committer_time_iso(root, [r["sha"] for r in act_rows + intervention_rows])
+    acts = [{"act": r["class"], "sha": r["sha"], "by": r["identity"], "at": times[r["sha"]]}
+           for r in act_rows]
+    interventions = [{"class": r["class"], "sha": r["sha"], "by": r["identity"], "at": times[r["sha"]]}
+                     for r in intervention_rows]
+    return acts, interventions
 
 
 def cmd_ledger(argv: list[str]) -> int:
