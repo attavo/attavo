@@ -1,0 +1,62 @@
+{
+  "sha": "ed1690a419622b23d25ebb945de750e252c794cd",
+  "start_sha": "ed1690a419622b23d25ebb945de750e252c794cd",
+  "spec_sha": "f1417b677294b44344e56ea6943b5930a08db37c",
+  "approval_sha": "4230297c188982616a5a0aaa8025745bfd9e59d6",
+  "at": "2026-10-07T22:00:49Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.293 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "the-rejection-test-exists.sh",
+      "exit": 0
+    },
+    {
+      "name": "a-transport-mid-run-is-on-the-statement.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q -n ${ATTAVO_TEST_WORKERS:-auto} -m 'not own_records'",
+    "count": 0,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 2123824,
+    "output": 18119
+  },
+  "cost_usd": 0.8333128,
+  "wall_clock_s": 829.01,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "refusal_kind": null,
+  "report_class": null,
+  "retry_of": "build-01",
+  "steer": null,
+  "stop": null,
+  "record_version": 12,
+  "item": "349",
+  "product_version": "v0.34.0-20-gd2354e2",
+  "product_pin": "v0.34.0"
+}
