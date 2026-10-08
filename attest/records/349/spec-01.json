@@ -1,0 +1,28 @@
+{
+  "sha": "f1417b677294b44344e56ea6943b5930a08db37c",
+  "spec_sha": "f1417b677294b44344e56ea6943b5930a08db37c",
+  "at": "2026-10-07T15:27:49Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "the-rejection-test-exists.sh",
+      "kind": "structural",
+      "on_tree": 2,
+      "on_stub": 0
+    },
+    {
+      "name": "a-transport-mid-run-is-on-the-statement.sh",
+      "kind": "behavioural",
+      "on_tree": 2,
+      "on_stub": 2
+    }
+  ],
+  "refusal": null,
+  "class": "core",
+  "research": "not required by policy",
+  "record_version": 4,
+  "item": "349",
+  "product_version": "v0.34.0",
+  "product_pin": "v0.34.0"
+}

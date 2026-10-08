@@ -1,0 +1,88 @@
+{
+  "sha": "554c93866ea5ebf5a8c22a4fd1846f55ef69387b",
+  "build_sha": "ed1690a419622b23d25ebb945de750e252c794cd",
+  "build_record": "build-02",
+  "approval_sha": "4230297c188982616a5a0aaa8025745bfd9e59d6",
+  "at": "2026-10-07T22:05:39Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "58b97590245929765e5414cb70ad18f3e0a33b30",
+    "conclusions": [
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "Proof six skips v6 acts and interventions when both accounting fields are absent",
+      "specimen": "attavo/doctor.py::_accounting_disagrees",
+      "retires": "Closes the claim that every sealed v6 statement has its acts and interventions recomputed and compared by proof six.",
+      "rejection_test": "test_doctor_proof_six_rejects_a_v6_statement_without_time_or_cost_whose_acts_or_interventions_differ",
+      "severity": "Blocking when a statement declares attestation/v6, omits both time and cost, and carries false acts or interventions; the early return makes proof six hold it without checking either list."
+    },
+    {
+      "title": "The v6 schema accepts intervention classes the producer can never emit",
+      "specimen": "schema/attestation.schema.json#/properties/interventions/items/properties/class",
+      "retires": "Closes the v6 schema's unenforced claim that intervention rows are exactly amend, launch, or transport rows from item_ledger.",
+      "rejection_test": "test_v6_schema_rejects_an_intervention_class_outside_amend_launch_transport",
+      "severity": "Blocking when schema validation is used as the contract boundary and an intervention carries any non-empty class other than amend, launch, or transport; harmless while every statement comes only from the current producer and is rechecked by doctor."
+    }
+  ],
+  "tests_named": [
+    "test_doctor_proof_six_rejects_a_v6_statement_without_time_or_cost_whose_acts_or_interventions_differ",
+    "test_v6_schema_rejects_an_intervention_class_outside_amend_launch_transport"
+  ],
+  "commits": [],
+  "stub_ratio": 0.0,
+  "tokens": {
+    "input": 282028,
+    "output": 2874
+  },
+  "cost_usd": null,
+  "wall_clock_s": 76.619,
+  "status": "pass",
+  "report_class": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 11,
+  "item": "349",
+  "product_version": "v0.34.0-20-gd2354e2",
+  "product_pin": "v0.34.0"
+}

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/attestation/v5",
-  "title": "The attestation statement `attavo attest` prints on a coherent chain (v5: `cost` also prices, from the tenant's published rates, a record whose adapter reported none, and says so; v4: `time`, `cost` and `tokens` are the only accounting, summed over every attempt; v3 statements sealed earlier also carry cost_by_stage_usd, wall_clock_by_stage_s and tokens_by_stage, the final attempt of each stage)",
+  "$id": "https://attavo.dev/attestation/v6",
+  "title": "The attestation statement `attavo attest` prints on a coherent chain (v6: `interventions` and `acts` are read from the item's own commits between its first spec commit and its merge, each one classed exactly once by attavo/ledger.py::item_ledger -- sha is now required in both; v5: `cost` also prices, from the tenant's published rates, a record whose adapter reported none, and says so; v4: `time`, `cost` and `tokens` are the only accounting, summed over every attempt; v3 statements sealed earlier also carry cost_by_stage_usd, wall_clock_by_stage_s and tokens_by_stage, the final attempt of each stage)",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -25,29 +25,31 @@
     "at": {"type": "string", "minLength": 1},
     "interventions": {
       "type": "array",
-      "description": "Corrections or amendments made during the item's traversal. Nothing populates this yet.",
+      "description": "Every operator row on the item other than approve and merge -- amend, launch, transport -- read from attavo/ledger.py::item_ledger's own rows between the item's first spec commit and its merge (issue #349): the row's class, its sha, the commit's own author name, and its committer time.",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["at", "class", "by"],
+        "required": ["at", "class", "by", "sha"],
         "properties": {
           "at": {"type": "string", "minLength": 1},
           "class": {"type": "string", "minLength": 1},
-          "by": {"type": "string", "minLength": 1}
+          "by": {"type": "string", "minLength": 1},
+          "sha": {"type": "string", "minLength": 1}
         }
       }
     },
     "acts": {
       "type": "array",
-      "description": "Operator acts on the item: approve, rule, merge. Nothing populates this yet.",
+      "description": "The operator's ruled acts on the item: each approve row and the merge row, read the same way (issue #349). rule stays in this enum for the ruling record (#276) and is never produced here.",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["at", "act", "by"],
+        "required": ["at", "act", "by", "sha"],
         "properties": {
           "at": {"type": "string", "minLength": 1},
           "act": {"type": "string", "enum": ["approve", "rule", "merge"]},
-          "by": {"type": "string", "minLength": 1}
+          "by": {"type": "string", "minLength": 1},
+          "sha": {"type": "string", "minLength": 1}
         }
       }
     },

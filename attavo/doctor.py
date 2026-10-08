@@ -865,33 +865,48 @@ V3_ONLY_FIELDS = ("cost_by_stage_usd", "wall_clock_by_stage_s", "tokens_by_stage
 V5_COST_FIELDS = ("reported_usd", "estimated_usd", "basis_by_stage", "rates", "estimate_note")
 
 
+def _carries_act_sha(rows: Any) -> bool:
+    """True when `rows` is a non-empty list whose entries already carry
+    `sha` -- v6's own shape for `acts` and `interventions` (issue #349);
+    v5 and earlier wrote both as `[]`, never a sha."""
+    return isinstance(rows, list) and any(isinstance(r, dict) and "sha" in r for r in rows)
+
+
 def _predicate_version(statement: dict[str, Any], predicate: dict[str, Any]) -> int:
     """The attestation version a statement was sealed under (issues #309,
-    #307): named by its envelope's predicateType, else known by what it
-    carries -- v3 by the final-attempt fields v4 retired, v5 by the rates
-    its cost block carries, v4 otherwise. Each is judged by its own rules;
-    nothing sealed is rewritten."""
+    #307, #349): named by its envelope's predicateType, else known by what
+    it carries -- v3 by the final-attempt fields v4 retired, v6 by a sha
+    on an act or intervention row, v5 by the rates its cost block carries,
+    v4 otherwise. Each is judged by its own rules; nothing sealed is
+    rewritten."""
     declared = statement.get("predicateType")
     named = re.search(r"/attestation/v(\d+)$", declared) if isinstance(declared, str) else None
     if named:
         return int(named.group(1))
     if any(key in predicate for key in V3_ONLY_FIELDS):
         return 3
+    if _carries_act_sha(predicate.get("acts")) or _carries_act_sha(predicate.get("interventions")):
+        return 6
     cost = predicate.get("cost")
     return 5 if isinstance(cost, dict) and "rates" in cost else 4
 
 
 def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_sha: str,
-                          statement: dict[str, Any]) -> str | None:
+                          statement: dict[str, Any],
+                          merges: list[dict[str, Any]] | None = None) -> str | None:
     """A sealed statement that carries `time` and `cost` (and, from v4,
-    `tokens`) says what its records sum to, field by field -- the same function attest summed them
-    with, over the same records (none is written after a merge), sealed at
-    the same commit (the statement is computed at the merge, so lead_s and
+    `tokens`; from v6, `acts` and `interventions`) says what its records sum
+    to, field by field -- the same function attest summed them with, over
+    the same records (none is written after a merge), sealed at the same
+    commit (the statement is computed at the merge, so lead_s and
     waiting_s are recomputed from its committer time, not excepted). Exact:
     #202 retired the one-second tolerance. A statement sealed before `time`
     existed carries neither key and is not checked; a key that is present
     holds a block, so a null one, or one block without the other, is a
-    disagreement. No new read of the store."""
+    disagreement. No new read of the store. merges, when given, is
+    _merges_reachable's own result -- the caller's loop over every item
+    computes it once rather than each item's acts and interventions
+    walking the default branch's merges again."""
     inner = statement.get("predicate")
     predicate = inner if isinstance(inner, dict) else statement
     if "time" not in predicate and "cost" not in predicate:
@@ -933,6 +948,18 @@ def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_s
         else:
             differing.append(f"tokens is {_carried(predicate, 'tokens')}, not a block "
                              f"its records sum to {dict(summed_tokens)!r}")
+    if version >= 6:
+        # Imported here, not at module level: attavo.ledger imports from
+        # this module, a cycle resolved by deferring to call time.
+        from attavo.ledger import item_acts_and_interventions
+        summed_acts, summed_interventions = item_acts_and_interventions(
+            root, declared, item, merges=merges)
+        stated_acts, stated_interventions = predicate.get("acts"), predicate.get("interventions")
+        if not (isinstance(stated_acts, list) and _same(stated_acts, summed_acts)):
+            differing.append(f"acts {stated_acts!r} is not its records' {summed_acts!r}")
+        if not (isinstance(stated_interventions, list) and _same(stated_interventions, summed_interventions)):
+            differing.append(f"interventions {stated_interventions!r} is not its "
+                             f"records' {summed_interventions!r}")
     if differing:
         return f"{where}: the statement's " + "; ".join(differing)
     return None
@@ -984,7 +1011,7 @@ def proof_every_attested_item_is_sealed(root: Path, m: dict[str, Any] | None) ->
         if statement is not None:
             sealed.append(item)
             disagreement = _accounting_disagrees(root, records_dir / item, item, merge_sha,
-                                                 statement)
+                                                 statement, merges=merges)
             if disagreement:
                 reasons.append(disagreement)
         elif exit_code == 2:

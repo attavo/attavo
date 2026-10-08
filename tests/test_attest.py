@@ -92,6 +92,12 @@ def test_attest_prints_a_valid_statement_on_a_coherent_chain_and_writes_nothing(
     assert statement["sha"] == statement["merge_sha"]
     assert statement["tokens"].keys() >= {"build", "verify", "counsel", "input", "output"}
 
+    # issue #349: acts is read from the item's own commits, never the
+    # hard-coded [] the schema used to carry regardless -- the approval and
+    # the merge are always among them.
+    assert {"approve", "merge"} <= {a["act"] for a in statement["acts"]}
+    assert all(a["sha"] for a in statement["acts"])
+
     assert records_snapshot(root) == before
     assert git(root, "status", "--porcelain") == ""
 

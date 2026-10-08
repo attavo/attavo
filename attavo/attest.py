@@ -357,6 +357,12 @@ def cmd_attest(argv: list[str]) -> int:
     item_time, item_cost, item_tokens_ = item_accounting(
         records_dir, sealed_at, (m.get("cost") or {}).get("rates"))
 
+    # Imported here, not at module level: attavo.ledger imports from
+    # attavo.doctor, which imports from this module -- a cycle resolved by
+    # deferring to call time, when every module is already loaded.
+    from attavo.ledger import item_acts_and_interventions
+    acts, interventions = item_acts_and_interventions(root, m, item_id)
+
     statement: AttestRecord = {
         "sha": head_sha,
         "merge_sha": head_sha,
@@ -370,11 +376,10 @@ def cmd_attest(argv: list[str]) -> int:
         "verify": verify_path.stem if verify_path else None,
         "verify_sha": latest_verify.get("sha"),
         "at": now_iso(),
-        # Neither is populated by anything today -- no ruling or amendment
-        # log exists yet for either to read from. Carried as empty rather
-        # than omitted, since the schema names them.
-        "interventions": [],
-        "acts": [],
+        # Read from the item's own commits (issue #349), the same
+        # classification attavo ledger makes -- nothing classified twice.
+        "interventions": interventions,
+        "acts": acts,
         # The only accounting: every attempt, summed (the sum across
         # executors was ruled 2026-09-19). v3's final-attempt fields are
         # retired (issue #309).
