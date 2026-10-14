@@ -783,3 +783,48 @@ def test_a_spec_with_no_criteria_is_refused_before_any_criterion_runs(tmp_path: 
     assert rec["status"] == "refused"
     assert rec["criteria"] == []
     assert rec["refusal"] == NO_CRITERIA
+
+
+# Issue #351: a criterion that could not check is not a failing criterion.
+
+COULD_NOT_CHECK = "criterion could not check (exit 2): "
+
+
+def test_a_behavioural_criterion_that_exits_other_than_1_on_both_is_refused_by_name(tmp_path: Path) -> None:
+    """Specimen: #349's behavioural criterion exited 2 (its own code for
+    "the scenario could not be set up") on the tree and on the stub in the
+    CI gate, and v0.34.0 accepted 2/2 as "fails on both"."""
+    root = make_tenant(tmp_path, "valid")
+    set_criteria(root, [STRUCT, "- [behavioural] broken.sh: a scenario that cannot be set up"],
+                 {"checks_marker.sh": "test -f src/marker.txt || exit 1",
+                  "broken.sh": "exit 2"},
+                 THIN_STUB)
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert COULD_NOT_CHECK + "broken.sh" in run.stdout, run.stdout
+    rec = latest_record(root, "1", "spec")
+    assert rec["status"] == "refused" and rec["refusal"] == COULD_NOT_CHECK + "broken.sh"
+
+
+def test_a_structural_criterion_that_exits_other_than_1_on_the_tree_is_refused_by_name(tmp_path: Path) -> None:
+    """`grep -q` on a missing file exits 2; a structural criterion must say
+    1 when the thing it checks is absent, so a crash is told from a no."""
+    root = make_tenant(tmp_path, "valid")
+    set_criteria(root, ["- [structural] crashes.sh: the marker file exists"],
+                 {"crashes.sh": "test -f src/marker.txt || exit 3"},
+                 THIN_STUB)
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert "criterion could not check (exit 3): crashes.sh" in run.stdout, run.stdout
+    assert latest_record(root, "1", "spec")["refusal"] == "criterion could not check (exit 3): crashes.sh"
+
+
+def test_a_thin_stub_whose_criteria_exit_exactly_1_still_passes(tmp_path: Path) -> None:
+    root = make_tenant(tmp_path, "valid")
+    set_criteria(root, [STRUCT, BEHAV],
+                 {"checks_marker.sh": "test -f src/marker.txt || exit 1",
+                  "logic.sh": "test \"$(cat src/logic.txt 2>/dev/null)\" = done || exit 1"},
+                 THIN_STUB)
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert latest_record(root, "1", "spec")["status"] == "pass"

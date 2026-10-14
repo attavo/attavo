@@ -1,0 +1,28 @@
+{
+  "sha": "919c01bba8526b6f2002830533e8e4c35f57071e",
+  "spec_sha": "919c01bba8526b6f2002830533e8e4c35f57071e",
+  "at": "2026-10-14T19:48:02Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "the-rejection-tests-exist.sh",
+      "kind": "structural",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "a-criterion-that-could-not-check-is-refused.sh",
+      "kind": "behavioural",
+      "on_tree": 2,
+      "on_stub": 2
+    }
+  ],
+  "refusal": null,
+  "class": "fix",
+  "research": "not required by policy",
+  "record_version": 4,
+  "item": "351",
+  "product_version": "v0.34.0",
+  "product_pin": "v0.34.0"
+}
