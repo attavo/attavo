@@ -102,9 +102,12 @@ def log(root: Path, name: str) -> list[dict[str, Any]]:
 
 
 def put(root: Path, name: str, body: Any, base: int, by: str,
-        check: Callable[[Any], list[str]] | None = None) -> dict[str, Any]:
+        check: Callable[[Any], list[str]] | None = None, at: str | None = None) -> dict[str, Any]:
     """Write version base+1 of name, or refuse: a stale base, an empty
-    author, a body the check refuses, or a writer that landed first."""
+    author, a body the check refuses, or a writer that landed first. at
+    stamps the version; the default reads the clock, but a caller that
+    already stamped part of the body (e.g. a plan claim) passes that same
+    stamp here so the two agree by construction rather than by chance."""
     if not by.strip():
         raise StoreRefusal("a write names its author (--by)")
     if check is not None:
@@ -117,7 +120,7 @@ def put(root: Path, name: str, body: Any, base: int, by: str,
     d = _doc_dir(root, name)
     d.mkdir(parents=True, exist_ok=True)
     envelope = {"name": name, "version": base + 1, "base": base, "sha256": body_sha256(body),
-                "by": by, "at": now_iso(), "body": body}
+                "by": by, "at": at if at is not None else now_iso(), "body": body}
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".put-", suffix=".json")
     try:
         with os.fdopen(fd, "w") as f:

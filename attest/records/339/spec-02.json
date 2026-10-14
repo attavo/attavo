@@ -1,0 +1,28 @@
+{
+  "sha": "cdc780ee7388efa5a23d6bd1b886ed958f003be5",
+  "spec_sha": "cdc780ee7388efa5a23d6bd1b886ed958f003be5",
+  "at": "2026-10-14T19:53:11Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "the-rejection-test-exists.sh",
+      "kind": "structural",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "a-claims-write-reads-the-clock-once.sh",
+      "kind": "behavioural",
+      "on_tree": 1,
+      "on_stub": 1
+    }
+  ],
+  "refusal": null,
+  "class": "fix",
+  "research": "not required by policy",
+  "record_version": 4,
+  "item": "339",
+  "product_version": "v0.34.0",
+  "product_pin": "v0.34.0"
+}

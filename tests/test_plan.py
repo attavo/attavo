@@ -265,3 +265,30 @@ def test_plan_claims_refuses_a_stale_base_naming_the_writer_that_landed_first(
     err = capsys.readouterr().err
     assert "moved" in err and "version 2" in err and "bob" in err
     assert "claims" not in store.get(root, "plan")["body"]  # type: ignore[index]
+
+
+# Issue #339: one plan write reads the clock once.
+
+def test_a_plan_write_stamps_the_claim_and_the_version_from_one_clock_read(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Specimen: lane orange's full run for #336 at 14dc209 failed
+    test_plan_claims_writes_the_draft_claims_beside_the_order_and_clear_removes_them
+    under load, because set_claims and store.put each called now_iso() and
+    the two calls straddled a second. With the clock forced to a different
+    second on every read, the claim's `at` and the version's `at` must
+    still agree."""
+    from attavo import plan as plan_mod
+    from attavo import store as store_mod
+    ticks = iter(range(1, 1000))
+
+    def ticking() -> str:
+        return f"2026-01-01T00:00:{next(ticks):02d}Z"
+
+    monkeypatch.setattr(plan_mod, "now_iso", ticking, raising=False)
+    monkeypatch.setattr(store_mod, "now_iso", ticking, raising=False)
+    root = tenant_with_plan(tmp_path)
+    monkeypatch.chdir(root)
+    assert plan_mod.cmd_plan(["claims", "#262", "attavo/frontier.py", "--by", "bob"]) == 0
+    doc = store.get(root, "plan")
+    assert doc is not None
+    assert doc["body"]["claims"]["262"]["at"] == doc["at"]
