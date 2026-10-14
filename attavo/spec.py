@@ -247,6 +247,18 @@ def run_criteria(root: Path, spec_dir: Path, names: list[str],
         return results
 
 
+def could_not_check_refusal(results: list[dict[str, Any]]) -> str | None:
+    """Exit codes are a contract: 0 when a criterion holds, 1 when its
+    assertion fails, and nothing else -- any other exit, on the tree or the
+    stub, means the criterion could not check at all (its own setup failed,
+    or it crashed) and is refused by name before its kind is judged."""
+    for c in results:
+        for exit_code in (c["on_tree"], c["on_stub"]):
+            if exit_code not in (0, 1):
+                return f"criterion could not check (exit {exit_code}): {c['name']}"
+    return None
+
+
 def commit_postdates(root: Path, earlier: str, later: str) -> bool:
     """Whether later is a strict descendant of earlier on this branch."""
     if earlier == later:
@@ -333,16 +345,18 @@ def cmd_spec_gate(argv: list[str]) -> int:
                 # must meet -- an operator scripting a ruling the executor
                 # skipped. Refused only when a criterion satisfies neither.
                 results = run_criteria(root, spec_dir, parsed["criteria"], parsed["kinds"])
-                # A behavioural criterion fails on the stub by design, so
-                # after a build it is judged on the tree alone.
-                fail_behav = next((c for c in results
-                                   if c["kind"] == "behavioural" and c["on_tree"] != 0), None)
-                fail = next((c for c in results if c["kind"] == "structural"
-                             and c["on_tree"] != 0 and c["on_stub"] != 0), None)
-                if fail_behav:
-                    refusal = f"criterion labelled behavioural fails on the tree: {fail_behav['name']}"
-                elif fail:
-                    refusal = f"criterion fails against the tree plus stub: {fail['name']}"
+                refusal = could_not_check_refusal(results)
+                if refusal is None:
+                    # A behavioural criterion fails on the stub by design, so
+                    # after a build it is judged on the tree alone.
+                    fail_behav = next((c for c in results
+                                       if c["kind"] == "behavioural" and c["on_tree"] != 0), None)
+                    fail = next((c for c in results if c["kind"] == "structural"
+                                 and c["on_tree"] != 0 and c["on_stub"] != 0), None)
+                    if fail_behav:
+                        refusal = f"criterion labelled behavioural fails on the tree: {fail_behav['name']}"
+                    elif fail:
+                        refusal = f"criterion fails against the tree plus stub: {fail['name']}"
         elif not parsed["claims"]:
             refusal = "claims: empty; the build may touch nothing"
         elif not parsed["criteria"]:
@@ -382,6 +396,8 @@ def cmd_spec_gate(argv: list[str]) -> int:
                 refusal = stub_removed_refusal(root, spec_dir)
                 if refusal is None:
                     results = run_criteria(root, spec_dir, listed, parsed["kinds"])
+                    refusal = could_not_check_refusal(results)
+                if refusal is None:
                     fail_tree = next((c for c in results if c["on_tree"] == 0), None)
                     if fail_tree:
                         refusal = f"criterion passes against the tree: {fail_tree['name']}"
@@ -446,6 +462,13 @@ both, so the stub can be thin; before approval a spec needs at least one
 structural criterion. A label the measured exits contradict is
 refused by name, as is an unknown one. After a build a behavioural
 criterion must pass on the tree.
+Exit codes are a contract: a criterion exits 0 when it holds, 1 when its
+assertion fails, and anything else when it could not check. Before
+approval, every criterion must exit exactly 1 on the tree, and a
+behavioural one exactly 1 on the tree plus stub; after a build, a
+criterion whose exit is neither 0 nor 1 is refused the same way. Either
+way it is refused as "criterion could not check (exit N): <name>",
+before kinds are judged, and never counted as a failing criterion.
 See the spec contract in the project's Phase 1 issue for the full rules
 each one enforces."""),
         ),
