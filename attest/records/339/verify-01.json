@@ -1,0 +1,88 @@
+{
+  "sha": "3d0782a4b7e4f3fc4d7494692b1cbdf06e270e6f",
+  "build_sha": "d0520af011e496846a84a17ee7b394640680565f",
+  "build_record": "build-02",
+  "approval_sha": "0fb7e2d2191713bc3cfd204831df50e6f563cc49",
+  "at": "2026-10-14T20:20:27Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "af2911d2960b7c0730a65cb749cc20c60e04d9e1",
+    "conclusions": [
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "The rejection test proves timestamp equality, not that the clock is read exactly once",
+      "specimen": "tests/test_plan.py::test_a_plan_write_stamps_the_claim_and_the_version_from_one_clock_read",
+      "retires": "The unverified portion of the approved requirement that a plan claims write retires the second clock read",
+      "rejection_test": "test_a_plan_claims_write_calls_now_iso_exactly_once",
+      "severity": "Blocking when a successful claims write invokes either plan.now_iso or store.now_iso more than once; currently the implementation invokes it once, so this is a coverage finding."
+    },
+    {
+      "title": "The promised unchanged default behavior of store.put has no regression test",
+      "specimen": "attavo/store.py::put at commit 54382f749237c4d6663b59eb8b2de57c6850df10; tests/test_store.py is unchanged despite being claimed",
+      "retires": "The unverified compatibility promise that callers omitting at retain the existing clock-derived envelope timestamp",
+      "rejection_test": "test_put_without_an_explicit_stamp_reads_now_iso_and_uses_its_value",
+      "severity": "Blocking when a store.put caller that omits at receives any timestamp other than its single now_iso result; currently the fallback implementation preserves that behavior, so this is a coverage finding."
+    }
+  ],
+  "tests_named": [
+    "test_a_plan_claims_write_calls_now_iso_exactly_once",
+    "test_put_without_an_explicit_stamp_reads_now_iso_and_uses_its_value"
+  ],
+  "commits": [],
+  "stub_ratio": 0.0,
+  "tokens": {
+    "input": 141020,
+    "output": 2351
+  },
+  "cost_usd": null,
+  "wall_clock_s": 53.746,
+  "status": "pass",
+  "report_class": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 11,
+  "item": "339",
+  "product_version": "v0.34.0-41-g9d201d7",
+  "product_pin": "v0.34.0"
+}
