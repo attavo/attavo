@@ -32,7 +32,7 @@
         "required": ["at", "class", "by", "sha"],
         "properties": {
           "at": {"type": "string", "minLength": 1},
-          "class": {"type": "string", "minLength": 1},
+          "class": {"type": "string", "enum": ["amend", "launch", "transport"]},
           "by": {"type": "string", "minLength": 1},
           "sha": {"type": "string", "minLength": 1}
         }

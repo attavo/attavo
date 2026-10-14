@@ -1,0 +1,34 @@
+{
+  "sha": "4eb080f9f29ef6f923524eaeb05a078e365dd709",
+  "spec_sha": "4eb080f9f29ef6f923524eaeb05a078e365dd709",
+  "at": "2026-10-14T19:43:59Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "the-rejection-tests-exist.sh",
+      "kind": "structural",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "a-v6-statement-missing-its-accounting-fails-proof-six.sh",
+      "kind": "behavioural",
+      "on_tree": 2,
+      "on_stub": 2
+    },
+    {
+      "name": "the-schema-refuses-an-unknown-intervention-class.sh",
+      "kind": "behavioural",
+      "on_tree": 2,
+      "on_stub": 2
+    }
+  ],
+  "refusal": null,
+  "class": "fix",
+  "research": "not required by policy",
+  "record_version": 4,
+  "item": "353",
+  "product_version": "v0.34.0",
+  "product_pin": "v0.34.0"
+}
