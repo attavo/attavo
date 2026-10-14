@@ -903,57 +903,72 @@ def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_s
     #202 retired the one-second tolerance. A statement sealed before `time`
     existed carries neither key and is not checked; a key that is present
     holds a block, so a null one, or one block without the other, is a
-    disagreement. No new read of the store. merges, when given, is
-    _merges_reachable's own result -- the caller's loop over every item
-    computes it once rather than each item's acts and interventions
-    walking the default branch's merges again."""
+    disagreement -- except from v6, where both are always required, so a
+    v6 statement missing either fails by name instead of going unchecked
+    (issue #353). v6's `acts` and `interventions` are compared whatever
+    else the statement carries, time and cost included -- a v6 statement
+    that carries neither is not let through on that account alone. No new
+    read of the store. merges, when given, is _merges_reachable's own
+    result -- the caller's loop over every item computes it once rather
+    than each item's acts and interventions walking the default branch's
+    merges again."""
     inner = statement.get("predicate")
     predicate = inner if isinstance(inner, dict) else statement
-    if "time" not in predicate and "cost" not in predicate:
-        return None
-    stated_time, stated_cost = predicate.get("time"), predicate.get("cost")
-    where = f"item {item} merged at {merge_sha[:12]}"
-    if not isinstance(stated_time, dict) or not isinstance(stated_cost, dict):
-        return (f"{where}: the statement's time and cost are not both blocks "
-                f"(time is {_carried(predicate, 'time')}, cost is {_carried(predicate, 'cost')})")
-    try:
-        sealed_at: int | None = int(git(root, "show", "-s", "--format=%ct", merge_sha).strip())
-    except (RuntimeError, ValueError):
-        sealed_at = None
     version = _predicate_version(statement, predicate)
+    where = f"item {item} merged at {merge_sha[:12]}"
+    differing: list[str] = []
+
     # v5 prices a record by the [cost.rates] the tenant's manifest declared
     # at the sealed commit, never by the rates the statement carries: the
     # carried block is then compared like any field, and a later edit to the
-    # manifest cannot unseal anything. v3 and v4 priced nothing.
-    rates: dict[str, Any] | None = None
+    # manifest cannot unseal anything. v3 and v4 priced nothing. Read ahead
+    # of the time/cost check below: v6's acts and interventions need the
+    # same sealed manifest even when time and cost are not checked.
+    declared: dict[str, Any] | None = None
     if version >= 5:
         try:
             declared = parse_manifest(git(root, "show", f"{merge_sha}:{MANIFEST}"))
         except (RuntimeError, ValueError) as exc:
             return (f"{where}: the manifest {MANIFEST} cannot be read at the sealed commit, "
                     f"so a v5 statement's estimate cannot be checked ({exc})")
-        found = (declared.get("cost") or {}).get("rates")
-        rates = found if isinstance(found, dict) else {}
-    summed_time, summed_cost, summed_tokens = item_accounting(
-        item_records_dir, sealed_at, rates)
-    cost_now = {k: v for k, v in summed_cost.items() if version >= 5 or k not in V5_COST_FIELDS}
-    if version < 5:  # v3 and v4 named the record, never the missing rate
-        cost_now["not_read"] = [n.split(" (no [cost.rates]")[0] for n in summed_cost["not_read"]]
-    differing = (_differences("time", stated_time, dict(summed_time))
-                 + _differences("cost", stated_cost, cost_now))
-    if version >= 4:
-        stated_tokens = predicate.get("tokens")
-        if isinstance(stated_tokens, dict):
-            differing += _differences("tokens", stated_tokens, dict(summed_tokens))
-        else:
-            differing.append(f"tokens is {_carried(predicate, 'tokens')}, not a block "
-                             f"its records sum to {dict(summed_tokens)!r}")
+
+    stated_time, stated_cost = predicate.get("time"), predicate.get("cost")
+    both_absent = "time" not in predicate and "cost" not in predicate
+    if both_absent and version < 6:
+        pass  # sealed before `time` and `cost` existed; not checked
+    elif both_absent or not isinstance(stated_time, dict) or not isinstance(stated_cost, dict):
+        differing.append(f"time and cost are not both blocks "
+                         f"(time is {_carried(predicate, 'time')}, cost is {_carried(predicate, 'cost')})")
+    else:
+        try:
+            sealed_at: int | None = int(git(root, "show", "-s", "--format=%ct", merge_sha).strip())
+        except (RuntimeError, ValueError):
+            sealed_at = None
+        rates: dict[str, Any] | None = None
+        if declared is not None:
+            found = (declared.get("cost") or {}).get("rates")
+            rates = found if isinstance(found, dict) else {}
+        summed_time, summed_cost, summed_tokens = item_accounting(
+            item_records_dir, sealed_at, rates)
+        cost_now = {k: v for k, v in summed_cost.items() if version >= 5 or k not in V5_COST_FIELDS}
+        if version < 5:  # v3 and v4 named the record, never the missing rate
+            cost_now["not_read"] = [n.split(" (no [cost.rates]")[0] for n in summed_cost["not_read"]]
+        differing += (_differences("time", stated_time, dict(summed_time))
+                     + _differences("cost", stated_cost, cost_now))
+        if version >= 4:
+            stated_tokens = predicate.get("tokens")
+            if isinstance(stated_tokens, dict):
+                differing += _differences("tokens", stated_tokens, dict(summed_tokens))
+            else:
+                differing.append(f"tokens is {_carried(predicate, 'tokens')}, not a block "
+                                 f"its records sum to {dict(summed_tokens)!r}")
+
     if version >= 6:
         # Imported here, not at module level: attavo.ledger imports from
         # this module, a cycle resolved by deferring to call time.
         from attavo.ledger import item_acts_and_interventions
         summed_acts, summed_interventions = item_acts_and_interventions(
-            root, declared, item, merges=merges)
+            root, declared or {}, item, merges=merges)
         stated_acts, stated_interventions = predicate.get("acts"), predicate.get("interventions")
         if not (isinstance(stated_acts, list) and _same(stated_acts, summed_acts)):
             differing.append(f"acts {stated_acts!r} is not its records' {summed_acts!r}")
