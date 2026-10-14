@@ -216,9 +216,10 @@ def move(body: dict[str, Any], what: str, epic: str) -> dict[str, Any]:
     return new
 
 
-def set_claims(body: dict[str, Any], what: str, paths: list[str], by: str) -> dict[str, Any]:
+def set_claims(body: dict[str, Any], what: str, paths: list[str], by: str, at: str) -> dict[str, Any]:
     """A copy of body with issue what's draft claims set to paths, who set
-    them and when. Raises StoreRefusal."""
+    them and when (at, read once by the caller and also given to the
+    store write, so the claim and its version agree). Raises StoreRefusal."""
     n = _issue_arg(what)
     if n is None:
         raise store.StoreRefusal(f"{what} is not an issue number")
@@ -228,7 +229,7 @@ def set_claims(body: dict[str, Any], what: str, paths: list[str], by: str) -> di
     if not paths or bad:
         raise store.StoreRefusal(bad[0] if bad else "claims names at least one path")
     new: dict[str, Any] = copy.deepcopy(body)
-    new.setdefault("claims", {})[str(n)] = {"paths": list(paths), "by": by, "at": now_iso()}
+    new.setdefault("claims", {})[str(n)] = {"paths": list(paths), "by": by, "at": at}
     return new
 
 
@@ -259,11 +260,11 @@ def _refuse(msg: str) -> int:
     return 2
 
 
-def _write(root: Path, body: dict[str, Any], base: int, by: str | None) -> int:
+def _write(root: Path, body: dict[str, Any], base: int, by: str | None, at: str | None = None) -> int:
     if not by:
         return _refuse("a write names its author (--by LOGIN)")
     try:
-        env = store.put(root, DOC, body, base, by, check=shape_errors)
+        env = store.put(root, DOC, body, base, by, check=shape_errors, at=at)
     except store.StoreRefusal as r:
         return _refuse(str(r))
     print(f"plan version {env['version']} written by {env['by']} at {env['at']} (sha256 {env['sha256'][:12]})")
@@ -324,9 +325,11 @@ def cmd_plan(argv: list[str]) -> int:
                 return _refuse("plan claims '#N' <path>... --by LOGIN, or plan claims '#N' --clear --by LOGIN")
             if not by:
                 return _refuse("a write names its author (--by LOGIN)")
-            new = (clear_claims(current["body"], words[0]) if clear
-                   else set_claims(current["body"], words[0], paths, by))
-            return _write(root, new, current["version"], by)
+            if clear:
+                return _write(root, clear_claims(current["body"], words[0]), current["version"], by)
+            at = now_iso()
+            return _write(root, set_claims(current["body"], words[0], paths, by, at),
+                           current["version"], by, at=at)
         epic = _opt(args, "--epic")
         if not args or args[0].startswith("--") or epic is None:
             return _refuse("move #N --epic EPIC --by LOGIN")
