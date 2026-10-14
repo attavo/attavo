@@ -28,4 +28,4 @@ Retires: proof six holding a statement it never compared.
 
 - [structural] the-rejection-tests-exist.sh: tests/test_attest_interventions.py carries test_doctor_proof_six_rejects_a_v6_statement_without_time_or_cost_whose_acts_or_interventions_differ and test_v6_schema_rejects_an_intervention_class_outside_amend_launch_transport
 - [behavioural] a-v6-statement-missing-its-accounting-fails-proof-six.sh: a v6 statement sealed with neither time nor cost and forged acts fails proof six, naming the item
-- [behavioural] the-schema-refuses-an-unknown-intervention-class.sh: the attestation schema accepts an intervention of class transport and refuses one of class bogus
+- [behavioural] the-schema-refuses-an-unknown-intervention-class.sh: the attestation schema's intervention class is the enum amend, launch, transport
