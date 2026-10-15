@@ -245,3 +245,80 @@ def test_ledger_json_is_one_object_matching_the_text_forms_numbers(tmp_path: Pat
     assert f"executor commits: {summary['executor_commits']}" in run_text.stdout
     assert f"stops: {summary['stops']}" in run_text.stdout
     assert f"since: {summary['since']}" in run_text.stdout
+
+
+# Issue #350: each ledger row names what its commit carries.
+
+def build_merged_item_with_a_marker_a_transport_and_a_store(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    """build_merged_item's order plus a marker commit, a person's transport
+    commit after approval, and a [forge].attestation_command whose store
+    holds the merge's statement. Returns (root, shas by role)."""
+    root = make_tenant(tmp_path, "ledger_base")
+    (root / "attavo.toml").write_text(
+        (root / "attavo.toml").read_text() + '\n[forge]\nattestation_command = "sh ./fake-store"\n')
+    (root / "fake-store").write_text(
+        '#!/bin/sh\nread sha\ntest -f "statements/$sha.json" && cat "statements/$sha.json"\n')
+    commit_as(root, PERSON, "install the store read", ["attavo.toml", "fake-store"])
+    git(root, "checkout", "-b", "item")
+    shas: dict[str, str] = {}
+    shas["spec"] = add_spec(root, "1")
+    rel = write_record(root, "1", "spec", 1, {"status": "pass", "spec_sha": shas["spec"], "product_version": "v0.19.1"})
+    shas["spec_record"] = commit_as(root, RECORDS_APP, "attavo: spec-gate record for item 1", [rel])
+    rel = write_record(root, "1", "approval", 1, {"approved_by": "alice", "sha": shas["spec"],
+                                                  "spec_sha": shas["spec"], "product_version": "v0.19.1"})
+    shas["approve"] = commit_as(root, RECORDS_APP, "attavo: approval record for item 1", [rel])
+    (root / "NOTES.md").write_text("a person's commit mid-run\n")
+    shas["transport"] = commit_as(root, PERSON, "notes", ["NOTES.md"])
+    marker = root / "records" / "1" / "build-01.started"
+    marker.write_text(json.dumps({"at": "2026-01-01T00:00:00Z", "host": "h", "sha": shas["spec"],
+                                  "product_version": "v0.19.1"}))
+    shas["marker"] = commit_as(root, DRIVER, "attavo: build invocation 01 started for item 1",
+                               [str(marker.relative_to(root))])
+    (root / "built.txt").write_text("built\n")
+    shas["change"] = commit_as(root, EXECUTOR, "fixture: build item 1", ["built.txt"])
+    rel = write_record(root, "1", "build", 1, {"status": "pass", "product_version": "v0.19.1"})
+    shas["build"] = commit_as(root, DRIVER, "attavo: build record for item 1 (build-01)", [rel])
+    rel = write_record(root, "1", "verify", 1, {"status": "pass", "product_version": "v0.19.1"})
+    shas["verify"] = commit_as(root, DRIVER, "attavo: verify record for item 1 (verify-01)", [rel])
+    git(root, "checkout", "main")
+    subprocess.run(["git", "-C", str(root), "merge", "--no-ff", "item", "-m", "Merge pull request #1 from x/item"],
+                   check=True)
+    shas["merge"] = git(root, "rev-parse", "HEAD").strip()
+    store = root / "statements"
+    store.mkdir()
+    (store / f"{shas['merge']}.json").write_text(json.dumps({
+        "_type": "https://in-toto.io/Statement/v1",
+        "predicateType": "https://attavo.dev/attestation/v6",
+        "subject": [{"name": "attavo/attavo", "digest": {"sha256": "ab" * 32}}],
+        "predicate": {"item": "1"}}))
+    return root, shas
+
+
+def test_each_ledger_row_names_what_its_commit_carries(tmp_path: Path) -> None:
+    """Specimen: #344's ledger (2026-10-07) read "not read" for the marker
+    commits, the two transports and the merge, when each carries something
+    nameable: the .started file, nothing by design, and the statement."""
+    root, shas = build_merged_item_with_a_marker_a_transport_and_a_store(tmp_path)
+    run = run_attavo(root, "ledger", "1", "--json")
+    assert run.returncode == 0, run.stdout + run.stderr
+    rows = {r["sha"]: r for r in json.loads(run.stdout)["rows"]}
+    assert rows[shas["spec"]]["carries"] == ["specs/1/spec.md"]
+    assert rows[shas["spec_record"]]["carries"] == ["records/1/spec-01.json"]
+    assert rows[shas["approve"]]["carries"] == ["records/1/approval-01.json"]
+    assert rows[shas["marker"]]["carries"] == ["records/1/build-01.started"]
+    assert rows[shas["change"]]["carries"] == ["built.txt"]
+    assert rows[shas["build"]]["carries"] == ["records/1/build-01.json"]
+    assert rows[shas["transport"]]["class"] == "transport" and rows[shas["transport"]]["carries"] == []
+    merge = rows[shas["merge"]]
+    assert merge["carries"] == []
+    assert merge["statement"] == {"predicate_type": "https://attavo.dev/attestation/v6", "subject": "ab" * 32}
+
+
+def test_the_merge_row_says_not_read_when_the_store_does_not_answer(tmp_path: Path) -> None:
+    root, shas = build_merged_item_with_a_marker_a_transport_and_a_store(tmp_path)
+    (root / "fake-store").write_text("#!/bin/sh\nexit 2\n")
+    run = run_attavo(root, "ledger", "1", "--json")
+    assert run.returncode == 0, run.stdout + run.stderr
+    merge = next(r for r in json.loads(run.stdout)["rows"] if r["sha"] == shas["merge"])
+    assert merge["statement"] is None
+    assert "not read" in merge["note"] and "store" in merge["note"]

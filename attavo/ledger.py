@@ -11,7 +11,8 @@ from typing import Any
 
 from attavo.build import commits_with_diffs, driver_identity
 from attavo.common import MANIFEST, STAGES, git, read_manifest, git_env
-from attavo.doctor import INVOCATION_MARKER_SUFFIX, _merges_reachable, merge_introducing_records
+from attavo.doctor import (INVOCATION_MARKER_SUFFIX, _merges_reachable, attestation_command,
+                           merge_introducing_records, statement_for)
 from attavo.records import RECORD_RE, _load_record
 from attavo.stops import item_stops
 from attavo import Command
@@ -42,6 +43,54 @@ def _is_records_app(name: str) -> bool:
     product can name in advance, so the one fact it can check is the
     shape the forge itself gives every app identity, not a specific one."""
     return name.endswith("[bot]")
+
+
+def _carries(touched: list[str], specs_prefix: str, records_prefix: str) -> list[str]:
+    """What a row names as its commit's own: the touched paths under
+    paths.specs or paths.records for this item -- the ledger's own
+    nameable record, never a guess at the rest of the tree a commit
+    happened to touch alongside it."""
+    return [p for p in touched if p.startswith(specs_prefix) or p.startswith(records_prefix)]
+
+
+def _statement_fields(statement: dict[str, Any]) -> dict[str, Any] | None:
+    """{predicate_type, subject}: the envelope's own predicateType and its
+    first subject's sha256 digest -- the two fields a ledger row names,
+    never the statement's own predicate (attest's own business, not a
+    row's)."""
+    predicate_type = statement.get("predicateType")
+    subject = statement.get("subject")
+    if not isinstance(predicate_type, str):
+        return None
+    if not (isinstance(subject, list) and subject and isinstance(subject[0], dict)):
+        return None
+    digest = subject[0].get("digest")
+    sha256 = digest.get("sha256") if isinstance(digest, dict) else None
+    if not isinstance(sha256, str):
+        return None
+    return {"predicate_type": predicate_type, "subject": sha256}
+
+
+def _merge_statement(root: Path, m: dict[str, Any], merge_sha: str) -> tuple[dict[str, Any] | None, str | None]:
+    """(statement, note): the merge's own record, read through
+    [forge].attestation_command with the merge sha -- the same read
+    doctor's proof six already makes (statement_for). None and a
+    "not read: ..." note naming which source did not answer when the
+    manifest names no command, the command cannot read the store, or the
+    store holds nothing shaped like a statement for this sha -- never a
+    guess at what the merge carried."""
+    cmd = attestation_command(m)
+    if cmd is None:
+        return None, "not read: no [forge].attestation_command in the manifest"
+    statement, exit_code = statement_for(root, cmd, merge_sha)
+    if statement is None:
+        if exit_code != 0:
+            return None, f"not read: the store could not be read; {cmd!r} exited {exit_code}"
+        return None, f"not read: the store holds no statement for {merge_sha[:12]}"
+    fields = _statement_fields(statement)
+    if fields is None:
+        return None, f"not read: the store's statement for {merge_sha[:12]} has no subject digest"
+    return fields, None
 
 
 def first_commit_touching(root: Path, relpath: str) -> str | None:
@@ -198,12 +247,18 @@ def item_ledger(root: Path, m: dict[str, Any], item_id: str, merges: list[dict[s
         sha, name, email = c["sha"], c["name"], c["email"]
 
         if merge_sha is not None and sha == merge_sha:
-            rows.append({"sha": sha, "identity": name, "class": "merge"})
+            statement, note = _merge_statement(root, m, merge_sha)
+            row = {"sha": sha, "identity": name, "class": "merge", "carries": [],
+                  "statement": statement}
+            if note is not None:
+                row["note"] = note
+            rows.append(row)
             operator_acts += 1
             continue
 
         if email.startswith("executor+") and email.endswith("@attavo.invalid"):
-            rows.append({"sha": sha, "identity": name, "class": "change"})
+            rows.append({"sha": sha, "identity": name, "class": "change",
+                        "carries": list(c["touched"])})
             executor_commits += 1
             continue
 
@@ -214,9 +269,10 @@ def item_ledger(root: Path, m: dict[str, Any], item_id: str, merges: list[dict[s
             content = record_content.get((sha, relpath), {})
             if since is None:
                 since = content.get("product_version")
+            carries = _carries(c["touched"], specs_prefix, records_prefix)
 
             if stage == "approval":
-                rows.append({"sha": sha, "identity": name, "class": "approve"})
+                rows.append({"sha": sha, "identity": name, "class": "approve", "carries": carries})
                 operator_acts += 1
                 approval_seen = True
                 continue
@@ -224,17 +280,17 @@ def item_ledger(root: Path, m: dict[str, Any], item_id: str, merges: list[dict[s
             is_driver = name == driver["name"] and email == driver["email"]
             is_records_app = _is_records_app(name)
             if stage == "spec" or is_driver or is_records_app:
-                rows.append({"sha": sha, "identity": name, "class": "record"})
+                rows.append({"sha": sha, "identity": name, "class": "record", "carries": carries})
                 product_acts += 1
                 continue
 
             version = _semver_tuple(content.get("product_version"))
             if version is not None and version < LEDGER_V018_CUTOFF:
                 rows.append({"sha": sha, "identity": name, "class": "record-or-launch",
-                            "note": "not distinguishable before v0.18.0"})
+                            "note": "not distinguishable before v0.18.0", "carries": carries})
                 continue
 
-            rows.append({"sha": sha, "identity": name, "class": "launch"})
+            rows.append({"sha": sha, "identity": name, "class": "launch", "carries": carries})
             operator_acts += 1
             continue
 
@@ -242,18 +298,21 @@ def item_ledger(root: Path, m: dict[str, Any], item_id: str, merges: list[dict[s
         # act, never the operator's.
         if any(p.startswith(records_prefix) and p.endswith(INVOCATION_MARKER_SUFFIX)
                for p in c["touched"]):
-            rows.append({"sha": sha, "identity": name, "class": "record"})
+            rows.append({"sha": sha, "identity": name, "class": "record",
+                        "carries": _carries(c["touched"], specs_prefix, records_prefix)})
             product_acts += 1
             continue
 
         if any(p.startswith(specs_prefix) for p in c["touched"]):
             cls = "amend" if approval_seen else "spec"
-            rows.append({"sha": sha, "identity": name, "class": cls})
+            rows.append({"sha": sha, "identity": name, "class": cls,
+                        "carries": _carries(c["touched"], specs_prefix, records_prefix)})
             if cls == "amend":
                 operator_acts += 1
             continue
 
-        rows.append({"sha": sha, "identity": name, "class": "transport"})
+        # A person's transport commit: nothing to name, by design (#350).
+        rows.append({"sha": sha, "identity": name, "class": "transport", "carries": []})
         operator_acts += 1
 
     # issue #137: the same set attavo stops counts, from the same reader
@@ -348,8 +407,14 @@ def cmd_ledger(argv: list[str]) -> int:
     for entry in ledgers:
         print(f"attavo ledger: item {entry['item']}")
         for row in entry["rows"]:
+            if row["class"] == "merge":
+                statement = row["statement"]
+                carries = (f"statement {statement['predicate_type']} {statement['subject'][:12]}"
+                          if statement else "no statement")
+            else:
+                carries = ", ".join(row["carries"]) if row["carries"] else "nothing"
             note = f"  ({row['note']})" if "note" in row else ""
-            print(f"  {row['sha'][:12]}  {row['identity']:<32}  {row['class']}{note}")
+            print(f"  {row['sha'][:12]}  {row['identity']:<32}  {row['class']:<16}  {carries}{note}")
         s = entry["summary"]
         print(f"  operator acts: {s['operator_acts']}  product acts: {s['product_acts']}  "
              f"executor commits: {s['executor_commits']}  stops: {s['stops']}  "
