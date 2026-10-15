@@ -1,0 +1,90 @@
+{
+  "sha": "1a2224a7d5af5f90c4d98f2819cd563fb80b6f15",
+  "build_sha": "08b1f4bf1a8f3832fcfd67ce50280a82683f806f",
+  "build_record": "build-02",
+  "approval_sha": "2f8a0fa8c1904e6984ed845cc92d9c1c387077bd",
+  "at": "2026-10-15T15:56:34Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "forge_checks": {
+    "command": "python3 .attavo/bin/forge-checks",
+    "sha": "bb2ef73bcb254ed0d8b26af7ec3c4405ce423090",
+    "conclusions": [
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "title": "A store miss is reported as a store read failure",
+      "specimen": "attavo/ledger.py:85",
+      "retires": "The ambiguous merge-row note that collapses \u201cthe store answered with no statement\u201d into \u201cthe store could not be read.\u201d",
+      "rejection_test": "test_the_merge_row_distinguishes_no_statement_from_an_unreadable_store",
+      "severity": "Blocking when attestation_command exits 1 (the established \u201cstore read successfully but holds no statement\u201d state); harmless only while every nonzero exit denotes an unreadable store."
+    },
+    {
+      "title": "Ledger row construction adds a second attestation-store read to doctor proof six",
+      "specimen": "attavo/ledger.py:251 via item_acts_and_interventions, called from attavo/doctor.py:970",
+      "retires": "The regression whereby proof six reads the same merge statement again while recomputing acts and interventions, despite its contract saying \u201cNo new read of the store.\u201d",
+      "rejection_test": "test_proof_six_reads_each_merge_statement_once",
+      "severity": "Blocking when attestation_command is stateful, costly, one-shot, or returns a different result on its second invocation; harmless only when repeated reads are guaranteed identical and side-effect-free."
+    }
+  ],
+  "tests_named": [
+    "test_each_ledger_row_names_what_its_commit_carries",
+    "test_the_merge_row_says_not_read_when_the_store_does_not_answer",
+    "test_the_merge_row_distinguishes_no_statement_from_an_unreadable_store",
+    "test_proof_six_reads_each_merge_statement_once"
+  ],
+  "commits": [],
+  "stub_ratio": 0.0,
+  "tokens": {
+    "input": 168023,
+    "output": 1972
+  },
+  "cost_usd": null,
+  "wall_clock_s": 51.292,
+  "status": "pass",
+  "report_class": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": null,
+  "record_version": 11,
+  "item": "350",
+  "product_version": "v0.35.0-2-gb949cef",
+  "product_pin": "v0.35.0"
+}
