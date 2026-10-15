@@ -59,3 +59,19 @@ def test_the_stop_shape_mirrors_the_stop_in_each_schema_that_carries_one(path: s
     stop = load(path)["properties"]["stop"]
     assert set(types.Stop.__annotations__) == set(stop["properties"])
     assert set(types.Stop.__required_keys__) == set(stop["required"])
+
+
+# Issue #360, finding 4 (verify-01 on #353): the intervention class type mirrors the schema's enum.
+
+def test_the_intervention_class_type_mirrors_the_schemas_enum() -> None:
+    import typing
+    schema = json.loads((Path(__file__).resolve().parent.parent / "schema" / "attestation.schema.json").read_text())
+    enum = set(schema["properties"]["interventions"]["items"]["properties"]["class"]["enum"])
+    found = None
+    for name in dir(types):
+        obj = getattr(types, name)
+        hints = getattr(obj, "__annotations__", None)
+        if isinstance(hints, dict) and "class" in hints and "sha" in hints:
+            found = typing.get_type_hints(obj)["class"]
+    assert found is not None, "no TypedDict for an intervention in attavo.types"
+    assert typing.get_origin(found) is typing.Literal and set(typing.get_args(found)) == enum

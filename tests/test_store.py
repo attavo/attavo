@@ -133,3 +133,17 @@ def test_a_document_name_that_is_not_a_name_is_refused(tmp_path: Path) -> None:
         with pytest.raises(store.StoreRefusal):
             store.put(root, bad, {}, 0, "alice")
     assert not os.path.exists(tmp_path / "x")
+
+
+# Issue #360, finding 2 (verify-01 on #339): put stamps its own at when the caller passes none.
+
+def test_put_stamps_its_own_at_when_the_caller_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(store, "now_iso", lambda: "2026-02-02T02:02:02Z", raising=False)
+    root = make_tenant(tmp_path, "valid")
+    store.put(root, "plan", {"schema": "plan/1", "epics": [], "edges": [], "policy": {}}, 0, "alice")
+    doc = store.get(root, "plan")
+    assert doc is not None and doc["at"] == "2026-02-02T02:02:02Z"
+    store.put(root, "plan", {"schema": "plan/1", "epics": [], "edges": [], "policy": {}}, 1, "bob",
+              at="2026-03-03T03:03:03Z")
+    doc = store.get(root, "plan")
+    assert doc is not None and doc["at"] == "2026-03-03T03:03:03Z"

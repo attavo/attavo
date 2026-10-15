@@ -828,3 +828,18 @@ def test_a_thin_stub_whose_criteria_exit_exactly_1_still_passes(tmp_path: Path) 
     run = run_attavo(root, "spec-gate", "1")
     assert run.returncode == 0, run.stdout + run.stderr
     assert latest_record(root, "1", "spec")["status"] == "pass"
+
+
+# Issue #360, finding 3 (verify-01 on #351): the exit-code contract is judged before kinds.
+
+def test_a_structural_criterion_that_exits_2_on_the_stub_is_refused_as_could_not_check(tmp_path: Path) -> None:
+    """A structural criterion that fails on the tree (exit 1) and crashes on
+    the stub (exit 2) was refused as "labelled structural fails on the tree
+    plus stub"; the exit-code contract is the earlier fact."""
+    root = make_tenant(tmp_path, "valid")
+    set_criteria(root, ["- [structural] crashes_on_stub.sh: the marker file exists"],
+                 {"crashes_on_stub.sh": "test -f src/marker.txt && exit 2; exit 1"},
+                 THIN_STUB)
+    run = run_attavo(root, "spec-gate", "1")
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert latest_record(root, "1", "spec")["refusal"] == "criterion could not check (exit 2): crashes_on_stub.sh"
