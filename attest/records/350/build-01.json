@@ -1,0 +1,51 @@
+{
+  "sha": "2dee06c2ad0ed63fbeb4a1d4300722a41155a73b",
+  "start_sha": "eff6689f00fb74dbc3109bdc71721ea68714faba",
+  "spec_sha": "c53671f94fc7fb08fece7415e4c4a61188939917",
+  "approval_sha": "2f8a0fa8c1904e6984ed845cc92d9c1c387077bd",
+  "at": "2026-10-15T15:44:53Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.295 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [],
+  "selected_tests": null,
+  "checks": null,
+  "tokens": {
+    "input": 584814,
+    "output": 1670
+  },
+  "cost_usd": 1.3784562,
+  "wall_clock_s": 1104.02,
+  "status": "refused",
+  "refusal": "at 2026-10-15T15:14:20Z the executor ran a test runner outside `attavo test`: python3 -m pytest tests/test_ledger.py -q 2>&1 | tail -60",
+  "halted": null,
+  "refusal_kind": "test-bypass",
+  "report_class": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": {
+    "class": "test-bypass",
+    "provenance": "executor",
+    "detail": "at 2026-10-15T15:14:20Z the executor ran a test runner outside `attavo test`: python3 -m pytest tests/test_ledger.py -q 2>&1 | tail -60",
+    "signature": "at --T::Z the executor ran a test runner outside `attavo test`: python -m pytest tests/test_ledger.py -q >& | tail -",
+    "bound": null
+  },
+  "record_version": 12,
+  "item": "350",
+  "product_version": "v0.35.0-2-gb949cef",
+  "product_pin": "v0.35.0"
+}

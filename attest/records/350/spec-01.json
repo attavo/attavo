@@ -1,0 +1,28 @@
+{
+  "sha": "c53671f94fc7fb08fece7415e4c4a61188939917",
+  "spec_sha": "c53671f94fc7fb08fece7415e4c4a61188939917",
+  "at": "2026-10-15T15:00:37Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "the-rejection-tests-exist.sh",
+      "kind": "structural",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "each-row-names-what-its-commit-carries.sh",
+      "kind": "behavioural",
+      "on_tree": 1,
+      "on_stub": 1
+    }
+  ],
+  "refusal": null,
+  "class": "fix",
+  "research": "not required by policy",
+  "record_version": 4,
+  "item": "350",
+  "product_version": "v0.35.0",
+  "product_pin": "v0.35.0"
+}
