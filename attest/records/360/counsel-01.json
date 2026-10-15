@@ -1,0 +1,94 @@
+{
+  "sha": "9672d1ec4236c4543bac93b0e61a129ee9ab1b41",
+  "record_stage": "build",
+  "record": "build-02",
+  "at": "2026-10-15T15:49:05Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 234998,
+    "output": 2257
+  },
+  "cost_usd": null,
+  "wall_clock_s": 64.019,
+  "status": "done",
+  "class": "question",
+  "verdict": "person",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "attest/specs/360/spec.md",
+      "symbol": "Claims",
+      "ruling_id": null
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/adapters/claude-code/run",
+      "symbol": "build_allowed_tools",
+      "ruling_id": null,
+      "resolution": "not_in_repository"
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/schema/manifest.schema.json",
+      "symbol": "checks.command",
+      "ruling_id": null,
+      "resolution": "not_in_repository"
+    }
+  ],
+  "proposal": {
+    "ruling_text": null,
+    "patch": null,
+    "question": "May item #360\u2019s approved Claims be amended to include attavo/ledger.py so item_acts_and_interventions can return list[StatementIntervention] and satisfy the required mypy check?",
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": [
+      {
+        "name": "doctor",
+        "conclusion": "success"
+      },
+      {
+        "name": "schema-version",
+        "conclusion": "success"
+      },
+      {
+        "name": "typecheck",
+        "conclusion": "failure"
+      },
+      {
+        "name": "test",
+        "conclusion": "success"
+      },
+      {
+        "name": "action-self-check",
+        "conclusion": "success"
+      },
+      {
+        "name": "spec-gate",
+        "conclusion": "success"
+      },
+      {
+        "name": "coherence",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "question": null,
+  "answers": null,
+  "turn": null,
+  "record_version": 6,
+  "item": "360",
+  "product_version": "v0.35.0-2-gb949cef",
+  "product_pin": "v0.35.0"
+}

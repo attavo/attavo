@@ -1,0 +1,70 @@
+{
+  "sha": "9672d1ec4236c4543bac93b0e61a129ee9ab1b41",
+  "start_sha": "9672d1ec4236c4543bac93b0e61a129ee9ab1b41",
+  "spec_sha": "ae84b76712c95c91ad257aa5f0e4f44ca8ef1aae",
+  "approval_sha": "c46608c75c862887f345f7b99d9892e336f7d956",
+  "at": "2026-10-15T15:48:01Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.295 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 2,
+  "criteria": [
+    {
+      "name": "the-rejection-tests-exist.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-intervention-class-type-is-the-schemas-enum.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q -n ${ATTAVO_TEST_WORKERS:-auto} -m 'not own_records'",
+    "count": 0,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 1
+  },
+  "tokens": {
+    "input": 765150,
+    "output": 5720
+  },
+  "cost_usd": 0.3879404,
+  "wall_clock_s": 370.2,
+  "status": "halted",
+  "refusal": null,
+  "halted": {
+    "question": "I'm trying to fix the mypy error left from the previous build attempt (attavo/attest.py:381: interventions typed as list[dict] but AttestRecord expects list[StatementIntervention]). The fix is to type attavo.ledger.item_acts_and_interventions's interventions return as list[StatementIntervention] and import that type into ledger.py. My Edit tool call to attavo/ledger.py is being blocked pending your permission approval \u2014 can you approve it (or let me know if you'd rather I take a different approach)?"
+  },
+  "refusal_kind": null,
+  "report_class": null,
+  "retry_of": "build-01",
+  "steer": null,
+  "stop": {
+    "class": "question",
+    "provenance": "spec",
+    "detail": "I'm trying to fix the mypy error left from the previous build attempt (attavo/attest.py:381: interventions typed as list[dict] but AttestRecord expects list[StatementIntervention]). The fix is to type attavo.ledger.item_acts_and_interventions's interventions return as list[StatementIntervention] and import that type into ledger.py. My Edit tool call to attavo/ledger.py is being blocked pending your permission approval \u2014 can you approve it (or let me know if you'd rather I take a different approach)?",
+    "signature": "I'm trying to fix the mypy error left from the previous build attempt (attavo/attest.py:: interventions typed as list[dict] but AttestRecord expects list[StatementIntervention]). The fix is to type attavo.ledger.item_acts_and_interventions's interventions return as list[StatementIntervention] and import that type into ledger.py. My Edit tool call to attavo/ledger.py is being blocked pending your permission approval \u2014 can you approve it (or let me know if you'd rather I take a different approach)?",
+    "bound": null
+  },
+  "record_version": 12,
+  "item": "360",
+  "product_version": "v0.35.0-2-gb949cef",
+  "product_pin": "v0.35.0"
+}
