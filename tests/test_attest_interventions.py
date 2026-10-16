@@ -1,5 +1,5 @@
-"""The statement's acts and interventions are read from the item's own
-commits, the same classification `attavo ledger` makes (issue #349).
+"""The statement's interventions are read from the item's own commits, the
+same classification `attavo ledger` makes (issue #349; #370 dropped `acts`).
 
 Specimen: #344's v5 statement (merged as PR #345, d2354e27) carried
 `acts: []` and `interventions: []`, hard-coded in attavo/attest.py. Its
@@ -55,34 +55,26 @@ def test_a_transport_between_approval_and_merge_is_an_intervention(tmp_path: Pat
     jsonschema.validate(statement, STATEMENT_SCHEMA)
     interventions = statement["interventions"]
     assert any(i["sha"] == transport and i["class"] == "transport" for i in interventions), interventions
-    acts = {a["act"] for a in statement["acts"]}
-    assert {"approve", "merge"} <= acts, statement["acts"]
-    assert all(row["sha"] and row["by"] and row["at"] for row in statement["acts"] + interventions)
+    assert all(row["sha"] and row["by"] and row["at"] for row in interventions)
 
 
-def test_doctor_proof_six_recomputes_acts_and_interventions_for_a_v6_statement(
+def test_doctor_proof_six_recomputes_interventions_for_a_v6_statement(
         tmp_path: Path) -> None:
-    """Proof six holds a true v6 statement's acts and interventions, the
-    same way it already holds time and cost, and fails one whose lists are
+    """Proof six holds a true v6 statement's interventions, the
+    same way it already holds time and cost, and fails one whose list is
     not what the item's own commits give, naming the field. make_item's
-    fixture carries no specs/ tree at all, so both lists are legitimately
+    fixture carries no specs/ tree at all, so the list is legitimately
     `[]` here (item_ledger finds no first spec commit to walk from) --
     declared explicitly as v6, since the heuristic that sniffs it from a
-    sha-bearing row has nothing to find in an empty list."""
+    sha-bearing row has nothing to find in an empty list. A v6 statement's
+    `acts` is never compared (issue #370)."""
     root, merge = make_item(tmp_path, INVOCATIONS)
     statement = attest(root)
-    assert statement["acts"] == [] and statement["interventions"] == []
+    assert "acts" not in statement and statement["interventions"] == []
+    statement["acts"] = []  # what a v6 statement carried; proof six never compares it
     seal(root, merge, statement, "https://attavo.dev/attestation/v6")
     held = proof_six(root)
     assert held["holds"] is True and held["sealed"] == ["1"], held
-
-    forged_acts: dict[str, Any] = json.loads(json.dumps(statement))
-    forged_acts["acts"] = [{"act": "approve", "sha": "f" * 40, "by": "nobody",
-                           "at": "2026-01-01T00:00:00Z"}]
-    seal(root, merge, forged_acts, "https://attavo.dev/attestation/v6")
-    failed = proof_six(root)
-    assert failed["holds"] is False, failed
-    assert "item 1" in failed["reason"] and "acts" in failed["reason"], failed
 
     forged_interventions: dict[str, Any] = json.loads(json.dumps(statement))
     forged_interventions["interventions"] = [
@@ -93,7 +85,7 @@ def test_doctor_proof_six_recomputes_acts_and_interventions_for_a_v6_statement(
     assert "item 1" in failed["reason"] and "interventions" in failed["reason"], failed
 
 
-def test_doctor_proof_six_rejects_a_v6_statement_without_time_or_cost_whose_acts_or_interventions_differ(
+def test_doctor_proof_six_rejects_a_v6_statement_without_time_or_cost_whose_interventions_differ(
         tmp_path: Path) -> None:
     """#353's review of #349: `_accounting_disagrees` returned None
     outright when a statement carried neither `time` nor `cost`, so a v6
@@ -103,21 +95,14 @@ def test_doctor_proof_six_rejects_a_v6_statement_without_time_or_cost_whose_acts
     did."""
     root, merge = make_item(tmp_path, INVOCATIONS)
     statement = attest(root)
-    assert statement["acts"] == [] and statement["interventions"] == []
+    assert "acts" not in statement and statement["interventions"] == []
+    statement["acts"] = []  # what a v6 statement carried; proof six never compares it
     del statement["time"]
     del statement["cost"]
     seal(root, merge, statement, "https://attavo.dev/attestation/v6")
     failed = proof_six(root)
     assert failed["holds"] is False, failed
     assert "item 1" in failed["reason"] and "time" in failed["reason"], failed
-
-    forged_acts: dict[str, Any] = json.loads(json.dumps(statement))
-    forged_acts["acts"] = [{"act": "approve", "sha": "f" * 40, "by": "nobody",
-                           "at": "2026-01-01T00:00:00Z"}]
-    seal(root, merge, forged_acts, "https://attavo.dev/attestation/v6")
-    failed = proof_six(root)
-    assert failed["holds"] is False, failed
-    assert "item 1" in failed["reason"] and "acts" in failed["reason"], failed
 
     forged_interventions: dict[str, Any] = json.loads(json.dumps(statement))
     forged_interventions["interventions"] = [
@@ -131,7 +116,7 @@ def test_doctor_proof_six_rejects_a_v6_statement_without_time_or_cost_whose_acts
 def test_v6_schema_rejects_an_intervention_class_outside_amend_launch_transport(
         tmp_path: Path) -> None:
     """#353: the schema took any non-empty string for an intervention's
-    class, though the producer (`item_acts_and_interventions`) emits only
+    class, though the producer (`item_interventions`) emits only
     amend, launch and transport."""
     root, _ = make_item(tmp_path, INVOCATIONS)
     statement = attest(root)
