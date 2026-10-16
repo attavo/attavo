@@ -360,8 +360,12 @@ def cmd_attest(argv: list[str]) -> int:
     # Imported here, not at module level: attavo.ledger imports from
     # attavo.doctor, which imports from this module -- a cycle resolved by
     # deferring to call time, when every module is already loaded.
-    from attavo.ledger import item_acts_and_interventions
-    acts, interventions = item_acts_and_interventions(root, m, item_id)
+    from attavo.ledger import item_interventions
+    interventions, refusal = item_interventions(root, m, item_id)
+    if refusal:
+        print(f"attavo attest: refused: the item's interventions cannot be read: {refusal}",
+              file=sys.stderr)
+        return 2
 
     statement: AttestRecord = {
         "sha": head_sha,
@@ -378,8 +382,8 @@ def cmd_attest(argv: list[str]) -> int:
         "at": now_iso(),
         # Read from the item's own commits (issue #349), the same
         # classification attavo ledger makes -- nothing classified twice.
+        # A refused read never reaches here (issue #370).
         "interventions": interventions,
-        "acts": acts,
         # The only accounting: every attempt, summed (the sum across
         # executors was ruled 2026-09-19). v3's final-attempt fields are
         # retired (issue #309).

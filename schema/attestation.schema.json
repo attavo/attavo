@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://attavo.dev/attestation/v6",
-  "title": "The attestation statement `attavo attest` prints on a coherent chain (v6: `interventions` and `acts` are read from the item's own commits between its first spec commit and its merge, each one classed exactly once by attavo/ledger.py::item_ledger -- sha is now required in both; v5: `cost` also prices, from the tenant's published rates, a record whose adapter reported none, and says so; v4: `time`, `cost` and `tokens` are the only accounting, summed over every attempt; v3 statements sealed earlier also carry cost_by_stage_usd, wall_clock_by_stage_s and tokens_by_stage, the final attempt of each stage)",
+  "$id": "https://attavo.dev/attestation/v7",
+  "title": "The attestation statement `attavo attest` prints on a coherent chain (v7: `acts` is dropped -- the approval is the statement's own approval claim and the merge its subject in the store; `interventions` stays; v6: `interventions` and `acts` are read from the item's own commits between its first spec commit and its merge, each one classed exactly once by attavo/ledger.py::item_ledger -- sha is now required in both; v5: `cost` also prices, from the tenant's published rates, a record whose adapter reported none, and says so; v4: `time`, `cost` and `tokens` are the only accounting, summed over every attempt; v3 statements sealed earlier also carry cost_by_stage_usd, wall_clock_by_stage_s and tokens_by_stage, the final attempt of each stage)",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "sha", "merge_sha", "item", "spec", "spec_sha", "approval", "approval_sha",
-    "build", "build_sha", "verify", "verify_sha", "at", "interventions", "acts",
+    "build", "build_sha", "verify", "verify_sha", "at", "interventions",
     "time", "cost", "tokens",
     "product_version", "product_pin"
   ],
@@ -33,21 +33,6 @@
         "properties": {
           "at": {"type": "string", "minLength": 1},
           "class": {"type": "string", "enum": ["amend", "launch", "transport"]},
-          "by": {"type": "string", "minLength": 1},
-          "sha": {"type": "string", "minLength": 1}
-        }
-      }
-    },
-    "acts": {
-      "type": "array",
-      "description": "The operator's ruled acts on the item: each approve row and the merge row, read the same way (issue #349). rule stays in this enum for the ruling record (#276) and is never produced here.",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["at", "act", "by", "sha"],
-        "properties": {
-          "at": {"type": "string", "minLength": 1},
-          "act": {"type": "string", "enum": ["approve", "rule", "merge"]},
           "by": {"type": "string", "minLength": 1},
           "sha": {"type": "string", "minLength": 1}
         }
