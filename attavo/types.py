@@ -263,6 +263,17 @@ class ItemTokens(TypedDict):
     not_read: list[str]
 
 
+# One row of the statement's `interventions` (issue #349): an amend, launch,
+# or transport read from the ledger. "class" is a Python keyword, hence the
+# functional form below.
+StatementIntervention = TypedDict("StatementIntervention", {
+    "at": str,
+    "class": Literal["amend", "launch", "transport"],
+    "by": str,
+    "sha": str,
+})
+
+
 class AttestRecord(TypedDict):
     """The statement `attavo attest` prints (schema/attestation.schema.json)."""
     sha: str
@@ -277,7 +288,7 @@ class AttestRecord(TypedDict):
     verify: str | None
     verify_sha: str | None
     at: str
-    interventions: list[dict[str, str]]
+    interventions: list[StatementIntervention]
     acts: list[dict[str, str]]
     time: ItemTime
     cost: ItemCost

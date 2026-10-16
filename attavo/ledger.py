@@ -15,6 +15,7 @@ from attavo.doctor import (INVOCATION_MARKER_SUFFIX, _merges_reachable, attestat
                            merge_introducing_records, statement_for)
 from attavo.records import RECORD_RE, _load_record
 from attavo.stops import item_stops
+from attavo.types import StatementIntervention
 from attavo import Command
 
 # --- ledger: every act on an item by identity and class (issue #128) ---
@@ -352,7 +353,7 @@ def _committer_time_iso(root: Path, shas: list[str]) -> dict[str, str]:
 
 def item_acts_and_interventions(root: Path, m: dict[str, Any], item_id: str,
                                 merges: list[dict[str, Any]] | None = None
-                                ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+                                ) -> tuple[list[dict[str, Any]], list[StatementIntervention]]:
     """(acts, interventions): the statement's own two lists, read from
     item_ledger's own rows between the item's first spec commit and its
     merge -- each commit classed exactly once there, never classified
@@ -366,8 +367,9 @@ def item_acts_and_interventions(root: Path, m: dict[str, Any], item_id: str,
     times = _committer_time_iso(root, [r["sha"] for r in act_rows + intervention_rows])
     acts = [{"act": r["class"], "sha": r["sha"], "by": r["identity"], "at": times[r["sha"]]}
            for r in act_rows]
-    interventions = [{"class": r["class"], "sha": r["sha"], "by": r["identity"], "at": times[r["sha"]]}
-                     for r in intervention_rows]
+    interventions: list[StatementIntervention] = [
+        {"class": r["class"], "sha": r["sha"], "by": r["identity"], "at": times[r["sha"]]}
+        for r in intervention_rows]
     return acts, interventions
 
 

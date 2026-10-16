@@ -1,0 +1,51 @@
+{
+  "sha": "e7c8d95c091bfffaffe6bce4d90e71d94ed929d8",
+  "start_sha": "777498825b56655e82359d2bfa01897a1b083054",
+  "spec_sha": "ae84b76712c95c91ad257aa5f0e4f44ca8ef1aae",
+  "approval_sha": "c46608c75c862887f345f7b99d9892e336f7d956",
+  "at": "2026-10-15T15:41:32Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.295 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [],
+  "selected_tests": null,
+  "checks": null,
+  "tokens": {
+    "input": 4062952,
+    "output": 32422
+  },
+  "cost_usd": 1.4897492,
+  "wall_clock_s": 901.834,
+  "status": "refused",
+  "refusal": "at 2026-10-15T15:14:27Z the executor ran a test runner outside `attavo test`: python3 -m pytest tests/test_types_mirror_schemas.py::test_the_intervention_class_type_mirrors_the_s",
+  "halted": null,
+  "refusal_kind": "test-bypass",
+  "report_class": null,
+  "retry_of": null,
+  "steer": null,
+  "stop": {
+    "class": "test-bypass",
+    "provenance": "executor",
+    "detail": "at 2026-10-15T15:14:27Z the executor ran a test runner outside `attavo test`: python3 -m pytest tests/test_types_mirror_schemas.py::test_the_intervention_class_type_mirrors_the_s",
+    "signature": "at --T::Z the executor ran a test runner outside `attavo test`: python -m pytest tests/test_types_mirror_schemas.py::test_the_intervention_class_type_mirrors_the_s",
+    "bound": null
+  },
+  "record_version": 12,
+  "item": "360",
+  "product_version": "v0.35.0-2-gb949cef",
+  "product_pin": "v0.35.0"
+}

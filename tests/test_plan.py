@@ -292,3 +292,22 @@ def test_a_plan_write_stamps_the_claim_and_the_version_from_one_clock_read(
     doc = store.get(root, "plan")
     assert doc is not None
     assert doc["body"]["claims"]["262"]["at"] == doc["at"]
+
+
+# Issue #360, finding 1 (verify-01 on #339): the clock is read exactly once per plan write.
+
+def test_a_plan_claims_write_calls_now_iso_exactly_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from attavo import plan as plan_mod
+    from attavo import store as store_mod
+    calls: list[int] = []
+
+    def counting() -> str:
+        calls.append(1)
+        return "2026-01-01T00:00:00Z"
+
+    root = tenant_with_plan(tmp_path)
+    monkeypatch.setattr(plan_mod, "now_iso", counting, raising=False)
+    monkeypatch.setattr(store_mod, "now_iso", counting, raising=False)
+    monkeypatch.chdir(root)
+    assert plan_mod.cmd_plan(["claims", "#262", "attavo/frontier.py", "--by", "bob"]) == 0
+    assert len(calls) == 1, calls

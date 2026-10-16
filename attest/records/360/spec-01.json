@@ -1,0 +1,28 @@
+{
+  "sha": "ae84b76712c95c91ad257aa5f0e4f44ca8ef1aae",
+  "spec_sha": "ae84b76712c95c91ad257aa5f0e4f44ca8ef1aae",
+  "at": "2026-10-15T15:02:11Z",
+  "status": "pass",
+  "approval_sha": null,
+  "criteria": [
+    {
+      "name": "the-rejection-tests-exist.sh",
+      "kind": "structural",
+      "on_tree": 1,
+      "on_stub": 0
+    },
+    {
+      "name": "the-intervention-class-type-is-the-schemas-enum.sh",
+      "kind": "behavioural",
+      "on_tree": 1,
+      "on_stub": 1
+    }
+  ],
+  "refusal": null,
+  "class": "fix",
+  "research": "not required by policy",
+  "record_version": 4,
+  "item": "360",
+  "product_version": "v0.35.0",
+  "product_pin": "v0.35.0"
+}

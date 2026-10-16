@@ -1,0 +1,66 @@
+{
+  "sha": "4c39d3cb64641af55035d24124fa39836efc50bb",
+  "record_stage": "build",
+  "record": "build-03",
+  "at": "2026-10-15T20:15:30Z",
+  "adapter": "codex",
+  "adapter_config": {
+    "model": "gpt-5.6-sol"
+  },
+  "adapter_version": "codex-cli 0.153.4",
+  "model": "gpt-5.6-sol",
+  "model_version": null,
+  "reports": [
+    "tokens"
+  ],
+  "tokens": {
+    "input": 375287,
+    "output": 2260
+  },
+  "cost_usd": null,
+  "wall_clock_s": 54.135,
+  "status": "done",
+  "class": "test-bypass",
+  "verdict": "answer",
+  "citations": [
+    {
+      "kind": "instruction",
+      "path": "/Users/davidbean/Projects/attest/adapters/claude-code/run",
+      "symbol": "build_instruction",
+      "ruling_id": null,
+      "resolution": "not_in_repository"
+    },
+    {
+      "kind": "mechanism",
+      "path": "/Users/davidbean/Projects/attest/attavo/testtool.py",
+      "symbol": "runner_calls_outside_the_tool",
+      "ruling_id": null,
+      "resolution": "not_in_repository"
+    },
+    {
+      "kind": "guard",
+      "path": "/Users/davidbean/Projects/attest/attavo/build.py",
+      "symbol": "cmd_build",
+      "ruling_id": null,
+      "resolution": "not_in_repository"
+    }
+  ],
+  "proposal": {
+    "ruling_text": "Retry the build from its committed tree. Run every test only through the supplied `attavo test 360 [path]` command; do not invoke pytest or another test runner directly. The committed implementation remains available, and the retry mechanism will carry this test-bypass steer into the next attempt.",
+    "patch": null,
+    "question": null,
+    "issue": null
+  },
+  "forge": {
+    "read": true,
+    "reason": null,
+    "checks": []
+  },
+  "question": null,
+  "answers": null,
+  "turn": null,
+  "record_version": 6,
+  "item": "360",
+  "product_version": "v0.35.0-13-g9cda8a3",
+  "product_pin": "v0.35.0"
+}
