@@ -232,3 +232,20 @@ def test_no_template_runs_on_push_and_attest_template_is_gone() -> None:
         jobs_idx = next(i for i, l in enumerate(lines) if l.strip() == "jobs:")
         on_body = "\n".join(lines[on_idx + 1:jobs_idx])
         assert "push:" not in on_body, path.name
+
+
+def test_the_coherence_workflow_sets_the_default_branch_before_attest() -> None:
+    """Specimen: the merge-group run that sealed item 350 had no
+    refs/remotes/origin/HEAD, so the ledger read was refused. Both copies
+    run `git remote set-head origin -a` after checkout, and differ only by
+    their `uses:` line."""
+    own = ROOT / ".github" / "workflows" / "attavo-coherence.yml"
+    for path in (TEMPLATE, own):
+        text = path.read_text()
+        assert "      - run: git remote set-head origin -a\n" in text, path
+        assert text.index("actions/checkout@v4") < text.index("git remote set-head origin -a") \
+            < text.index("name: attavo attest"), path
+    differing = [(a, b) for a, b in zip(TEMPLATE.read_text().splitlines(), own.read_text().splitlines())
+                 if a != b]
+    assert len(TEMPLATE.read_text().splitlines()) == len(own.read_text().splitlines())
+    assert len(differing) == 1 and "uses:" in differing[0][0], differing

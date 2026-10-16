@@ -168,3 +168,50 @@ def test_doctor_proof_six_names_an_unmerged_item(tmp_path: Path) -> None:
     ref = _proof(root)
     assert ref["holds"]
     assert ref["sealed"] == ["1"] and ref["not_merged"] == ["2"] and ref["unsealed"] == []
+
+
+def test_proof_six_compares_interventions_never_acts(tmp_path: Path) -> None:
+    """Specimen: main's doctor on 2026-10-16, which failed item 350's
+    sealed `acts: []` against records carrying an approve and a merge.
+    Proof six holds a v6 statement with `acts: []` and a v7 statement
+    without `acts` alike, and fails either whose interventions differ from
+    the records."""
+    from helpers import commit_all, make_tenant
+    from test_attest import configure_forge, run_attavo
+    from test_attest_interventions import traverse_with_a_transport
+    from test_attest_time import proof_six, seal
+
+    root = make_tenant(tmp_path, "build_valid")
+    configure_forge(root)
+    toml = root / "attavo.toml"
+    toml.write_text(toml.read_text().replace(
+        "[forge]\n", '[forge]\nattestation_command = "sh ./fake-store"\n'))
+    (root / "fake-store").write_text(
+        '#!/bin/sh\nread sha\ntest -f "statements/$sha.json" && cat "statements/$sha.json"\n')
+    commit_all(root, "a store to read")
+    transport = traverse_with_a_transport(root)
+    merge = _git(root, "rev-parse", "HEAD")
+    run = run_attavo(root, "attest", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    statement = json.loads(run.stdout)
+    assert transport in [i["sha"] for i in statement["interventions"]]
+    statement.pop("acts", None)
+
+    seal(root, merge, statement, "https://attavo.dev/attestation/v7")
+    held = proof_six(root)
+    assert held["holds"] is True, held
+
+    v6: dict[str, Any] = dict(statement, acts=[])
+    seal(root, merge, v6, "https://attavo.dev/attestation/v6")
+    held = proof_six(root)
+    assert held["holds"] is True, held
+
+    for version in ("v6", "v7"):
+        forged: dict[str, Any] = dict(statement, interventions=[])
+        if version == "v6":
+            forged["acts"] = []
+        seal(root, merge, forged, f"https://attavo.dev/attestation/{version}")
+        failed = proof_six(root)
+        assert failed["holds"] is False, (version, failed)
+        assert "item 1" in failed["reason"] and "interventions" in failed["reason"], failed
+        assert "acts" not in failed["reason"].replace("interventions", ""), failed

@@ -147,3 +147,27 @@ def test_v6_schema_rejects_an_intervention_class_outside_amend_launch_transport(
                                      "by": "nobody", "sha": "f" * 40}]
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate(invalid, STATEMENT_SCHEMA)
+
+
+def test_attest_refuses_when_the_ledger_cannot_read_the_default_branch(tmp_path: Path) -> None:
+    """Specimen: item 350's statement, sealed 2026-10-15 from a merge-group
+    checkout with no refs/remotes/origin/HEAD: the refused merges read was
+    signed as `acts: []` and `interventions: []`. attest names the ref and
+    prints no statement."""
+    root, _ = make_item(tmp_path, INVOCATIONS)
+    git(root, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+    run = run_attavo(root, "attest", "1")
+    assert run.returncode == 2, run.stdout + run.stderr
+    assert "refs/remotes/origin/HEAD" in run.stderr
+    assert run.stdout == ""
+
+
+def test_the_statement_carries_interventions_and_no_acts(tmp_path: Path) -> None:
+    root, _ = make_item(tmp_path, INVOCATIONS)
+    statement = attest(root)
+    assert "interventions" in statement and "acts" not in statement
+    jsonschema.validate(statement, STATEMENT_SCHEMA)
+    with_acts: dict[str, Any] = json.loads(json.dumps(statement))
+    with_acts["acts"] = []
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(with_acts, STATEMENT_SCHEMA)
