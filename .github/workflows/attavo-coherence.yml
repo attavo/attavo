@@ -94,6 +94,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      # issue #370: attest reads the default branch's merges through
+      # refs/remotes/origin/HEAD, which actions/checkout does not set.
+      - run: git remote set-head origin -a
+
       - uses: attavo/attavo@v0.35.0
 
       - name: attavo attest
