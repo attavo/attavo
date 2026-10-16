@@ -1,0 +1,62 @@
+{
+  "sha": "4595a8c62ed38175b455f3c8d0ce74beadf9af1e",
+  "start_sha": "4595a8c62ed38175b455f3c8d0ce74beadf9af1e",
+  "spec_sha": "b6ee13b135fd1cc85cac8fc2f539250e01b7d869",
+  "approval_sha": "ec403e9baa08b406a31d4e8dd7b6a4b18fa9521a",
+  "at": "2026-10-16T14:43:25Z",
+  "adapter": "claude-code",
+  "adapter_config": {
+    "auth": "subscription",
+    "model": "claude-sonnet-5"
+  },
+  "executor_identity": {
+    "name": "attavo executor (claude-code)",
+    "email": "executor+claude-code@attavo.invalid"
+  },
+  "reports": [
+    "tokens",
+    "cost_usd"
+  ],
+  "adapter_version": "2.1.295 (Claude Code)",
+  "model": "claude-sonnet-5",
+  "model_version": "claude-sonnet-5",
+  "iterations": 1,
+  "criteria": [
+    {
+      "name": "the-rejection-tests-exist.sh",
+      "exit": 0
+    },
+    {
+      "name": "the-intervention-class-type-is-the-schemas-enum.sh",
+      "exit": 0
+    }
+  ],
+  "selected_tests": {
+    "select": "python3 .attavo/bin/select-tests",
+    "run": "xargs -r python3 -m pytest -q -n ${ATTAVO_TEST_WORKERS:-auto} -m 'not own_records'",
+    "count": 0,
+    "exit": 0
+  },
+  "checks": {
+    "command": "python3 -m mypy",
+    "exit": 0
+  },
+  "tokens": {
+    "input": 548371,
+    "output": 7087
+  },
+  "cost_usd": 0.3544064,
+  "wall_clock_s": 234.165,
+  "status": "pass",
+  "refusal": null,
+  "halted": null,
+  "refusal_kind": null,
+  "report_class": null,
+  "retry_of": "build-03",
+  "steer": "counsel-02",
+  "stop": null,
+  "record_version": 12,
+  "item": "360",
+  "product_version": "v0.35.0-13-g9cda8a3",
+  "product_pin": "v0.35.0"
+}
