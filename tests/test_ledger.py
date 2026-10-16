@@ -322,3 +322,17 @@ def test_the_merge_row_says_not_read_when_the_store_does_not_answer(tmp_path: Pa
     merge = next(r for r in json.loads(run.stdout)["rows"] if r["sha"] == shas["merge"])
     assert merge["statement"] is None
     assert "not read" in merge["note"] and "store" in merge["note"]
+
+
+def test_a_refused_merges_read_is_a_refusal_not_empty_rows(tmp_path: Path) -> None:
+    """Specimen: item 350's statement. With refs/remotes/origin/HEAD unset,
+    item_ledger answered `rows: []`, which attest then signed as a
+    measurement. It returns the refusal instead."""
+    import importlib
+    from attavo.common import parse_manifest
+    root = build_merged_item(tmp_path)
+    git(root, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+    result = importlib.import_module("attavo.ledger").item_ledger(
+        root, parse_manifest((root / "attavo.toml").read_text()), "1")
+    assert "rows" not in result
+    assert "refs/remotes/origin/HEAD" in result["refusal"]

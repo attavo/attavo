@@ -867,7 +867,8 @@ V5_COST_FIELDS = ("reported_usd", "estimated_usd", "basis_by_stage", "rates", "e
 
 def _carries_act_sha(rows: Any) -> bool:
     """True when `rows` is a non-empty list whose entries already carry
-    `sha` -- v6's own shape for `acts` and `interventions` (issue #349);
+    `sha` -- v6's own shape for `acts` and `interventions` (issue #349),
+    still how a v6 statement sealed without a predicateType is known;
     v5 and earlier wrote both as `[]`, never a sha."""
     return isinstance(rows, list) and any(isinstance(r, dict) and "sha" in r for r in rows)
 
@@ -895,7 +896,7 @@ def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_s
                           statement: dict[str, Any],
                           merges: list[dict[str, Any]] | None = None) -> str | None:
     """A sealed statement that carries `time` and `cost` (and, from v4,
-    `tokens`; from v6, `acts` and `interventions`) says what its records sum
+    `tokens`; from v6, `interventions`) says what its records sum
     to, field by field -- the same function attest summed them with, over
     the same records (none is written after a merge), sealed at the same
     commit (the statement is computed at the merge, so lead_s and
@@ -905,12 +906,13 @@ def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_s
     holds a block, so a null one, or one block without the other, is a
     disagreement -- except from v6, where both are always required, so a
     v6 statement missing either fails by name instead of going unchecked
-    (issue #353). v6's `acts` and `interventions` are compared whatever
+    (issue #353). From v6 `interventions` is compared whatever
     else the statement carries, time and cost included -- a v6 statement
-    that carries neither is not let through on that account alone. No new
+    that carries neither is not let through on that account alone. A v6
+    statement's `acts` is never compared (issue #370). No new
     read of the store. merges, when given, is _merges_reachable's own
     result -- the caller's loop over every item computes it once rather
-    than each item's acts and interventions walking the default branch's
+    than each item's interventions walking the default branch's
     merges again."""
     inner = statement.get("predicate")
     predicate = inner if isinstance(inner, dict) else statement
@@ -922,7 +924,7 @@ def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_s
     # at the sealed commit, never by the rates the statement carries: the
     # carried block is then compared like any field, and a later edit to the
     # manifest cannot unseal anything. v3 and v4 priced nothing. Read ahead
-    # of the time/cost check below: v6's acts and interventions need the
+    # of the time/cost check below: v6's interventions need the
     # same sealed manifest even when time and cost are not checked.
     declared: dict[str, Any] | None = None
     if version >= 5:
@@ -966,13 +968,13 @@ def _accounting_disagrees(root: Path, item_records_dir: Path, item: str, merge_s
     if version >= 6:
         # Imported here, not at module level: attavo.ledger imports from
         # this module, a cycle resolved by deferring to call time.
-        from attavo.ledger import item_acts_and_interventions
-        summed_acts, summed_interventions = item_acts_and_interventions(
+        from attavo.ledger import item_interventions
+        summed_interventions, unread = item_interventions(
             root, declared or {}, item, merges=merges)
-        stated_acts, stated_interventions = predicate.get("acts"), predicate.get("interventions")
-        if not (isinstance(stated_acts, list) and _same(stated_acts, summed_acts)):
-            differing.append(f"acts {stated_acts!r} is not its records' {summed_acts!r}")
-        if not (isinstance(stated_interventions, list) and _same(stated_interventions, summed_interventions)):
+        stated_interventions = predicate.get("interventions")
+        if unread:
+            differing.append(f"interventions cannot be read from its records: {unread}")
+        elif not (isinstance(stated_interventions, list) and _same(stated_interventions, summed_interventions)):
             differing.append(f"interventions {stated_interventions!r} is not its "
                              f"records' {summed_interventions!r}")
     if differing:

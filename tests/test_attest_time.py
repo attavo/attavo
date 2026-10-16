@@ -321,10 +321,10 @@ def test_statement_carries_only_the_summed_accounting(tmp_path: Path) -> None:
     assert statement["tokens"]["partial"] is False and statement["tokens"]["not_read"] == []
 
 
-def test_schema_is_v6_and_names_no_retired_field() -> None:
+def test_schema_is_v7_and_names_no_retired_field() -> None:
     """#309: the predicate type moved to v4 with the three fields gone; #307
-    moved it to v5, and #349 to v6; they stay gone."""
-    assert SCHEMA["$id"] == "https://attavo.dev/attestation/v6"
+    moved it to v5, #349 to v6, #370 to v7; they stay gone."""
+    assert SCHEMA["$id"] == "https://attavo.dev/attestation/v7"
     for field in RETIRED:
         assert field not in SCHEMA["properties"] and field not in SCHEMA["required"]
     assert "tokens" in SCHEMA["required"]

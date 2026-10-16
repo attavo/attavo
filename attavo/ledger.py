@@ -169,7 +169,9 @@ def _record_blobs_at(root: Path, specs: list[tuple[str, str]], item_id: str) -> 
 
 
 def item_ledger(root: Path, m: dict[str, Any], item_id: str, merges: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """{"item", "rows", "summary"}: one row per act between item_id's first
+    """{"item", "rows", "summary"}, or {"item", "refusal"} when the default
+    branch's merges cannot be read (refs/remotes/origin/HEAD unset): never
+    `rows: []` for a read that was refused. One row per act between item_id's first
     spec commit and its merge (merge_introducing_records, the same
     derivation doctor's proof two and attest both already read) or HEAD
     when the item has not merged yet.
@@ -200,14 +202,15 @@ def item_ledger(root: Path, m: dict[str, Any], item_id: str, merges: list[dict[s
     empty_summary = {"operator_acts": 0, "product_acts": 0, "executor_commits": 0,
                      "stops": 0, "since": None}
 
+    if merges is None:
+        merges, refusal = _merges_reachable(root)
+        if refusal:
+            return {"item": item_id, "refusal": refusal}
+
     first_spec_sha = first_commit_touching(root, str(Path(specs_rel) / item_id))
     if first_spec_sha is None:
         return {"item": item_id, "rows": [], "summary": empty_summary}
 
-    if merges is None:
-        merges, refusal = _merges_reachable(root)
-        if refusal:
-            return {"item": item_id, "rows": [], "summary": empty_summary}
     merge_sha, _ = merge_introducing_records(root, records_rel, item_id, STAGES, merges=merges)
     if merge_sha is not None:
         branch_tip = next(mrg["parents"][1] for mrg in merges if mrg["sha"] == merge_sha)
@@ -326,18 +329,17 @@ def item_ledger(root: Path, m: dict[str, Any], item_id: str, merges: list[dict[s
     return {"item": item_id, "rows": rows, "summary": summary}
 
 
-# The statement's own two lists (issue #349): acts is the operator's ruled
-# acts (approve, merge); rule stays in the schema's enum for the ruling
-# record (#276) and is never produced here. interventions is every other
-# operator row -- amend, launch, transport.
-ACT_CLASSES = ("approve", "merge")
+# The statement's one list (issues #349, #370): interventions is every
+# operator row other than approve and merge -- amend, launch, transport.
+# The approval is the statement's own approval claim and the merge its
+# subject in the store, so `acts` is not carried.
 INTERVENTION_CLASSES = ("amend", "launch", "transport")
 
 
 def _committer_time_iso(root: Path, shas: list[str]) -> dict[str, str]:
     """Each sha's own committer time, in the same shape attest's own `at`
     fields already carry -- one `git show` process for every sha an
-    item's acts and interventions need, not one git call per row."""
+    item's interventions need, not one git call per row."""
     if not shas:
         return {}
     out = git(root, "show", "-s", "--format=%H\x1f%ct", *shas)
@@ -350,25 +352,24 @@ def _committer_time_iso(root: Path, shas: list[str]) -> dict[str, str]:
     return times
 
 
-def item_acts_and_interventions(root: Path, m: dict[str, Any], item_id: str,
-                                merges: list[dict[str, Any]] | None = None
-                                ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """(acts, interventions): the statement's own two lists, read from
+def item_interventions(root: Path, m: dict[str, Any], item_id: str,
+                       merges: list[dict[str, Any]] | None = None
+                       ) -> tuple[list[dict[str, Any]], str | None]:
+    """(interventions, refusal): the statement's list, read from
     item_ledger's own rows between the item's first spec commit and its
     merge -- each commit classed exactly once there, never classified
-    twice. acts carries every approve and merge row as {act, sha, by, at};
-    interventions carries every amend, launch, and transport row as
-    {class, sha, by, at}. `by` is the commit's own author name
-    (item_ledger's `identity`); `at` is its committer time."""
-    rows = item_ledger(root, m, item_id, merges=merges)["rows"]
-    act_rows = [r for r in rows if r["class"] in ACT_CLASSES]
-    intervention_rows = [r for r in rows if r["class"] in INTERVENTION_CLASSES]
-    times = _committer_time_iso(root, [r["sha"] for r in act_rows + intervention_rows])
-    acts = [{"act": r["class"], "sha": r["sha"], "by": r["identity"], "at": times[r["sha"]]}
-           for r in act_rows]
-    interventions = [{"class": r["class"], "sha": r["sha"], "by": r["identity"], "at": times[r["sha"]]}
-                     for r in intervention_rows]
-    return acts, interventions
+    twice. Every amend, launch, and transport row as {class, sha, by, at};
+    `by` is the commit's own author name (item_ledger's `identity`); `at`
+    is its committer time. When the ledger read is refused the list is
+    empty and the reason is the second element: an unread list is never
+    reported as an empty one."""
+    ledger = item_ledger(root, m, item_id, merges=merges)
+    if "refusal" in ledger:
+        return [], str(ledger["refusal"])
+    rows = [r for r in ledger["rows"] if r["class"] in INTERVENTION_CLASSES]
+    times = _committer_time_iso(root, [r["sha"] for r in rows])
+    return ([{"class": r["class"], "sha": r["sha"], "by": r["identity"], "at": times[r["sha"]]}
+             for r in rows], None)
 
 
 def cmd_ledger(argv: list[str]) -> int:

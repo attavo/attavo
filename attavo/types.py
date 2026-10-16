@@ -278,7 +278,6 @@ class AttestRecord(TypedDict):
     verify_sha: str | None
     at: str
     interventions: list[dict[str, str]]
-    acts: list[dict[str, str]]
     time: ItemTime
     cost: ItemCost
     tokens: ItemTokens
